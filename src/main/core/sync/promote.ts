@@ -10,7 +10,21 @@ export const EPOCH_GAP = 10_000_000_000;
 
 const COUNTERS = ['changes', 'sync_rows'] as const;
 
-export function promote(conn: BetterSqlite3.Database, epoch: number): void {
+export interface PromoteOptions {
+  /** Publish the rows this device only applied as a follower (`sync_imported`)
+   *  into the new epoch. Needed only when some other device could lack them
+   *  (it skipped the interim leader); a two-device account never needs it, as
+   *  the only other device is the leader these rows came from. The set is
+   *  cleared either way. Default true: when unsure, relay. */
+  relayImported?: boolean;
+}
+
+export function promote(
+  conn: BetterSqlite3.Database,
+  epoch: number,
+  opts: PromoteOptions = {},
+): void {
+  const relayImported = opts.relayImported !== false;
   conn.transaction(() => {
     const s = conn.prepare(`SELECT role, epoch, after_seq, after_cursor, pre_demote_epoch FROM sync_state`).get() as {
       role: string;
@@ -57,9 +71,12 @@ export function promote(conn: BetterSqlite3.Database, epoch: number): void {
     // What this device only applied from an interim leader is not in its
     // sync_rows: publish it now, numbered in the new epoch, so a device that
     // skipped that leader still gets it. Same delete-then-insert as trackKey.
-    const imported = conn
-      .prepare(`SELECT tbl, pk FROM sync_imported ORDER BY id`)
-      .all() as { tbl: string; pk: string }[];
+    const imported = relayImported
+      ? (conn.prepare(`SELECT tbl, pk FROM sync_imported ORDER BY id`).all() as {
+          tbl: string;
+          pk: string;
+        }[])
+      : [];
     const forget = conn.prepare(`DELETE FROM sync_rows WHERE tbl = ? AND pk = ?`);
     const publish = conn.prepare(`INSERT INTO sync_rows(tbl, pk) VALUES(?, ?)`);
     for (const k of imported) {

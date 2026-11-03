@@ -347,6 +347,43 @@ describe('relaying to a third device (codex review point 5)', () => {
     }
   });
 
+  const relayRun = async (relay: boolean | undefined) => {
+      const third = await open(`relay-opt-${String(relay)}`);
+      try {
+        enableTracking(mac.conn());
+        const a = await mac.store.createAccount({ source: 'test', identifier: 'shared' });
+        await mac.store.commit({ account: a.id as never, documents: [doc('d1')], cursor: null });
+        vm.conn().prepare(`UPDATE sync_state SET role = 'follower'`).run();
+        pull(mac, vm);
+        promote(vm.conn(), 14);
+        await vm.store.createAccount({ source: 'test', identifier: 'vm-only' });
+        demote(mac.conn(), 'vm');
+        pull(vm, mac);
+        const imported = () =>
+          (mac.conn().prepare(`SELECT count(*) AS n FROM sync_imported`).get() as { n: number }).n;
+        expect(imported()).toBeGreaterThan(0);
+        promote(mac.conn(), 15, relay === undefined ? undefined : { relayImported: relay });
+        expect(imported()).toBe(0);
+        const above = mac
+          .conn()
+          .prepare(`SELECT count(*) AS n FROM sync_rows WHERE cursor >= ? AND tbl = 'accounts'`)
+          .get(15 * EPOCH_GAP) as { n: number };
+        return above.n;
+      } finally {
+        third.reader.close();
+        await third.db.close();
+      }
+  };
+  it('relayImported false clears the imported set and publishes nothing', async () => {
+    expect(await relayRun(false)).toBe(0);
+  });
+  it('relayImported true publishes the imported set, then clears it', async () => {
+    expect(await relayRun(true)).toBeGreaterThan(0);
+  });
+  it('not saying is the safe default: it relays', async () => {
+    expect(await relayRun(undefined)).toBeGreaterThan(0);
+  });
+
   it('an update to a document that keeps its seq travels on too', async () => {
     const third = await open('relay-third-doc');
     try {

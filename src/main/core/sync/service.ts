@@ -211,7 +211,7 @@ export interface SyncService {
   setFenced(on: boolean): void;
   /** Leads from the next call on, with no restart (spec 7.8): one writer
    *  transaction, then the boot-only branches. */
-  promote(epoch: number): Promise<void>;
+  promote(epoch: number, opts?: { relayImported?: boolean }): Promise<void>;
   /** Stops leading: a follower of `masterDeviceId`. The caller relaunches. */
   demote(masterDeviceId: string): Promise<void>;
   /** This device's id, once known. */
@@ -664,8 +664,8 @@ export function createSyncService(deps: SyncServiceDeps): SyncService {
       // sent after this call.
       void deps.db.proc?.('syncFence', { on })?.catch(() => undefined);
     },
-    promote: async (epoch) => {
-      await deps.db.proc!('syncPromote', { epoch });
+    promote: async (epoch, opts) => {
+      await deps.db.proc!('syncPromote', { epoch, relayImported: opts?.relayImported !== false });
       await refreshGate();
       if (fenced) {
         // Promoted but not yet allowed to lead (registration has not recorded

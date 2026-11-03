@@ -193,7 +193,8 @@ async function runSyncRole(): Promise<void> {
           return null;
         },
         syncPromote: (args) => {
-          promote(db._conn!, (args as { epoch: number }).epoch);
+          const a = args as { epoch: number; relayImported?: boolean };
+          promote(db._conn!, a.epoch, { relayImported: a.relayImported });
           return null;
         },
         syncDemote: (args) => {

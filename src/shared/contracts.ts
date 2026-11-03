@@ -2011,7 +2011,9 @@ export interface CapSurfaces {
       importSecrets(list: SecretWire[]): Promise<{ applied: number }>;
       isBusy(): Promise<string | null>;
       /** Leads from the next call on, no restart (alpha-cent spec 7.8). */
-      promote(epoch: number): Promise<void>;
+      /** `relayImported: false` skips re-sending rows applied as a follower: no
+       *  other joined device could lack them. Default true. */
+      promote(epoch: number, opts?: { relayImported?: boolean }): Promise<void>;
       /** Stops leading; the caller relaunches. */
       demote(masterDeviceId: string): Promise<void>;
       /** A master that woke has not heard from registration: close the gates. */
