@@ -270,6 +270,7 @@ function syncSurface(
     prepareSwap: call('prepareSwap'),
     prepareRestore: call('prepareRestore'),
     setDeviceId: call('setDeviceId'),
+    setDeviceNames: call('setDeviceNames'),
     beginJoin: call('beginJoin'),
     exportSources: call('exportSources'),
     finishJoin: call('finishJoin'),

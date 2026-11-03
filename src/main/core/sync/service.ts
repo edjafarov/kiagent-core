@@ -60,6 +60,8 @@ export interface ForwardRunners {
 }
 
 export interface SyncStatus {
+  /** Device-owned accounts another device owns: they run, and send, there. */
+  elsewhere: { source: string; identifier: string; ownerDeviceId: string }[];
   role: SyncRole;
   tracking: boolean;
   historyId: string | null;
@@ -146,6 +148,13 @@ export interface SyncService {
   ownsAccount(accountId: string): boolean;
   /** Is this source device-owned? */
   ownsSource(source: string): boolean;
+  /** The extension that owns the device list tells core what to call each
+   *  device. Replaces the previous list. */
+  setDeviceNames(list: { deviceId: string; label: string }[]): Promise<void>;
+  /** What to call a device: its label, else its first 8 characters. */
+  deviceName(deviceId: string): string;
+  /** The leader's name, when this device follows one. From memory. */
+  masterName(): string | null;
   /** Does another device own this account? It never runs here, whatever this
    *  device's role (final review). From memory. */
   ownedByOther(accountId: string): boolean;
@@ -262,8 +271,13 @@ export function createSyncService(deps: SyncServiceDeps): SyncService {
   let ownedIds = new Set<string>();
   let ownerOpen = false;
   let foreignIds = new Set<string>();
+  let names = new Map<string, string>();
+  let masterId: string | null = null;
   const refreshOwned = async (): Promise<void> => {
     const me = deviceId;
+    masterId =
+      ((await deps.db.all(`SELECT master_device_id AS m FROM sync_state`))[0] as { m: string | null } | undefined)
+        ?.m ?? null;
     const foreign = await deps.db.all(
       `SELECT id FROM accounts WHERE owner_device_id IS NOT NULL AND owner_device_id <> ?`,
       [me ?? ''],
@@ -460,6 +474,11 @@ export function createSyncService(deps: SyncServiceDeps): SyncService {
     ownsAccount: (accountId) => !fenced && ownedIds.has(accountId),
     ownsSource: (source) => !fenced && ownerOpen && isDeviceOwned(source),
     ownedByOther: (accountId) => foreignIds.has(accountId),
+    setDeviceNames: async (list) => {
+      names = new Map(list.filter((d) => d.label).map((d) => [d.deviceId, d.label]));
+    },
+    deviceName: (id) => names.get(id) ?? id.slice(0, 8),
+    masterName: () => (masterId ? (names.get(masterId) ?? masterId.slice(0, 8)) : null),
     beginJoin: async () => {
       await deps.db.run(`UPDATE sync_state SET joining = 1`);
       await refreshGate();

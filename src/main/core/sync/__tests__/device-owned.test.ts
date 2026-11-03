@@ -549,3 +549,36 @@ describe('an account owned by another device never runs here (final review)', ()
     expect(real).not.toHaveBeenCalled();
   });
 });
+
+describe('device names and accounts held elsewhere (final review)', () => {
+  const OTHER = 'abcdef01-0000-0000-0000-000000000000';
+
+  it('status lists the accounts another device owns, with the folder suffix off', async () => {
+    const d = await device({ follower: true });
+    addAccount(d, 'w', 'whatsapp', `+4915#${OTHER.slice(0, 8)}`, OTHER);
+    addAccount(d, 'mine', 'local-folder', `docs#${SUFFIX}`, DEVICE);
+    addAccount(d, 'g', 'gmail', 'me@x.com', null);
+    await d.svc.setDeviceId(DEVICE);
+    const { readSyncStatus } = await import('../status');
+    expect(readSyncStatus(d.conn()).elsewhere).toEqual([
+      { source: 'whatsapp', identifier: '+4915', ownerDeviceId: OTHER },
+    ]);
+  });
+
+  it('a device is called by its label once told, by its short id before', async () => {
+    const d = await device();
+    expect(d.svc.deviceName(OTHER)).toBe('abcdef01');
+    await d.svc.setDeviceNames([{ deviceId: OTHER, label: 'Work Mac' }]);
+    expect(d.svc.deviceName(OTHER)).toBe('Work Mac');
+    await d.svc.setDeviceNames([{ deviceId: OTHER, label: '' }]);
+    expect(d.svc.deviceName(OTHER)).toBe('abcdef01');
+  });
+
+  it('the leader is named from the stored master id', async () => {
+    const d = await device({ follower: true });
+    d.conn().prepare(`UPDATE sync_state SET master_device_id = ?`).run(OTHER);
+    await d.svc.loadOwned();
+    await d.svc.setDeviceNames([{ deviceId: OTHER, label: 'Work Mac' }]);
+    expect(d.svc.masterName()).toBe('Work Mac');
+  });
+});

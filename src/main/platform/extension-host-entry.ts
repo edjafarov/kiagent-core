@@ -130,6 +130,7 @@ export const NS_METHODS: Record<string, string[]> = {
     'prepareSwap',
     'prepareRestore',
     'setDeviceId',
+    'setDeviceNames',
     'beginJoin',
     'exportSources',
     'finishJoin',

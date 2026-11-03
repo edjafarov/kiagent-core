@@ -76,6 +76,7 @@ import { buildMainApi } from './main-api';
 import { createBusyRegistry } from './core/busy';
 import { wireOutboxPush } from './outbox-push';
 import { wireSyncAppliedPush } from './sync-applied-push';
+import { guardDraftTools } from './outbound/follower-tools';
 import { SYNC_REFUSED_PUSH, wrapForwardedChannels } from './core/sync/forward-core';
 import { runCommitBatch, type CommitInput } from './core/sync/owned';
 import { followerLookup } from './core/sync/role';
@@ -1116,6 +1117,7 @@ app
         ownsAccount: (id) => p.sync.ownsAccount(id),
         ownerOf: async (id) => (await p.store.account(id))?.ownerDeviceId ?? null,
         deviceId: () => p.sync.deviceId(),
+        deviceName: (id) => p.sync.deviceName(id),
       },
     );
     const documentBytes = createDocumentBytes({
@@ -1245,7 +1247,10 @@ app
       // Real app boot: heal HTTP client configs left pointing at a port we
       // no longer hold (candidate-port fallback). Tests never set this.
       reconcileClientConfigs: true,
-      outbound,
+      outbound: guardDraftTools(outbound, {
+        readOnly: () => p.sync.readOnly(),
+        masterName: () => p.sync.masterName(),
+      }),
       calendar: calendarOut,
       admission: p.admission,
     });

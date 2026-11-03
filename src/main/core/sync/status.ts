@@ -36,7 +36,21 @@ export function readSyncStatus(conn: BetterSqlite3.Database): SyncStatus {
     .prepare(`SELECT epoch, n FROM vault ORDER BY epoch DESC, n DESC LIMIT 1`)
     .get() as { epoch: number; n: number } | undefined;
   const waiting = conn.prepare(`SELECT count(*) AS n FROM sync_outbound`).get() as { n: number };
+  const elsewhere = (
+    conn
+      .prepare(
+        `SELECT source, identifier, owner_device_id AS owner FROM accounts
+          WHERE owner_device_id IS NOT NULL AND owner_device_id <> ? ORDER BY source, identifier`,
+      )
+      .all(s.device_id ?? '') as { source: string; identifier: string; owner: string }[]
+  ).map((r) => ({
+    source: r.source,
+    // The folder suffix keeps two devices' rows apart; the user never needs it.
+    identifier: r.identifier.replace(/#[0-9a-f]{8}$/, ''),
+    ownerDeviceId: r.owner,
+  }));
   return {
+    elsewhere,
     outbound: { waiting: waiting.n },
     deviceId: s.device_id,
     copiedSet: copiedSetDigest(conn),

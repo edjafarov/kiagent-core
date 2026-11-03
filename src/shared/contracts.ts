@@ -1960,6 +1960,8 @@ export interface CapSurfaces {
       /** Stores the id and, once on a device that never joined, claims its
        *  device-owned accounts under `<identifier>#<id8>`. */
       setDeviceId(id: string): Promise<void>;
+      /** What each device is called, from the device list. */
+      setDeviceNames(list: { deviceId: string; label: string }[]): Promise<void>;
       beginJoin(): Promise<void>;
       exportSources(toDevice: string): Promise<OfferedSourceWire[]>;
       finishJoin(): Promise<void>;
