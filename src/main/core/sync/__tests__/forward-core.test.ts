@@ -20,11 +20,14 @@ it('the writing channels are forwarded, reads are not', () => {
     'calendar-out:discard',
     'calendar-out:restore',
     'prefs:patch',
+    'extension:set-enabled',
+    'extension:install',
+    'extension:uninstall',
   ])
     expect(isForwardedChannel(c)).toBe(true);
   for (const c of ['attention:list', 'outbox:list', 'calendar-out:list', 'accounts:list'])
     expect(isForwardedChannel(c)).toBe(false);
-  expect(FORWARDED_CHANNELS).toHaveLength(12);
+  expect(FORWARDED_CHANNELS).toHaveLength(15);
 });
 
 it('forwardCore sends kind core with the channel name and returns the leader value', async () => {

@@ -5,7 +5,14 @@
  * MCP registration, and projects ExtensionSnapshot[] into AppState via
  * onChange. All IPC handlers call methods here.
  */
-import { NO_MASTER_MESSAGE } from '../core/sync/forward-core';
+import { forwardCore, NO_MASTER_MESSAGE } from '../core/sync/forward-core';
+import {
+  createExtensionSync,
+  type ExtensionSetStore,
+  type ExtensionsSet,
+  type LocalExtension,
+  type ReconcileResult,
+} from './extension-set';
 import type { SyncService } from '../core/sync/service';
 import path from 'path';
 import fs from 'fs';
@@ -295,6 +302,9 @@ export interface ExtensionPlatformDeps {
   sync?: SyncService;
   /** The store behind `host.prefs` (the app's `CorePrefs`). */
   prefs?: SurfaceDeps['prefs'];
+  /** The user's extension set (`core.extensions`, spec 7.9). Absent: the
+   *  platform neither records nor reconciles. */
+  extensionSet?: ExtensionSetStore;
   /** Trusted root grants restored/created by product main-process flows. */
   fileRoots?: FileRootRegistry;
   /** The app's userData dir — a declared root may never cover or sit inside it. */
@@ -447,6 +457,20 @@ export interface ExtensionPlatform {
     token: string,
   ): Promise<{ ok: boolean; id?: string; error?: string }>;
   uninstall(id: string): Promise<{ ok: boolean; error?: string }>;
+  /** Installs a connector from its pinned ref and records its consent here
+   *  without a prompt (the user granted it on another of their devices).
+   *  Preview and commit in one step. */
+  installFromRef(
+    ref: string,
+    opts: { grantConsent: true },
+  ): Promise<{ ok: boolean; id?: string; error?: string }>;
+  /** Brings this device in line with the user's extension set (default: the
+   *  stored one; nothing before one exists). Never changes the set. */
+  reconcileExtensions(set?: ExtensionsSet): Promise<ReconcileResult>;
+  /** Once, on a device that can write: the set from what is installed now. */
+  seedExtensionSet(): Promise<void>;
+  /** What the last reconcile could not install here, for Settings. */
+  failedExtensions(): { id: string; name: string; error: string }[];
   setEnabled(
     id: string,
     enabled: boolean,
@@ -1549,7 +1573,7 @@ export function createExtensionPlatform(
     ).then(() => undefined);
   }
 
-  const api: ExtensionPlatform = {
+  const api = {
     async load() {
       loadEntries();
     },
@@ -2030,8 +2054,119 @@ export function createExtensionPlatform(
     onUiBroadcast(cb) {
       return uiRegistry.onBroadcast(cb);
     },
+  } satisfies Omit<
+    ExtensionPlatform,
+    'installFromRef' | 'reconcileExtensions' | 'seedExtensionSet' | 'failedExtensions'
+  >;
+  // The members below wrap the ones above, so they are added after.
+  const full = api as ExtensionPlatform;
+
+  // ---- the user's extension set (spec 7.9 rules 7-9) ----
+  const rawSetEnabled = api.setEnabled.bind(api);
+  const rawUninstall = api.uninstall.bind(api);
+  const rawInstallCommit = api.installCommit.bind(api);
+  const rawInstallFromRef: ExtensionPlatform['installFromRef'] = async (ref) => {
+    const p = await api.installPreview(ref);
+    if (!('token' in p) || !p.token)
+      return { ok: false, error: 'error' in p && p.error ? p.error : 'preview failed' };
+    // installCommit records the manifest's consent itself, so no prompt.
+    return rawInstallCommit(p.token);
   };
-  return api;
+  const localExtensions = (): LocalExtension[] => {
+    const state = readEnabledState(deps.extDir);
+    const records = new Map(readInstalled(deps.extDir).map((r) => [r.id, r]));
+    return [...entries.values()].map((e) => ({
+      id: e.manifest.id,
+      origin: e.origin,
+      enabled: e.enabled,
+      ref: e.origin === 'marketplace' ? records.get(e.manifest.id)?.ref : undefined,
+      explicit: e.manifest.id in state,
+    }));
+  };
+  const noStore: ExtensionSetStore = {
+    get: () => undefined,
+    canWrite: () => false,
+    update: async () => {},
+  };
+  const setSync = createExtensionSync({
+    store: deps.extensionSet ?? noStore,
+    ops: {
+      list: localExtensions,
+      setEnabled: rawSetEnabled,
+      installFromRef: rawInstallFromRef,
+      uninstall: rawUninstall,
+    },
+    log: (message) => deps.logSink.log('extensions', 'warn', message),
+  });
+  // A record failure must not turn a done action into a failed one: the next
+  // boot's seed or the next write of this id puts the set right.
+  const record = (what: string, p: Promise<void>): Promise<void> =>
+    p.catch((error) =>
+      deps.logSink.log('extensions', 'warn', `could not record ${what} in the extension set: ${String(error)}`),
+    );
+  const recordedRef = (id: string): string | undefined => {
+    const r = readInstalled(deps.extDir).find((x) => x.id === id);
+    return r?.origin === 'marketplace' ? r.ref : undefined;
+  };
+
+  full.setEnabled = async (id, enabled) => {
+    const r = await rawSetEnabled(id, enabled);
+    if (r.ok) await record('enabled state', setSync.recordEnabled(id, enabled));
+    return r;
+  };
+  full.uninstall = async (id) => {
+    const r = await rawUninstall(id);
+    if (r.ok) await record('uninstall', setSync.recordUninstalled(id));
+    return r;
+  };
+  full.installCommit = async (token) => {
+    let staged: { ref: string; origin: 'marketplace' | 'dev' } | undefined;
+    try {
+      staged = installer.peekRef(token);
+    } catch {
+      staged = undefined; // the raw commit reports the unknown token
+    }
+    // A follower never installs a marketplace connector on its own: the
+    // leader installs the pinned ref and writes the set, and this device
+    // follows by reconcile. A local (dev) install is this machine's own.
+    if (staged?.origin === 'marketplace' && deps.sync?.readOnly()) {
+      installer.discard(token);
+      try {
+        return (await forwardCore(deps.sync, 'extension:install', { ref: staged.ref })) as {
+          ok: boolean;
+          id?: string;
+          error?: string;
+        };
+      } catch (e) {
+        return { ok: false, error: e instanceof Error ? e.message : String(e) };
+      }
+    }
+    const r = await rawInstallCommit(token);
+    if (r.id) await record('install', setSync.recordInstalled(r.id, recordedRef(r.id)));
+    return r;
+  };
+  full.installFromRef = async (ref) => {
+    const r = await rawInstallFromRef(ref, { grantConsent: true });
+    if (r.id) await record('install', setSync.recordInstalled(r.id, recordedRef(r.id)));
+    return r;
+  };
+  // Before discovery the platform knows of no extension: a seed would write an
+  // empty set and a reconcile would install what is already on disk.
+  full.reconcileExtensions = async (set) =>
+    !loaded
+      ? { installed: [], failed: [] }
+      : set
+        ? setSync.reconcile(set)
+        : setSync.runFromStore();
+  full.seedExtensionSet = async () => {
+    if (loaded) await record('the first set', setSync.seed());
+  };
+  full.failedExtensions = () =>
+    setSync.failed().map((f) => ({
+      ...f,
+      name: entries.get(f.id)?.manifest.name ?? f.id,
+    }));
+  return full;
 }
 
 /** The main-side DraftMirror of an extension's sender: every op resolves

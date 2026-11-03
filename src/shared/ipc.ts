@@ -787,6 +787,13 @@ export interface Invokes {
     req: { token: string };
     res: { ok: boolean; id?: string; error?: string };
   };
+  /** Installs a connector from its pinned ref with its consent recorded and no
+   *  prompt. A follower's commit forwards this to the leader (sync spec 7.9);
+   *  it is not shown to users as a separate step. */
+  'extension:install': {
+    req: { ref: string };
+    res: { ok: boolean; id?: string; error?: string };
+  };
   'extension:uninstall': {
     req: { id: string };
     res: { ok: boolean; error?: string };
@@ -951,6 +958,7 @@ const INVOKE_CHANNEL_MAP = {
   'marketplace:check-updates': 0,
   'extension:install-preview': 0,
   'extension:install-commit': 0,
+  'extension:install': 0,
   'extension:uninstall': 0,
   'extension:set-enabled': 0,
   'extension:grant-consent': 0,

@@ -185,6 +185,12 @@ export interface CorePrefs extends Prefs {
   setExt(key: string, value: unknown, opts?: { notify?: boolean }): Promise<void>;
   onExtChange(cb: (key: string, value: unknown) => void): () => void;
   setForwardExt(fn: ((key: string, value: unknown) => Promise<void>) | null): void;
+  /** A `core.*` row that is not one of the app preferences (`core.extensions`),
+   *  from the same mirror. */
+  getCore(key: string): unknown;
+  /** Atomic read-modify-write of such a row, on the leader only (a follower's
+   *  copy changes by the feed). `fn` returning undefined leaves the row. */
+  updateCore(key: string, fn: (current: unknown) => unknown): Promise<void>;
 }
 
 /** Extension settings share the table under `<extension id>.<name>`; the
@@ -399,6 +405,21 @@ export function createPrefs(dir: string, user?: UserPrefsStore): CorePrefs {
         } else {
           throw new Error('this device is a read-only copy: it cannot change this setting');
         }
+      }),
+    getCore: (key) => mirror[key],
+    updateCore: (key, fn) =>
+      serial(async () => {
+        if (!key.startsWith('core.')) throw new Error(`'${key}' is not a core setting`);
+        if (!store) throw new Error('settings are not ready yet');
+        if (!store.canWrite()) {
+          throw new Error('this device is a read-only copy: it cannot change this setting');
+        }
+        const next = fn(mirror[key]);
+        if (next === undefined) return;
+        const stored = jsonCopy(next);
+        if (sameJson(stored, mirror[key])) return;
+        await store.set(key, stored);
+        mirror[key] = stored;
       }),
     onExtChange(cb) {
       extListeners.add(cb);

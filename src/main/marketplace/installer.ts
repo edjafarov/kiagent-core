@@ -197,6 +197,20 @@ export function createInstaller(deps: InstallerDeps) {
       return p.manifest.id;
     },
 
+    /** Read-only: the ref a pending install was staged from (a follower hands
+     *  it to the leader instead of committing). */
+    peekRef(token: string): { ref: string; origin: 'marketplace' | 'dev' } {
+      const p = pending.get(token);
+      if (!p)
+        throw new Error('unknown or expired install token — run preview again');
+      return { ref: p.ref, origin: p.origin };
+    },
+
+    /** Drops one staged install without committing it. */
+    discard(token: string): void {
+      evict(token);
+    },
+
     async commit(
       token: string,
     ): Promise<{ manifest: Manifest; record: InstalledRecord; dir: string }> {

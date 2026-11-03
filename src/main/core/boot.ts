@@ -204,6 +204,9 @@ export interface CorePlatform {
    *  accounts resume from the copied cursor, the archive sweep and the ledger
    *  re-key start, and the workers held back attach. No restart. */
   promote(): Promise<void>;
+  /** Runs after this device became able to write (fence cleared or promoted),
+   *  before the leader-only jobs start. */
+  afterPromote(hook: () => void | Promise<void>): void;
   sync: SyncService;
   store: CoreStore;
   engine: ReturnType<typeof createEngine>;
@@ -428,6 +431,7 @@ export async function bootCore(deps: BootDeps): Promise<CorePlatform> {
     reads: readPlane.readsFor('other'),
   });
 
+  const promotedHooks: Array<() => void | Promise<void>> = [];
   const sync = createSyncService({
     db,
     store,
@@ -451,6 +455,11 @@ export async function bootCore(deps: BootDeps): Promise<CorePlatform> {
       await prefs.seedUser().catch((err) =>
         sink.log('sync', 'warn', `could not seed user preferences: ${String(err)}`),
       );
+      for (const hook of promotedHooks) {
+        await Promise.resolve(hook()).catch((err) =>
+          sink.log('sync', 'warn', `a promotion hook failed: ${String(err)}`),
+        );
+      }
       await platform.promote();
     },
     sources,
@@ -503,6 +512,9 @@ export async function bootCore(deps: BootDeps): Promise<CorePlatform> {
 
   platform = {
     readOnly: () => sync.readOnly(),
+    afterPromote: (hook) => {
+      promotedHooks.push(hook);
+    },
     promote: () =>
       promoteCore(platform, {
         deviceId: () => sync.deviceId(),

@@ -19,6 +19,9 @@ export const FORWARDED_CHANNELS = [
   'calendar-out:restore',
   'prefs:patch',
   'prefs:set-ext',
+  'extension:set-enabled',
+  'extension:install',
+  'extension:uninstall',
 ] as const;
 
 /** Forwarded verbs that are not forwarded whole: the handler splits its own

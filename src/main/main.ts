@@ -102,6 +102,7 @@ import {
 import { createResetJournal } from './reset-journal';
 import { corpusRefusalDialog, handleBootFailure } from './corpus-recovery';
 import type { ExtensionPlatform } from './platform/extension-platform';
+import { EXTENSIONS_KEY, type ExtensionsSet } from './platform/extension-set';
 import { createExtInvokeHandler } from './platform/ext-invoke';
 import {
   assertProfileStorageVersion,
@@ -514,6 +515,17 @@ function startAccount(p: CorePlatform, account: Account): void {
   else runAccount(p, account);
 }
 
+const EXTENSION_RETRY_MS = 60 * 60 * 1000;
+
+async function syncExtensions(extensions: ExtensionPlatform, p: CorePlatform): Promise<void> {
+  try {
+    await extensions.seedExtensionSet();
+    await extensions.reconcileExtensions();
+  } catch (err) {
+    p.logSink.log('extensions', 'warn', `extension reconcile failed: ${String(err)}`);
+  }
+}
+
 function registerIpc(
   p: CorePlatform,
   getLastPush: () => AppStatePush,
@@ -848,6 +860,8 @@ function registerIpc(
 
     'extension:install-preview': ({ ref }) => extensions.installPreview(ref),
     'extension:install-commit': ({ token }) => extensions.installCommit(token),
+    'extension:install': ({ ref }) =>
+      extensions.installFromRef(ref, { grantConsent: true }),
     'extension:uninstall': ({ id }) => extensions.uninstall(id),
     'extension:set-enabled': ({ id, enabled }) =>
       extensions.setEnabled(id, enabled),
@@ -897,9 +911,23 @@ function registerIpc(
       broadcast('ext:push', { ...SYNC_REFUSED_PUSH, payload: { message } }),
     );
   });
+  // A device that just became able to write seeds the extension set once.
+  p.afterPromote(() => syncExtensions(extensions, p));
+  // A connector that could not install here is tried again every hour.
+  setInterval(() => {
+    if (extensions.failedExtensions().length > 0) void syncExtensions(extensions, p);
+  }, EXTENSION_RETRY_MS).unref();
   // What the leader changed in user_prefs arrives by the feed.
   p.sync.onApplied((tables) => {
-    if (tables.includes('user_prefs')) void p.prefs.refreshUser();
+    if (tables.includes('user_prefs')) {
+      // The extension set is one of the rows that may have changed.
+      void p.prefs
+        .refreshUser()
+        .then(() => extensions.reconcileExtensions())
+        .catch((err) =>
+          p.logSink.log('extensions', 'warn', `extension reconcile failed: ${String(err)}`),
+        );
+    }
   });
   p.sync.setRunners({
     ui: async (extensionId, name, payload) => {
@@ -1460,6 +1488,14 @@ app
     extensionsPlatform = createExtensionPlatform({
       sync: p.sync,
       prefs: p.prefs,
+      // The user's extension set lives in user_prefs; only a device that can
+      // write the table changes it.
+      extensionSet: {
+        get: () => p.prefs.getCore(EXTENSIONS_KEY) as ExtensionsSet | undefined,
+        canWrite: () => !p.sync.readOnly(),
+        update: (fn) =>
+          p.prefs.updateCore(EXTENSIONS_KEY, (cur) => fn(cur as ExtensionsSet | undefined)),
+      },
       extDir: path.join(app.getPath('userData'), 'extensions'),
       bundledDir: bundledExtensionsDir,
       dormantExtensions: product.dormantExtensions,
@@ -1752,6 +1788,10 @@ app
             // The boot signal: quit / Reset all cancels pending activations
             // before any further utility host spawns (#140).
             await extensions.startUtility(background.signal);
+            // The user's extensions follow them: seed the set once from what
+            // is installed (a device that can write), then bring this device
+            // in line with it. A connector that fails retries every hour.
+            void syncExtensions(extensions, p);
             // 'all settled' comes from statuses, not from startUtility()
             // returning (a handshake retry resolves start early).
             bootTimer.armSettled(extensions.snapshot());
