@@ -138,6 +138,27 @@ describe('user prefs', () => {
     expect(p.get().theme).toBe('dark'); // optimistic; the feed overwrites it
   });
 
+  it('a follower with no leader and a queue set applies the user part and queues it instead of rejecting', async () => {
+    const store = fakeStore({}, false);
+    const p = createPrefs(dir, store);
+    await p.ready;
+    const queued: string[] = [];
+    p.setOfflineQueue({
+      nowMs: () => 0,
+      enqueue: async (_req, opts) => {
+        queued.push(opts.coalesceKey);
+        return 1;
+      },
+    });
+    p.setForwardUser(async () => {
+      throw Object.assign(new Error('no leader'), { code: 'EXT_SYNC_NO_MASTER' });
+    });
+    await p.patch({ launchAtLogin: false, theme: 'dark' });
+    expect(queued).toEqual(['core.theme']);
+    expect(p.get().theme).toBe('dark');
+    expect(p.get().launchAtLogin).toBe(false);
+  });
+
   it('a refused forward rejects but keeps the device part', async () => {
     const store = fakeStore({}, false);
     const p = createPrefs(dir, store);

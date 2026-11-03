@@ -9,6 +9,16 @@ import type {
 } from '@shared/contracts';
 
 import type { AppDb } from '../db/app-db';
+import { SyncNoMaster } from './sync/forward-core';
+import type { ForwardRequest } from './sync/service';
+import {
+  extensionEnabledKey,
+  extensionEnabledRequest,
+  extPrefRequest,
+  userPrefKey,
+  userPrefRequest,
+  type QueuedSetting,
+} from './sync/settings-queue';
 
 export const DEFAULT_PREFS: AppPrefs = {
   theme: 'system',
@@ -162,6 +172,14 @@ export interface UserPrefsStore {
   canWrite(): boolean;
 }
 
+/** Where a setting waits when no leader is reachable: the durable queue of
+ *  the sync service (phase 6c). `nowMs` stamps an acknowledgement so a later
+ *  delta can tell whether it already knows the delivered value. */
+export interface OfflineQueue {
+  enqueue(req: ForwardRequest, opts: { coalesceKey: string }): Promise<number>;
+  nowMs(): number;
+}
+
 /** `Prefs` plus the three steps the sync wiring needs. `get()` stays
  *  synchronous: it merges the file with an in-memory mirror of the table, and
  *  the mirror is filled by `attachUser`, which main awaits once the DB is open
@@ -170,8 +188,24 @@ export interface CorePrefs extends Prefs {
   /** Load the mirror, seed once from the file when this device can write the
    *  table, and make the table the source of the user keys. */
   attachUser(store: UserPrefsStore): Promise<void>;
-  /** Reload the mirror (after `sync.applied` touched `user_prefs`). */
-  refreshUser(): Promise<void>;
+  /** Reload the mirror (after `sync.applied` touched `user_prefs`). `meta`
+   *  says which keys the delta carried and when its pull began: a delivered
+   *  setting held as an optimistic value is released once a pull that started
+   *  after its acknowledgement brought that key (or a prefix of it). */
+  refreshUser(meta?: { prefKeys: string[]; pullStartedAt?: number }): Promise<void>;
+  /** Where a user or extension setting waits when no leader is reachable. */
+  setOfflineQueue(q: OfflineQueue | null): void;
+  /** Boot: rebuild the overlay from the queue's rows (no optimistic entries). */
+  restoreQueued(rows: QueuedSetting[]): void;
+  /** An extension switch changed with no leader: queued under
+   *  `core.extensions.<id>` and shown by `getCore('core.extensions')`. */
+  queueExtensionEnabled(id: string, enabled: boolean): Promise<void>;
+  /** The queue delivered or discarded a keyed row. */
+  onQueueChange(e: {
+    kind: 'delivered' | 'discarded';
+    rowId: number;
+    coalesceKey: string | null;
+  }): void;
   /** Seed from the file if that has not happened and this device can write
    *  now (called when a fence clears or the device is promoted). */
   seedUser(): Promise<void>;
@@ -246,6 +280,35 @@ export function createPrefs(dir: string, user?: UserPrefsStore): CorePrefs {
   let mirror: Record<string, unknown> = {};
   let forwardUser: ((u: Partial<AppPrefs>) => Promise<void>) | null = null;
   let forwardExt: ((key: string, value: unknown) => Promise<void>) | null = null;
+  let queue: OfflineQueue | null = null;
+  // Settings waiting in the queue (`overlay`) and delivered ones the feed has
+  // not brought back yet (`optimistic`) show over the table; one `viewOf`.
+  const overlay = new Map<string, { value: unknown; rowId: number }>();
+  const optimistic = new Map<string, { value: unknown; ackedAt: number }>();
+  const hasView = (key: string): boolean =>
+    overlay.has(key) || optimistic.has(key) || key in mirror;
+  const viewOf = (key: string): unknown =>
+    overlay.has(key)
+      ? overlay.get(key)!.value
+      : optimistic.has(key)
+        ? optimistic.get(key)!.value
+        : mirror[key];
+  const isNoMaster = (err: unknown): boolean =>
+    !!err && typeof err === 'object' && (err as { code?: unknown }).code === 'EXT_SYNC_NO_MASTER';
+  /** Every extension key with a value in the view, to see what a step changed. */
+  const extView = (): Map<string, unknown> => {
+    const out = new Map<string, unknown>();
+    for (const k of [...Object.keys(mirror), ...overlay.keys(), ...optimistic.keys()]) {
+      if (isExtKey(k)) out.set(k, viewOf(k));
+    }
+    return out;
+  };
+  const fireExtChanges = (before: Map<string, unknown>): void => {
+    const after = extView();
+    for (const k of new Set([...before.keys(), ...after.keys()])) {
+      if (!sameJson(before.get(k), after.get(k))) fireExt(k, after.get(k));
+    }
+  };
   const listeners = new Set<(p: AppPrefs) => void>();
   const extListeners = new Set<(key: string, value: unknown) => void>();
   const fireExt = (key: string, value: unknown): void => {
@@ -264,7 +327,7 @@ export function createPrefs(dir: string, user?: UserPrefsStore): CorePrefs {
     const raw: Record<string, unknown> = { ...fromFile };
     for (const k of USER_PREF_KEYS) {
       const t = tableKey(k);
-      raw[k] = t in mirror ? mirror[t] : DEFAULT_PREFS[k];
+      raw[k] = hasView(t) ? viewOf(t) : DEFAULT_PREFS[k];
     }
     return sanitize(raw);
   };
@@ -373,7 +436,22 @@ export function createPrefs(dir: string, user?: UserPrefsStore): CorePrefs {
         } else if (forwardUser) {
           // The leader writes it and it comes back by the feed; until then the
           // local mirror shows the change (the feed's value overwrites it).
-          await forwardUser(userPart);
+          try {
+            await forwardUser(userPart);
+          } catch (err) {
+            if (!queue || !isNoMaster(err)) throw err;
+            // No leader: each key waits in the queue with its COMPLETE merged
+            // value (a nested pref merges right whichever edit arrives last).
+            for (const k of touched) {
+              const key = userPrefKey(k);
+              const rowId = await queue.enqueue(userPrefRequest(k, next[k]), { coalesceKey: key });
+              overlay.set(key, { value: next[k], rowId });
+              optimistic.delete(key);
+            }
+            recompute();
+            emit();
+            return;
+          }
           for (const k of touched) mirror[tableKey(k)] = next[k];
           recompute();
           emit();
@@ -386,24 +464,69 @@ export function createPrefs(dir: string, user?: UserPrefsStore): CorePrefs {
       return () => listeners.delete(cb);
     },
     attachUser,
-    refreshUser: () =>
+    refreshUser: (meta) =>
       serial(async () => {
         if (!store) return;
-        const loaded = await store.all();
-        if (!sameJson(loaded, mirror)) {
-          const old = mirror;
-          mirror = loaded;
-          const before = current;
-          recompute();
-          if (!sameJson(before, current)) emit();
-          for (const k of new Set([...Object.keys(old), ...Object.keys(loaded)])) {
-            if (isExtKey(k) && !sameJson(old[k], loaded[k])) fireExt(k, loaded[k]);
+        const ext = extView();
+        const before = current;
+        if (meta && meta.pullStartedAt !== undefined) {
+          for (const [k, o] of [...optimistic]) {
+            if (meta.pullStartedAt <= o.ackedAt) continue;
+            if (meta.prefKeys.some((pk) => pk === k || k.startsWith(`${pk}.`))) {
+              optimistic.delete(k);
+            }
           }
         }
+        const loaded = await store.all();
+        mirror = loaded;
+        recompute();
+        if (!sameJson(before, current)) emit();
+        fireExtChanges(ext);
         await seedLocked();
       }),
+    setOfflineQueue(q) {
+      queue = q;
+    },
+    restoreQueued(rows) {
+      const ext = extView();
+      const before = current;
+      overlay.clear();
+      for (const r of rows) overlay.set(r.key, { value: r.value, rowId: r.rowId });
+      recompute();
+      if (!sameJson(before, current)) emit();
+      fireExtChanges(ext);
+    },
+    queueExtensionEnabled: (id, enabled) =>
+      serial(async () => {
+        if (!queue) throw new SyncNoMaster();
+        const key = extensionEnabledKey(id);
+        const rowId = await queue.enqueue(extensionEnabledRequest(id, enabled), { coalesceKey: key });
+        overlay.set(key, { value: enabled, rowId });
+        optimistic.delete(key);
+      }),
+    onQueueChange(e) {
+      const key = e.coalesceKey;
+      if (key === null) return;
+      const entry = overlay.get(key);
+      if (!entry || entry.rowId !== e.rowId) return;
+      const ext = extView();
+      const before = current;
+      overlay.delete(key);
+      if (e.kind === 'delivered') {
+        // A follower keeps showing the delivered value until a delta that was
+        // requested after this moment brings the leader's own.
+        if (store && !store.canWrite()) {
+          optimistic.set(key, { value: entry.value, ackedAt: queue?.nowMs() ?? Date.now() });
+        }
+      } else {
+        optimistic.delete(key);
+      }
+      recompute();
+      if (!sameJson(before, current)) emit();
+      fireExtChanges(ext);
+    },
     seedUser: () => serial(seedLocked),
-    getExt: (key) => (isExtKey(key) ? mirror[key] : undefined),
+    getExt: (key) => (isExtKey(key) ? viewOf(key) : undefined),
     setExt: (key, value, opts) =>
       serial(async () => {
         if (!isExtKey(key)) throw new Error(`'${key}' is not an extension setting`);
@@ -415,13 +538,40 @@ export function createPrefs(dir: string, user?: UserPrefsStore): CorePrefs {
           if (opts?.notify) fireExt(key, stored);
         } else if (forwardExt) {
           // The leader writes it and it comes back by the feed.
-          await forwardExt(key, stored);
+          try {
+            await forwardExt(key, stored);
+          } catch (err) {
+            if (!queue || !isNoMaster(err)) throw err;
+            const rowId = await queue.enqueue(extPrefRequest(key, stored), { coalesceKey: key });
+            overlay.set(key, { value: stored, rowId });
+            optimistic.delete(key);
+            return;
+          }
           mirror[key] = stored;
         } else {
           throw new Error('this device is a read-only copy: it cannot change this setting');
         }
       }),
-    getCore: (key) => mirror[key],
+    getCore: (key) => {
+      if (key !== 'core.extensions') return mirror[key];
+      // The set as the table holds it, with every queued or just-delivered
+      // switch laid over it.
+      const prefix = `${key}.`;
+      const ids = [...new Set([...overlay.keys(), ...optimistic.keys()])].filter((k) =>
+        k.startsWith(prefix),
+      );
+      if (ids.length === 0) return mirror[key];
+      const table = (mirror[key] && typeof mirror[key] === 'object' ? mirror[key] : {}) as Record<
+        string,
+        Record<string, unknown>
+      >;
+      const out: Record<string, unknown> = { ...table };
+      for (const k of ids) {
+        const id = k.slice(prefix.length);
+        out[id] = { ...(table[id] ?? {}), enabled: viewOf(k) };
+      }
+      return out;
+    },
     updateCore: (key, fn) =>
       serial(async () => {
         if (!key.startsWith('core.')) throw new Error(`'${key}' is not a core setting`);
