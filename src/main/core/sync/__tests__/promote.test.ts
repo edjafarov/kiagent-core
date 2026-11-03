@@ -101,6 +101,19 @@ describe('the writer', () => {
     expect(promoted).toBe(1);
   });
 
+  it('a promotion made while fenced stays closed, and starts the workers only when the fence lifts', async () => {
+    await follow();
+    sync.setFenced(true);
+    await sync.promote(2);
+    expect(sync.readOnly()).toBe(true);
+    await expect(write()).rejects.toThrow(/read-only/);
+    expect(promoted).toBe(0);
+    sync.setFenced(false);
+    await expect(write()).resolves.toBeTruthy();
+    await new Promise((r) => setTimeout(r, 50));
+    expect(promoted).toBe(1);
+  });
+
   it('a call queued during promote runs with the new role', async () => {
     await follow();
     const p = sync.promote(2);

@@ -656,7 +656,9 @@ export function createSyncService(deps: SyncServiceDeps): SyncService {
       if (!on && bootFence) {
         // Accounts and workers that found the gate closed at boot start now.
         bootFence = false;
-        void Promise.resolve(deps.onPromoted?.()).catch((err) => log('warn', `sync: could not open after the fence: ${String(err)}`));
+        void Promise.resolve(deps.onPromoted?.())
+          .then(() => drainOnce())
+          .catch((err) => log('warn', `sync: could not open after the fence: ${String(err)}`));
       }
       // The writer lives in a worker: the message is queued ahead of any write
       // sent after this call.
@@ -665,6 +667,12 @@ export function createSyncService(deps: SyncServiceDeps): SyncService {
     promote: async (epoch) => {
       await deps.db.proc!('syncPromote', { epoch });
       await refreshGate();
+      if (fenced) {
+        // Promoted but not yet allowed to lead (registration has not recorded
+        // the new head): workers and the queue start when the fence lifts.
+        bootFence = true;
+        return;
+      }
       await deps.onPromoted?.();
       // What waited for a leader runs here now.
       await drainOnce().catch((err) => log('warn', `sync: the queue did not drain: ${String(err)}`));
