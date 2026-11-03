@@ -36,28 +36,33 @@ export interface SyncGate {
   role: SyncRole;
   joining: boolean;
   joined: boolean;
+  /** This device led with change tracking on before it stopped. */
+  tracking: boolean;
 }
 
 export const gateFrom = (g: Pick<SyncGate, 'role' | 'joining'>): boolean =>
   g.role === 'follower' || g.joining;
 
-const toGate = (r: { role?: SyncRole; joining?: number; joined?: number } | undefined): SyncGate => ({
+const toGate = (
+  r: { role?: SyncRole; joining?: number; joined?: number; tracking?: number } | undefined,
+): SyncGate => ({
   role: r?.role ?? 'normal',
   joining: r?.joining === 1,
   joined: r?.joined === 1,
+  tracking: r?.tracking === 1,
 });
 
 export function readGateSync(conn: BetterSqlite3.Database): SyncGate {
   return toGate(
-    conn.prepare(`SELECT role, joining, joined FROM sync_state`).get() as
-      | { role: SyncRole; joining: number; joined: number }
+    conn.prepare(`SELECT role, joining, joined, tracking FROM sync_state`).get() as
+      | { role: SyncRole; joining: number; joined: number; tracking: number }
       | undefined,
   );
 }
 
 export async function readSyncGate(db: AppDb): Promise<SyncGate> {
-  const rows = await db.all(`SELECT role, joining, joined FROM sync_state`);
-  return toGate(rows[0] as { role: SyncRole; joining: number; joined: number } | undefined);
+  const rows = await db.all(`SELECT role, joining, joined, tracking FROM sync_state`);
+  return toGate(rows[0] as { role: SyncRole; joining: number; joined: number; tracking: number } | undefined);
 }
 
 const idleHandle = (): Handle => ({

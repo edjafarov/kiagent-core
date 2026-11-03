@@ -357,7 +357,8 @@ export async function bootCore(deps: BootDeps): Promise<CorePlatform> {
   const db = await openDbInWorker(dbPath, deps.dbWorkerFile);
   // Read once, before anything starts: only the boot swap changes it. A
   // joining device is gated like a follower, across restarts (spec 7.7).
-  const readOnlyAtBoot = gateFrom(await readSyncGate(db));
+  const gateAtBoot = await readSyncGate(db);
+  const readOnlyAtBoot = gateFrom(gateAtBoot);
   const store = openStore(db, {
     encrypt: deps.encrypt,
     decrypt: deps.decrypt,
@@ -442,6 +443,8 @@ export async function bootCore(deps: BootDeps): Promise<CorePlatform> {
     },
     busy: () => deps.busy?.get().reasons[0] ?? null,
     initialReadOnly: readOnlyAtBoot,
+    // A tracking master may have been replaced while it was off.
+    fencedAtBoot: gateAtBoot.tracking && !readOnlyAtBoot,
     onPromoted: () => platform.promote(),
     sources,
     log: (level, msg) => sink.log('sync', level, msg),

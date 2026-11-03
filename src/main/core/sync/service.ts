@@ -229,6 +229,9 @@ export interface SyncServiceDeps {
   nowMs?: () => number;
   /** What `sync_state` said at boot (follower or joining). */
   initialReadOnly?: boolean;
+  /** An old master (tracking on) wakes fenced: another device may lead by now.
+   *  The first isMaster reply opens it and runs `onPromoted` once. */
+  fencedAtBoot?: boolean;
   /** After a promotion's transaction: start what only a leader runs. */
   onPromoted?: () => void | Promise<void>;
   log?: (level: 'info' | 'warn' | 'error', msg: string) => void;
@@ -245,7 +248,9 @@ export function createSyncService(deps: SyncServiceDeps): SyncService {
   // Mirrors `sync_state` (role or joining) and the fence, so the answer is
   // synchronous. Every method below that changes the table refreshes it.
   let gated = deps.initialReadOnly ?? false;
-  let fenced = false;
+  let fenced = deps.fencedAtBoot ?? false;
+  let bootFence = fenced;
+  if (fenced) void deps.db.proc?.('syncFence', { on: true })?.catch(() => undefined);
   const readOnly = (): boolean => gated || fenced || (deps.readOnly?.() ?? false);
   const refreshGate = async (): Promise<void> => {
     const rows = await deps.db.all(`SELECT role, joining FROM sync_state`);
@@ -584,6 +589,11 @@ export function createSyncService(deps: SyncServiceDeps): SyncService {
     readOnly,
     setFenced: (on) => {
       fenced = on;
+      if (!on && bootFence) {
+        // Accounts and workers that found the gate closed at boot start now.
+        bootFence = false;
+        void Promise.resolve(deps.onPromoted?.()).catch((err) => log('warn', `sync: could not open after the fence: ${String(err)}`));
+      }
       // The writer lives in a worker: the message is queued ahead of any write
       // sent after this call.
       void deps.db.proc?.('syncFence', { on })?.catch(() => undefined);
