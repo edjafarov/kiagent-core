@@ -24,7 +24,7 @@ export const isForwardedChannel = (c: string): c is ForwardedChannel =>
 
 /** What a user sees when a follower's edit finds no leader. */
 export const NO_MASTER_MESSAGE =
-  'This change was not saved: no other device that holds your data is reachable. Try again when it is awake.';
+  "Can't save this yet. No other device is reachable; try again in a minute.";
 
 export class SyncNoMaster extends Error {
   readonly code = 'EXT_SYNC_NO_MASTER';

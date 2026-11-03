@@ -36,6 +36,7 @@ it('no leader rejects with the exact copy and a code; a refusal carries the lead
   const err = (await forwardCore(none, "attention:act", {}).catch((e: unknown) => e)) as SyncNoMaster;
   expect(err).toBeInstanceOf(SyncNoMaster);
   expect(err.message).toBe(NO_MASTER_MESSAGE);
+  expect(NO_MASTER_MESSAGE).toBe("Can't save this yet. No other device is reachable; try again in a minute.");
   expect(err.code).toBe('EXT_SYNC_NO_MASTER');
   const refused = { forward: async () => ({ ok: false as const, code: 'handler' as const, message: 'already sent' }) };
   await expect(forwardCore(refused, 'outbox:send', {})).rejects.toThrow('already sent');
