@@ -25,6 +25,7 @@ interface Wired {
   refusals: string[];
   enabled: Map<string, boolean>;
   calls: Record<string, jest.Mock>;
+  reconcile: jest.Mock;
 }
 const wired: Wired[] = [];
 const dirs: string[] = [];
@@ -83,9 +84,10 @@ async function wire(follower = true, existingDir?: string): Promise<Wired> {
     'attention:act': calls.act,
   };
   const refusals: string[] = [];
-  const offline = installOfflineSettings(prefs, svc);
+  const reconcile = jest.fn(async () => undefined);
+  const offline = installOfflineSettings(prefs, svc, { reconcile });
   const local = wrapForwardedChannels(table, svc, (m) => refusals.push(m), offline);
-  const w = { dir, db, svc, prefs, table, local, refusals, enabled, calls };
+  const w = { dir, db, svc, prefs, table, local, refusals, enabled, calls, reconcile };
   wired.push(w);
   return w;
 }
@@ -282,4 +284,31 @@ it('FOLLOWS_USER covers every USER_PREF_KEYS entry, core.extensions and every me
   expect(keys).toContain('kiagent.documents.description');
   expect(new Set(keys).size).toBe(keys.length);
   for (const g of FOLLOWS_USER) expect(g.label).not.toBe('');
+});
+
+it('discarding a queued connector switch reconciles so the connector returns to the mirrored state', async () => {
+  const w = await wire();
+  await w.table['extension:set-enabled']({ id: 'conn.a', enabled: true });
+  const [row] = await w.svc.queuedSettings();
+  expect(w.reconcile).not.toHaveBeenCalled();
+  await w.svc.discardQueued(row.rowId);
+  expect(w.reconcile).toHaveBeenCalledTimes(1);
+  // The set the reconcile reads no longer holds the discarded enable.
+  expect(JSON.stringify(w.prefs.getCore('core.extensions') ?? {})).not.toContain('conn.a":{"enabled":true');
+});
+
+it('discarding or delivering any other setting does not reconcile', async () => {
+  const w = await wire();
+  await w.prefs.patch({ theme: 'dark' });
+  const [row] = await w.svc.queuedSettings();
+  await w.svc.discardQueued(row.rowId);
+  expect(w.reconcile).not.toHaveBeenCalled();
+});
+
+it('a reconcile that fails does not fail the discard', async () => {
+  const w = await wire();
+  w.reconcile.mockRejectedValueOnce(new Error('boom'));
+  await w.table['extension:set-enabled']({ id: 'conn.a', enabled: true });
+  const [row] = await w.svc.queuedSettings();
+  await expect(w.svc.discardQueued(row.rowId)).resolves.toBeUndefined();
 });

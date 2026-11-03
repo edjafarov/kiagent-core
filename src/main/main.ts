@@ -897,7 +897,14 @@ function registerIpc(
   // `dispatch` still finds its text.
   // A setting changed with no leader applies here and waits in the queue
   // (`installOfflineSettings`); the data verbs below still refuse.
-  const offlineHandlers = installOfflineSettings(p.prefs, p.sync);
+  const offlineHandlers = installOfflineSettings(p.prefs, p.sync, {
+    reconcile: () =>
+      extensions
+        .reconcileExtensions()
+        .catch((err) =>
+          p.logSink.log('extensions', 'warn', `extension reconcile failed: ${String(err)}`),
+        ),
+  });
   const forwardedLocal = wrapForwardedChannels(
     handlers as unknown as Record<string, (req: unknown) => unknown>,
     p.sync,
