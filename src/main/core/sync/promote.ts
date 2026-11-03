@@ -44,6 +44,10 @@ export function promote(conn: BetterSqlite3.Database, epoch: number): void {
         `INSERT OR IGNORE INTO sync_epochs(epoch, grant_seq, grant_cursor) VALUES (?, ?, ?)`,
       )
       .run(epoch, s.after_seq, s.after_cursor);
+    // A device that just caught up from an interim leader still holds its own
+    // rows numbered below that leader's range, above its grant: the interim
+    // leader never saw them, and a pull after the new head would skip them.
+    if (s.role === 'follower' && s.epoch < epoch) renumberUnseen(conn, s.epoch);
     // Workers re-seed from the new range and skip what the ledger said was done
     // on the master; this device's own bookkeeping would point into the old one.
     conn.exec(`DELETE FROM work_ledger; DELETE FROM consumers;`);
@@ -65,4 +69,35 @@ export function demote(conn: BetterSqlite3.Database, masterDeviceId: string): vo
       )
       .run(masterDeviceId, head.seq, head.cursor);
   })();
+}
+
+/** Gives the rows this device wrote after the interim leader's grant, still in
+ *  the old numbering, fresh numbers in the new epoch so they travel. A row the
+ *  interim leader also changed is already merged here, so what is sent is the
+ *  current value. A follower that was not led past has no such rows. */
+function renumberUnseen(conn: BetterSqlite3.Database, interimEpoch: number): void {
+  const grant = conn
+    .prepare(`SELECT grant_seq AS seq, grant_cursor AS cursor FROM sync_epochs WHERE epoch = ?`)
+    .get(interimEpoch) as { seq: number; cursor: number } | undefined;
+  if (!grant) return;
+  const below = interimEpoch * EPOCH_GAP;
+  // Same as tracking.trackKey: delete then insert, so the key gets a new cursor.
+  const keys = conn
+    .prepare(`SELECT tbl, pk FROM sync_rows WHERE cursor > ? AND cursor < ? ORDER BY cursor`)
+    .all(grant.cursor, below) as { tbl: string; pk: string }[];
+  const drop = conn.prepare(`DELETE FROM sync_rows WHERE tbl = ? AND pk = ?`);
+  const add = conn.prepare(`INSERT INTO sync_rows(tbl, pk) VALUES(?, ?)`);
+  for (const k of keys) {
+    drop.run(k.tbl, k.pk);
+    add.run(k.tbl, k.pk);
+  }
+  // Documents feed from `seq`, which comes from `changes`: a new change row
+  // gives the number. The seq update is not tracked by design.
+  const docs = conn
+    .prepare(`SELECT id FROM documents WHERE seq > ? AND seq < ? ORDER BY seq`)
+    .all(grant.seq, below) as { id: string }[];
+  const change = conn.prepare(`INSERT INTO changes(kind, ref_id, at) VALUES('document', ?, ?)`);
+  const set = conn.prepare(`UPDATE documents SET seq = ? WHERE id = ?`);
+  const at = new Date().toISOString();
+  for (const d of docs) set.run(change.run(d.id, at).lastInsertRowid, d.id);
 }
