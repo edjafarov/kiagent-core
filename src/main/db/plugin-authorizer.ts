@@ -80,7 +80,7 @@ export function createPluginAuthorizer(options: PluginAuthorizerOptions) {
     // The change tracker's own triggers write what they track and read the
     // switch, whoever fired them.
     if (trigger.startsWith('sync_')) {
-      if (table === 'sync_rows' && (action === 18 || action === 9 || action === 23)) return 0;
+      if (table === 'sync_rows' && (action === 18 || action === 9 || action === 23 || action === 20)) return 0;
       if (table === 'sync_state' && action === 20) return 0;
       if (table === 'sqlite_sequence') return 0;
     }

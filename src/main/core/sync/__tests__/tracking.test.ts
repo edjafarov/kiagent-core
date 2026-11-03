@@ -12,11 +12,17 @@ import {
   COPIED_CORE_TABLES,
   isDerivedTable,
   LOCAL_CORE_TABLES,
+  copiedSetDigest,
+  copiedTables,
 } from '../tables';
-import { disableTracking, enableTracking } from '../tracking';
-import { copiedSetDigest, copiedTables } from '../tables';
+import { disableTracking, enableTracking, ensureSyncTriggers } from '../tracking';
 import { readSyncStatus } from '../status';
-import { addOutbox, descriptor, physical, registerPlugin } from './synced-plugin';
+import {
+  addOutbox,
+  descriptor,
+  physical,
+  registerPlugin,
+} from './synced-plugin';
 
 const deps = {
   encrypt: (s: string) => Buffer.from(s, 'utf8'),
@@ -41,9 +47,12 @@ const entries = () =>
     tbl: string;
     pk: string;
   }[];
-const account = () => store.createAccount({ source: 'test', identifier: 'a@b' });
-const commit = (id: Awaited<ReturnType<typeof account>>['id'], documents: DocumentInput[]) =>
-  store.commit({ account: id, documents, cursor: null });
+const account = () =>
+  store.createAccount({ source: 'test', identifier: 'a@b' });
+const commit = (
+  id: Awaited<ReturnType<typeof account>>['id'],
+  documents: DocumentInput[],
+) => store.commit({ account: id, documents, cursor: null });
 
 beforeEach(async () => {
   dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sync-track-'));
@@ -93,7 +102,9 @@ it('no copied table lacks a primary key', () => {
 
 it('creates nothing until enabled: no sync trigger exists after migrations', () => {
   const n = conn()
-    .prepare(`SELECT count(*) n FROM sqlite_master WHERE type='trigger' AND name LIKE 'sync_%'`)
+    .prepare(
+      `SELECT count(*) n FROM sqlite_master WHERE type='trigger' AND name LIKE 'sync_%'`,
+    )
     .get() as { n: number };
   expect(n.n).toBe(0);
 });
@@ -109,9 +120,14 @@ it('a normal documents insert and seq-advancing update write no documents entrie
 it('a documents update that keeps seq writes one entry', async () => {
   const a = await account();
   await commit(a.id, [doc('d1')]);
-  const row = conn().prepare(`SELECT id, seq FROM documents`).get() as { id: string; seq: number };
+  const row = conn().prepare(`SELECT id, seq FROM documents`).get() as {
+    id: string;
+    seq: number;
+  };
   enableTracking(conn());
-  conn().prepare(`UPDATE documents SET scope_root_id='r2' WHERE id=?`).run(row.id);
+  conn()
+    .prepare(`UPDATE documents SET scope_root_id='r2' WHERE id=?`)
+    .run(row.id);
   expect(entries().filter((e) => e.tbl === 'documents')).toEqual([
     { tbl: 'documents', pk: JSON.stringify([row.id]) },
   ]);
@@ -120,7 +136,9 @@ it('a documents update that keeps seq writes one entry', async () => {
 it('a documents delete writes one entry', async () => {
   const a = await account();
   await commit(a.id, [doc('d1')]);
-  const { id } = conn().prepare(`SELECT id FROM documents`).get() as { id: string };
+  const { id } = conn().prepare(`SELECT id FROM documents`).get() as {
+    id: string;
+  };
   enableTracking(conn());
   conn().prepare(`DELETE FROM documents WHERE id=?`).run(id);
   expect(entries()).toEqual([{ tbl: 'documents', pk: JSON.stringify([id]) }]);
@@ -140,9 +158,13 @@ it('an account update replaces its one entry and moves its cursor', async () => 
   const a = await account();
   enableTracking(conn());
   conn().prepare(`UPDATE accounts SET cursor='1' WHERE id=?`).run(a.id);
-  const first = conn().prepare(`SELECT cursor FROM sync_rows`).get() as { cursor: number };
+  const first = conn().prepare(`SELECT cursor FROM sync_rows`).get() as {
+    cursor: number;
+  };
   conn().prepare(`UPDATE accounts SET cursor='2' WHERE id=?`).run(a.id);
-  const rows = conn().prepare(`SELECT cursor FROM sync_rows`).all() as { cursor: number }[];
+  const rows = conn().prepare(`SELECT cursor FROM sync_rows`).all() as {
+    cursor: number;
+  }[];
   expect(rows).toHaveLength(1);
   expect(rows[0].cursor).toBeGreaterThan(first.cursor);
 });
@@ -158,7 +180,11 @@ it('tracking=0 records nothing', async () => {
 it('enabling twice keeps one history id', () => {
   enableTracking(conn());
   const h = () =>
-    (conn().prepare(`SELECT history_id h FROM sync_state`).get() as { h: string }).h;
+    (
+      conn().prepare(`SELECT history_id h FROM sync_state`).get() as {
+        h: string;
+      }
+    ).h;
   const first = h();
   expect(first).toBeTruthy();
   enableTracking(conn());
@@ -166,9 +192,13 @@ it('enabling twice keeps one history id', () => {
 });
 
 it('enableTracking marks the device joined', () => {
-  expect(conn().prepare(`SELECT joined FROM sync_state`).get()).toEqual({ joined: 0 });
+  expect(conn().prepare(`SELECT joined FROM sync_state`).get()).toEqual({
+    joined: 0,
+  });
   enableTracking(conn());
-  expect(conn().prepare(`SELECT joined FROM sync_state`).get()).toEqual({ joined: 1 });
+  expect(conn().prepare(`SELECT joined FROM sync_state`).get()).toEqual({
+    joined: 1,
+  });
 });
 
 describe('synced plugin tables', () => {
@@ -179,24 +209,86 @@ describe('synced plugin tables', () => {
     void registry;
     enableTracking(conn());
     const t = physical('notes');
-    conn().prepare(`INSERT INTO "${t}"(account_id, key, body) VALUES('a','k','x')`).run();
+    conn()
+      .prepare(`INSERT INTO "${t}"(account_id, key, body) VALUES('a','k','x')`)
+      .run();
     conn().prepare(`UPDATE "${t}" SET body='y' WHERE account_id='a'`).run();
     conn().prepare(`UPDATE "${t}" SET key='k2' WHERE account_id='a'`).run();
     conn().prepare(`DELETE FROM "${t}"`).run();
     const got = entries().filter((e) => e.tbl === t);
-    expect(got.map((e) => e.pk).sort()).toEqual([JSON.stringify(['a', 'k']), JSON.stringify(['a', 'k2'])]);
+    expect(got.map((e) => e.pk).sort()).toEqual([
+      JSON.stringify(['a', 'k']),
+      JSON.stringify(['a', 'k2']),
+    ]);
     // An unlisted table of the same plugin is not tracked.
-    conn().prepare(`INSERT INTO "${physical('local_x')}"(id, v) VALUES('1','v')`).run();
+    conn()
+      .prepare(`INSERT INTO "${physical('local_x')}"(id, v) VALUES('1','v')`)
+      .run();
     expect(entries().some((e) => e.tbl === physical('local_x'))).toBe(false);
+  });
+
+  it('an upsert or an OR-clause write of a tracked row succeeds and moves its cursor', async () => {
+    // SQLite applies the OUTER statement's conflict policy to a trigger body,
+    // so `INSERT OR REPLACE` inside the trigger aborted every plugin upsert.
+    await registerPlugin(file(), conn());
+    enableTracking(conn());
+    const t = physical('notes');
+    const upsert = `INSERT INTO "${t}"(account_id, key, body) VALUES('a','k',?)
+      ON CONFLICT(account_id, key) DO UPDATE SET body = excluded.body`;
+    conn().prepare(upsert).run('x');
+    const first = conn()
+      .prepare(`SELECT cursor FROM sync_rows WHERE tbl = ?`)
+      .get(t) as { cursor: number };
+    expect(() => conn().prepare(upsert).run('y')).not.toThrow();
+    expect(() =>
+      conn().prepare(`UPDATE OR ABORT "${t}" SET body = 'z'`).run(),
+    ).not.toThrow();
+    expect(() =>
+      conn()
+        .prepare(
+          `INSERT OR IGNORE INTO "${t}"(account_id, key, body) VALUES('a','k','w')`,
+        )
+        .run(),
+    ).not.toThrow();
+    const rows = conn()
+      .prepare(`SELECT cursor FROM sync_rows WHERE tbl = ?`)
+      .all(t) as { cursor: number }[];
+    expect(rows).toHaveLength(1);
+    expect(rows[0].cursor).toBeGreaterThan(first.cursor);
+  });
+
+  it('re-creating triggers replaces an older body under the same name', async () => {
+    await registerPlugin(file(), conn());
+    enableTracking(conn());
+    const t = physical('notes');
+    conn().exec(`DROP TRIGGER "sync_i_${t}";
+      CREATE TRIGGER "sync_i_${t}" AFTER INSERT ON "${t}" BEGIN SELECT 1; END;`);
+    ensureSyncTriggers(conn());
+    const { sql } = conn()
+      .prepare(`SELECT sql FROM sqlite_master WHERE name = ?`)
+      .get(`sync_i_${t}`) as { sql: string };
+    expect(sql).toContain('sync_rows');
   });
 
   it('every copied core table gets triggers when tracking starts', () => {
     enableTracking(conn());
     const names = (
-      conn().prepare(`SELECT name FROM sqlite_master WHERE type='trigger' AND name LIKE 'sync_%'`).all() as { name: string }[]
+      conn()
+        .prepare(
+          `SELECT name FROM sqlite_master WHERE type='trigger' AND name LIKE 'sync_%'`,
+        )
+        .all() as { name: string }[]
     ).map((r) => r.name);
-    for (const t of ['outbox', 'event_drafts', 'sync_epochs', 'attention_items', 'attention_revisions']) {
-      expect(names).toEqual(expect.arrayContaining([`sync_i_${t}`, `sync_u_${t}`, `sync_d_${t}`]));
+    for (const t of [
+      'outbox',
+      'event_drafts',
+      'sync_epochs',
+      'attention_items',
+      'attention_revisions',
+    ]) {
+      expect(names).toEqual(
+        expect.arrayContaining([`sync_i_${t}`, `sync_u_${t}`, `sync_d_${t}`]),
+      );
     }
   });
 
@@ -204,18 +296,35 @@ describe('synced plugin tables', () => {
     enableTracking(conn());
     await registerPlugin(file(), conn());
     const names = (
-      conn().prepare(`SELECT name FROM sqlite_master WHERE type='trigger' AND name LIKE 'sync_%'`).all() as { name: string }[]
+      conn()
+        .prepare(
+          `SELECT name FROM sqlite_master WHERE type='trigger' AND name LIKE 'sync_%'`,
+        )
+        .all() as { name: string }[]
     ).map((r) => r.name);
-    expect(names).toEqual(expect.arrayContaining([`sync_i_${physical('notes')}`, `sync_d_${physical('blobs')}`]));
+    expect(names).toEqual(
+      expect.arrayContaining([
+        `sync_i_${physical('notes')}`,
+        `sync_d_${physical('blobs')}`,
+      ]),
+    );
     expect(names.some((n) => n.includes(physical('local_x')))).toBe(false);
-    conn().prepare(`INSERT INTO "${physical('blobs')}"(id, data) VALUES('b', x'01')`).run();
+    conn()
+      .prepare(
+        `INSERT INTO "${physical('blobs')}"(id, data) VALUES('b', x'01')`,
+      )
+      .run();
     expect(entries()).toContainEqual({ tbl: physical('blobs'), pk: '["b"]' });
   });
 
   it('copiedTables lists the core tables then the physical synced names', async () => {
     expect(copiedTables(conn())).toEqual([...COPIED_CORE_TABLES]);
     await registerPlugin(file(), conn());
-    expect(copiedTables(conn())).toEqual([...COPIED_CORE_TABLES, physical('notes'), physical('blobs')]);
+    expect(copiedTables(conn())).toEqual([
+      ...COPIED_CORE_TABLES,
+      physical('notes'),
+      physical('blobs'),
+    ]);
   });
 
   it('status reports the copied-set digest', () => {
@@ -229,10 +338,14 @@ describe('synced plugin tables', () => {
     await commit(a.id, [doc('d1')]);
     addOutbox(conn(), a.id, 'o');
     expect(copiedSetDigest(conn())).toBe(d0);
-    conn().prepare(`UPDATE meta SET value = value + 1 WHERE key='schemaVersion'`).run();
+    conn()
+      .prepare(`UPDATE meta SET value = value + 1 WHERE key='schemaVersion'`)
+      .run();
     const d1 = copiedSetDigest(conn());
     expect(d1).not.toBe(d0);
-    conn().prepare(`UPDATE meta SET value = value - 1 WHERE key='schemaVersion'`).run();
+    conn()
+      .prepare(`UPDATE meta SET value = value - 1 WHERE key='schemaVersion'`)
+      .run();
     const registry = await registerPlugin(file(), conn());
     const d2 = copiedSetDigest(conn());
     expect(d2).not.toBe(d0);
