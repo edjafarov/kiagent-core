@@ -90,6 +90,9 @@ export function gateEngine(
   owned: {
     ownsAccount(id: string): boolean;
     ownsSource(source: string): boolean;
+    /** Another device owns this account: it never runs here, whatever the
+     *  role, so a master cannot scan a follower's path. */
+    ownedByOther?(id: string): boolean;
     /** Re-reads who owns what; called after a verb that may have created or
      *  removed an owned account. */
     loadOwned?(): Promise<void>;
@@ -101,10 +104,11 @@ export function gateEngine(
   const e = engine as Record<string, (...a: unknown[]) => unknown>;
   const real = { ...e };
   const held: { worker: unknown; proxy: HeldHandle }[] = [];
-  e.run = (...a) =>
-    readOnly() && !owned.ownsAccount((a[0] as { id: string } | undefined)?.id ?? '')
-      ? idleHandle()
-      : real.run.apply(engine, a);
+  e.run = (...a) => {
+    const id = (a[0] as { id: string } | undefined)?.id ?? '';
+    if (owned.ownedByOther?.(id)) return idleHandle();
+    return readOnly() && !owned.ownsAccount(id) ? idleHandle() : real.run.apply(engine, a);
+  };
   e.attach = (...a) => {
     if (!readOnly()) return real.attach.apply(engine, a);
     const proxy = new HeldHandle();

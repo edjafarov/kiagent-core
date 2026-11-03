@@ -893,7 +893,13 @@ function registerIpc(
       if (!local) throw new Error(`${name} is not a forwarded channel`);
       return local(req);
     },
-    commit: (input) => runCommitBatch({ db: p.db, store: p.store }, input as CommitInput),
+    commit: async (input) => {
+      const r = await runCommitBatch({ db: p.db, store: p.store }, input as CommitInput);
+      // A follower's account just landed: it belongs to that device, so this
+      // one must know before any tick or boot path asks to run it.
+      await p.sync.loadOwned();
+      return r;
+    },
   });
 
   // The loop is the point: it registers exactly the declared channels, and

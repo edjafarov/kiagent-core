@@ -146,6 +146,9 @@ export interface SyncService {
   ownsAccount(accountId: string): boolean;
   /** Is this source device-owned? */
   ownsSource(source: string): boolean;
+  /** Does another device own this account? It never runs here, whatever this
+   *  device's role (final review). From memory. */
+  ownedByOther(accountId: string): boolean;
   /** Sets `joining=1` and nothing else: the caller restarts, because the
    *  gates are read at boot (spec 7.7). */
   beginJoin(): Promise<void>;
@@ -253,7 +256,14 @@ export function createSyncService(deps: SyncServiceDeps): SyncService {
   /** Accounts this device runs whatever its role: device-owned and mine. */
   let ownedIds = new Set<string>();
   let ownerOpen = false;
+  let foreignIds = new Set<string>();
   const refreshOwned = async (): Promise<void> => {
+    const me = deviceId;
+    const foreign = await deps.db.all(
+      `SELECT id FROM accounts WHERE owner_device_id IS NOT NULL AND owner_device_id <> ?`,
+      [me ?? ''],
+    );
+    foreignIds = new Set((foreign as { id: string }[]).map((r) => r.id));
     const rows = await deps.db.all(ownedByThisDeviceSql(false), [...DEVICE_OWNED_SOURCES]);
     ownedIds = new Set((rows as { id: string }[]).map((r) => r.id));
     ownerOpen = (await deps.db.all(OWNER_OPEN_SQL)).length > 0;
@@ -368,6 +378,7 @@ export function createSyncService(deps: SyncServiceDeps): SyncService {
     buildSnapshot: (out) => onWorker('buildSnapshot', { out }),
     applyDelta: async (stagePath) => {
       const r = await deps.store.applySyncDelta(stagePath);
+      if (r.tables.includes('accounts')) await refreshOwned();
       if (r.tables.length) for (const cb of appliedListeners) cb(r.tables);
       return r;
     },
@@ -443,6 +454,7 @@ export function createSyncService(deps: SyncServiceDeps): SyncService {
     },
     ownsAccount: (accountId) => !fenced && ownedIds.has(accountId),
     ownsSource: (source) => !fenced && ownerOpen && isDeviceOwned(source),
+    ownedByOther: (accountId) => foreignIds.has(accountId),
     beginJoin: async () => {
       await deps.db.run(`UPDATE sync_state SET joining = 1`);
       await refreshGate();

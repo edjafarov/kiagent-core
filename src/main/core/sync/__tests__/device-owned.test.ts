@@ -507,3 +507,45 @@ describe('owner deletions converge on the leader', () => {
     expect(d.conn().prepare(`SELECT count(*) n FROM sync_outbound`).get()).toEqual({ n: 1 });
   });
 });
+
+describe('an account owned by another device never runs here (final review)', () => {
+  const OTHER = 'otherdev-0000-0000-0000-000000000000';
+  const real = jest.fn(() => 'real');
+  beforeEach(() => real.mockClear());
+  const engineOf = () => ({
+    run: real,
+    attach: jest.fn(() => 'real'),
+    rerunDeferred: jest.fn(async () => 'real'),
+  });
+  const runOn = (e: ReturnType<typeof engineOf>, id: string) =>
+    (e.run as unknown as (a: { id: string }) => unknown)({ id });
+
+  it('a restarted master starts neither a follower-owned folder nor opens its path', async () => {
+    const d = await device(); // role normal: the master
+    addAccount(d, 'theirs', 'local-folder', `docs#${OTHER.slice(0, 8)}`, OTHER);
+    addAccount(d, 'mine', 'local-folder', `docs#${SUFFIX}`, DEVICE);
+    addAccount(d, 'free', 'gmail', 'me@x.com', null);
+    await d.svc.setDeviceId(DEVICE);
+    await d.svc.loadOwned();
+    const e = engineOf();
+    gateEngine(e as never, () => d.svc.readOnly(), d.svc);
+    // The second call is the boot path (resumeAccounts) and the cadence tick.
+    expect((runOn(e, 'theirs') as { status: string }).status).toBe('paused');
+    expect((runOn(e, 'theirs') as { status: string }).status).toBe('paused');
+    expect(real).not.toHaveBeenCalled();
+    expect(runOn(e, 'mine')).toBe('real');
+    expect(runOn(e, 'free')).toBe('real');
+    expect(real).toHaveBeenCalledTimes(2);
+  });
+
+  it('a follower does not run it either', async () => {
+    const d = await device({ follower: true });
+    addAccount(d, 'theirs', 'local-folder', `docs#${OTHER.slice(0, 8)}`, OTHER);
+    await d.svc.setDeviceId(DEVICE);
+    await d.svc.loadOwned();
+    const e = engineOf();
+    gateEngine(e as never, () => d.svc.readOnly(), d.svc);
+    expect((runOn(e, 'theirs') as { status: string }).status).toBe('paused');
+    expect(real).not.toHaveBeenCalled();
+  });
+});
