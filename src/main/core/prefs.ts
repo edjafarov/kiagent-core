@@ -177,6 +177,8 @@ export interface UserPrefsStore {
  *  delta can tell whether it already knows the delivered value. */
 export interface OfflineQueue {
   enqueue(req: ForwardRequest, opts: { coalesceKey: string }): Promise<number>;
+  /** Drops a waiting row: a leader's own newer write replaces it. */
+  discard?(rowId: number): Promise<void>;
   nowMs(): number;
 }
 
@@ -289,18 +291,36 @@ export function createPrefs(dir: string, user?: UserPrefsStore): CorePrefs {
   let queue: OfflineQueue | null = null;
   // Settings waiting in the queue (`overlay`) and delivered ones the feed has
   // not brought back yet (`optimistic`) show over the table; one `viewOf`.
-  const overlay = new Map<string, { value: unknown; rowId: number }>();
+  const overlay = new Map<string, { value: unknown; rowId: number; stuck?: boolean }>();
   const optimistic = new Map<string, { value: unknown; ackedAt: number }>();
+  /** A queued value shows, except a stuck one on a device that writes the
+   *  table itself: the table is the truth there and nothing will deliver it. */
+  const queued = (key: string) => {
+    const e = overlay.get(key);
+    return e && !(e.stuck && store?.canWrite()) ? e : undefined;
+  };
   const hasView = (key: string): boolean =>
-    overlay.has(key) || optimistic.has(key) || key in mirror;
+    !!queued(key) || optimistic.has(key) || key in mirror;
   const viewOf = (key: string): unknown =>
-    overlay.has(key)
-      ? overlay.get(key)!.value
+    queued(key)
+      ? queued(key)!.value
       : optimistic.has(key)
         ? optimistic.get(key)!.value
         : mirror[key];
   const isNoMaster = (err: unknown): boolean =>
     !!err && typeof err === 'object' && (err as { code?: unknown }).code === 'EXT_SYNC_NO_MASTER';
+  /** This device writes the table: a write of its own replaces whatever waited
+   *  in the queue for these keys, so the older value is neither shown over it
+   *  nor delivered after it. */
+  const supersede = async (keys: string[]): Promise<void> => {
+    for (const key of keys) {
+      const e = overlay.get(key);
+      optimistic.delete(key);
+      if (!e) continue;
+      overlay.delete(key);
+      await queue?.discard?.(e.rowId).catch(() => undefined);
+    }
+  };
   /** Every extension key with a value in the view, to see what a step changed. */
   const extView = (): Map<string, unknown> => {
     const out = new Map<string, unknown>();
@@ -449,6 +469,7 @@ export function createPrefs(dir: string, user?: UserPrefsStore): CorePrefs {
             await store.set(tableKey(k), next[k]);
             mirror[tableKey(k)] = next[k];
           }
+          await supersede(touched.map((k) => userPrefKey(k)));
           recompute();
           emit();
         } else if (forwardUser) {
@@ -524,7 +545,9 @@ export function createPrefs(dir: string, user?: UserPrefsStore): CorePrefs {
       // An entry a newer edit already made stays; the rows only fill gaps.
       for (const r of rows) {
         const have = overlay.get(r.key);
-        if (!have || have.rowId < r.rowId) overlay.set(r.key, { value: r.value, rowId: r.rowId });
+        if (!have || have.rowId < r.rowId) {
+          overlay.set(r.key, { value: r.value, rowId: r.rowId, ...(r.stuck ? { stuck: true } : {}) });
+        }
       }
       recompute();
       if (!sameJson(before, current)) emit();
@@ -569,6 +592,7 @@ export function createPrefs(dir: string, user?: UserPrefsStore): CorePrefs {
         if (store.canWrite()) {
           await store.set(key, stored);
           mirror[key] = stored;
+          await supersede([key]);
           if (opts?.notify) fireExt(key, stored);
         } else if (forwardExt) {
           // The leader writes it and it comes back by the feed.
@@ -598,8 +622,8 @@ export function createPrefs(dir: string, user?: UserPrefsStore): CorePrefs {
       // The set as the table holds it, with every queued or just-delivered
       // switch laid over it.
       const prefix = `${key}.`;
-      const ids = [...new Set([...overlay.keys(), ...optimistic.keys()])].filter((k) =>
-        k.startsWith(prefix),
+      const ids = [...new Set([...overlay.keys(), ...optimistic.keys()])].filter(
+        (k) => k.startsWith(prefix) && (queued(k) || optimistic.has(k)),
       );
       if (ids.length === 0) return mirror[key];
       const table = (mirror[key] && typeof mirror[key] === 'object' ? mirror[key] : {}) as Record<
@@ -620,12 +644,27 @@ export function createPrefs(dir: string, user?: UserPrefsStore): CorePrefs {
         if (!store.canWrite()) {
           throw new Error('this device is a read-only copy: it cannot change this setting');
         }
-        const next = fn(mirror[key]);
+        // The function sees what this device shows (queued switches included),
+        // so a switch it flips back is a change against that, and only those
+        // switches stop waiting in the queue.
+        const seen = prefs.getCore(key);
+        const next = fn(seen);
         if (next === undefined) return;
         const stored = jsonCopy(next);
-        if (sameJson(stored, mirror[key])) return;
-        await store.set(key, stored);
-        mirror[key] = stored;
+        if (!sameJson(stored, mirror[key])) {
+          await store.set(key, stored);
+          mirror[key] = stored;
+        }
+        if (key === 'core.extensions') {
+          const was = (seen && typeof seen === 'object' ? seen : {}) as Record<string, unknown>;
+          const now = (stored && typeof stored === 'object' ? stored : {}) as Record<string, unknown>;
+          const changed = [...new Set([...Object.keys(was), ...Object.keys(now)])].filter(
+            (id) => !sameJson(was[id], now[id]),
+          );
+          await supersede(changed.map((id) => extensionEnabledKey(id)));
+        } else {
+          await supersede([key]);
+        }
       }),
     offerable: () =>
       serial(async () => {

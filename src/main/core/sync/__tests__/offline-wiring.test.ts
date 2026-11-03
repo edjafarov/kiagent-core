@@ -257,6 +257,29 @@ it('after promotion the queued rows run as the leader, the overlay empties', asy
   expect(w.prefs.get().theme).toBe('light');
 });
 
+it('a promoted leader\'s own theme write replaces a queued row the leader\'s handler refused', async () => {
+  const w = await wire();
+  await w.prefs.patch({ theme: 'dark' });
+  w.svc.setRunners({
+    ui: jest.fn(),
+    core: async () => {
+      throw new Error('handler refused');
+    },
+    commit: jest.fn(),
+  });
+  await w.svc.promote(2);
+  // The drain left the refused row waiting; the leader's own write supersedes it.
+  expect(rows(w)).toHaveLength(1);
+  await w.prefs.patch({ theme: 'light' });
+  expect(w.prefs.get().theme).toBe('light');
+  expect(rows(w)).toEqual([]);
+  await w.svc.drainOutbound();
+  expect(w.prefs.get().theme).toBe('light');
+  expect(w.db._conn!.prepare(`SELECT value_json FROM user_prefs WHERE key = 'core.theme'`).get()).toEqual({
+    value_json: '"light"',
+  });
+});
+
 it('restoreQueued after a restart shows the queued value again', async () => {
   const w = await wire();
   await w.prefs.patch({ theme: 'dark' });

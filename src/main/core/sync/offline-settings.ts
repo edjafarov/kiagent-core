@@ -9,7 +9,7 @@ import type { SyncService } from './service';
 
 export function installOfflineSettings(
   prefs: CorePrefs,
-  sync: Pick<SyncService, 'forward' | 'enqueue' | 'onQueueChange'>,
+  sync: Pick<SyncService, 'forward' | 'enqueue' | 'onQueueChange' | 'discardQueued'>,
   opts: {
     /** Brings the running connectors in line with the mirrored extension set.
      *  Called after a queued connector switch is discarded: the switch had
@@ -17,7 +17,11 @@ export function installOfflineSettings(
     reconcile?: () => Promise<unknown>;
   } = {},
 ): OfflineHandlers {
-  prefs.setOfflineQueue({ enqueue: (r, o) => sync.enqueue(r, o), nowMs: Date.now });
+  prefs.setOfflineQueue({
+    enqueue: (r, o) => sync.enqueue(r, o),
+    discard: (id) => sync.discardQueued(id),
+    nowMs: Date.now,
+  });
   // No `onNoMaster`: a setting the queue took shows no refusal. A rejection of
   // the queue itself reaches the caller as an ordinary error.
   prefs.setForwardUser(async (user) => {

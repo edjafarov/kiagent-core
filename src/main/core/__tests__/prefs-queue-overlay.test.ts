@@ -44,6 +44,10 @@ function fakeQueue() {
       rows.push({ rowId: id, key: opts.coalesceKey, req });
       return id;
     },
+    discard: async (rowId) => {
+      const i = rows.findIndex((r) => r.rowId === rowId);
+      if (i >= 0) rows.splice(i, 1);
+    },
   };
   return q;
 }
@@ -358,6 +362,68 @@ describe('the offline queue overlay', () => {
     await p.patch({ theme: 'light' });
     expect(p.get().theme).toBe('light');
     expect(store.rows['core.theme']).toBe('light');
+  });
+
+  it('a promoted leader\'s own theme write shows, survives, and the stale queued row is gone', async () => {
+    const { p, queue, store } = await follower({ 'core.theme': 'system' });
+    await p.patch({ theme: 'dark' });
+    expect(queue.rows).toHaveLength(1);
+    store.writable = true; // promoted; the drain has not run yet
+    await p.seedUser();
+    await p.patch({ theme: 'light' });
+    expect(p.get().theme).toBe('light');
+    expect(store.rows['core.theme']).toBe('light');
+    // Nothing stale is left for the drain to deliver over it.
+    expect(queue.rows).toEqual([]);
+    p.onQueueChange({ kind: 'delivered', rowId: 1, coalesceKey: 'core.theme' });
+    expect(p.get().theme).toBe('light');
+  });
+
+  it('a promoted leader\'s own extension setting write drops the queued one', async () => {
+    const { p, queue, store } = await follower();
+    await p.setExt('a.b', 1);
+    store.writable = true;
+    await p.seedUser();
+    await p.setExt('a.b', 2);
+    expect(p.getExt('a.b')).toBe(2);
+    expect(queue.rows).toEqual([]);
+  });
+
+  it('a promoted leader\'s own extension switch is not shadowed by the queued one', async () => {
+    const { p, queue, store } = await follower({ 'core.extensions': { z: { enabled: false, ref: 'r' } } });
+    await p.queueExtensionEnabled('z', true);
+    store.writable = true;
+    await p.seedUser();
+    await p.updateCore('core.extensions', (cur) => ({
+      ...(cur as Record<string, object>),
+      z: { enabled: false, ref: 'r' },
+      y: { enabled: true },
+    }));
+    expect((p.getCore('core.extensions') as Record<string, { enabled: boolean }>).z.enabled).toBe(false);
+    expect(queue.rows).toEqual([]);
+  });
+
+  it('a queued switch the leader did not touch keeps waiting for its delivery', async () => {
+    const { p, queue, store } = await follower({ 'core.extensions': {} });
+    await p.queueExtensionEnabled('z', true);
+    store.writable = true;
+    await p.seedUser();
+    await p.updateCore('core.extensions', (cur) => ({ ...(cur as object), y: { enabled: true } }));
+    expect(queue.rows.map((r) => r.key)).toEqual(['core.extensions.z']);
+    expect((p.getCore('core.extensions') as Record<string, { enabled: boolean }>).z.enabled).toBe(true);
+  });
+
+  it('a stuck row does not shadow the table on a leader', async () => {
+    const { p, store } = await follower({ 'core.theme': 'system', 'a.b': 1 });
+    p.restoreQueued([
+      { rowId: 4, key: 'core.theme', value: 'dark', stuck: true },
+      { rowId: 5, key: 'a.b', value: 7, stuck: true },
+    ]);
+    expect(p.get().theme).toBe('dark'); // a follower keeps showing what it asked for
+    store.writable = true;
+    await p.seedUser();
+    expect(p.get().theme).toBe('system');
+    expect(p.getExt('a.b')).toBe(1);
   });
 
   it('restoreQueued keeps a newer entry and takes a newer row', async () => {
