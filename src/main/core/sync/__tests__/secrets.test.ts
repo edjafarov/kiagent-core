@@ -220,5 +220,5 @@ it('v16 adds the stamp columns to a vault that has none, once', async () => {
   migrate(c);
   migrate(c);
   expect(c.prepare(`SELECT epoch, n FROM vault`).get()).toEqual({ epoch: 0, n: 0 });
-  expect(c.prepare(`SELECT value FROM meta WHERE key = 'schemaVersion'`).get()).toEqual({ value: '19' });
+  expect(c.prepare(`SELECT value FROM meta WHERE key = 'schemaVersion'`).get()).toEqual({ value: '20' });
 });
