@@ -1100,6 +1100,11 @@ app
         p.senders,
       ),
       p.readOnly,
+      {
+        ownsAccount: (id) => p.sync.ownsAccount(id),
+        ownerOf: async (id) => (await p.store.account(id))?.ownerDeviceId ?? null,
+        deviceId: () => p.sync.deviceId(),
+      },
     );
     const documentBytes = createDocumentBytes({
       document: (id) => p.readsFor('other').document(id),

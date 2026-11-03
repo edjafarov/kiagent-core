@@ -6,6 +6,7 @@ import type BetterSqlite3 from 'better-sqlite3';
 import type { Handle } from '@shared/contracts';
 
 import type { AppDb } from '../../db/app-db';
+import { isDeviceOwned } from './sources';
 
 export type SyncRole = 'normal' | 'follower';
 
@@ -153,14 +154,67 @@ class HeldHandle {
   }
 }
 
+/** Who may send for a device-owned account. A WhatsApp socket lives on the
+ *  device that paired it, so its send runs there whatever that device's role
+ *  and nowhere else (step 4, decision 5). */
+export interface SendOwnership {
+  /** A joined follower runs this device-owned account (from memory). */
+  ownsAccount(accountId: string): boolean;
+  /** `accounts.owner_device_id` of the account, or null when it has none. */
+  ownerOf(accountId: string): Promise<string | null>;
+  /** This device's id, once it has one. */
+  deviceId(): string | null;
+  /** What to call a device in the refusal; its short id when unknown. */
+  deviceName?(deviceId: string): string;
+}
+
+/** The sentence a send off the owner is refused with. It starts `not sent: `,
+ *  the outbound layer's mark for a failure proven to precede any delivery, and
+ *  names a device, never a login. */
+export const sendFromMessage = (device: string): string =>
+  `not sent: Send from ${device}`;
+
+/** A sender of a device-owned source, gated per account instead of per role. */
+function ownedSender<S extends { send(...a: never[]): Promise<unknown> }>(
+  real: S,
+  readOnly: () => boolean,
+  owner: SendOwnership,
+): S {
+  const gated = Object.create(real) as S;
+  (gated as { send: unknown }).send = async (intent: { accountId: string }, ctx?: unknown) => {
+    const id = intent?.accountId;
+    if (!owner.ownsAccount(id)) {
+      const ownerId = await owner.ownerOf(id);
+      const mine = ownerId === null || ownerId === owner.deviceId();
+      // The leader sends for an account it paired or that has no owner yet;
+      // a follower sends only for what ownsAccount said above.
+      if (!mine || readOnly()) {
+        const name = ownerId ? (owner.deviceName?.(ownerId) ?? ownerId.slice(0, 8)) : 'the device that paired it';
+        throw new Error(sendFromMessage(name));
+      }
+    }
+    return (real.send as (...a: unknown[]) => Promise<unknown>).call(real, intent, ctx);
+  };
+  return gated;
+}
+
 /** A follower sends nothing, whichever path asks: the master owns every effect
  *  outside the device (spec 7.6). Finding no sender is what callers already
- *  handle for an account that can't send. Asked per call (step 2). */
+ *  handle for an account that can't send. Asked per call (step 2). A
+ *  device-owned source is the exception (step 4): its sender is always found
+ *  and refuses per account, because the owner sends at any role. */
 export function followerLookup<T extends { get(id: string): unknown }>(
   lookup: T,
   readOnly: () => boolean,
+  owner?: SendOwnership,
 ): T {
   const gated = Object.create(lookup) as T;
-  gated.get = ((id: string) => (readOnly() ? undefined : lookup.get(id))) as T['get'];
+  gated.get = ((id: string) => {
+    const real = lookup.get(id);
+    if (owner && real && isDeviceOwned(id)) {
+      return ownedSender(real as never, readOnly, owner);
+    }
+    return readOnly() ? undefined : real;
+  }) as T['get'];
   return gated;
 }

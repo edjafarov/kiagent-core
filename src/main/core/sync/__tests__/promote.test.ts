@@ -267,6 +267,18 @@ describe('what promotion starts', () => {
     expect(runs.map((a) => a.id).sort()).toEqual(['f2', 'g1']);
   });
 
+  it("the master never runs another device's whatsapp, and runs its own", async () => {
+    const runs: Account[] = [];
+    const accounts = [
+      account({ id: 'w1', source: 'whatsapp', ownerDeviceId: 'phone-owner' }),
+      account({ id: 'w2', source: 'whatsapp', ownerDeviceId: 'me-device' }),
+    ];
+    await resumeAccounts(platform(accounts, runs), {
+      skip: (a) => notMineToRun(a, 'me-device'),
+    });
+    expect(runs.map((a) => a.id)).toEqual(['w2']);
+  });
+
   it('promoteCore resumes, sweeps, re-keys and attaches the held workers, in that order', async () => {
     const order: string[] = [];
     const p = {

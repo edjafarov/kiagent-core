@@ -207,6 +207,90 @@ describe('side effects', () => {
   });
 });
 
+describe('a device-owned sender (step 4)', () => {
+  const SECRET = 'PLANTED-WA-KEYS';
+  const sent: string[] = [];
+  const real = {
+    get: (id: string) =>
+      id === 'whatsapp' || id === 'gmail'
+        ? { send: async (i: { accountId: string }) => (sent.push(`${id}:${i.accountId}`), { externalMessageId: 'm' }) }
+        : undefined,
+    ids: () => ['whatsapp', 'gmail'],
+  };
+  const owner = (over: Record<string, unknown> = {}) => ({
+    ownsAccount: (id: string) => id === 'mine',
+    ownerOf: async (id: string) => (id === 'mine' || id === 'led' ? 'dev-me' : id === 'free' ? null : 'dev-other-1234'),
+    deviceId: () => 'dev-me',
+    deviceName: (d: string) => (d === 'dev-other-1234' ? 'Anna\'s MacBook' : d),
+    ...over,
+  });
+  const send = (l: { get(id: string): unknown }, source: string, accountId: string) =>
+    (l.get(source) as { send(i: unknown): Promise<unknown> } | undefined)?.send({ accountId, secret: SECRET });
+  beforeEach(() => {
+    sent.length = 0;
+  });
+
+  it('owner sends as a follower; the sender is found although the device is read-only', async () => {
+    const l = followerLookup(real, () => true, owner());
+    await expect(send(l, 'whatsapp', 'mine')).resolves.toEqual({ externalMessageId: 'm' });
+    expect(sent).toEqual(['whatsapp:mine']);
+  });
+
+  it('the leader sends for an account it paired, or one with no owner yet', async () => {
+    const l = followerLookup(real, () => false, owner());
+    await send(l, 'whatsapp', 'led');
+    await send(l, 'whatsapp', 'free');
+    expect(sent).toEqual(['whatsapp:led', 'whatsapp:free']);
+  });
+
+  it('the master never sends for another device\'s whatsapp', async () => {
+    const l = followerLookup(real, () => false, owner());
+    await expect(send(l, 'whatsapp', 'theirs')).rejects.toThrow("Send from Anna's MacBook");
+    expect(sent).toEqual([]);
+  });
+
+  it('send off the owner is refused with the device name, as a pre-delivery failure', async () => {
+    const l = followerLookup(real, () => true, owner());
+    await expect(send(l, 'whatsapp', 'theirs')).rejects.toThrow(/^not sent: Send from Anna's MacBook$/);
+    expect(sent).toEqual([]);
+  });
+
+  it('a follower never sends for an account it merely holds a row of, even one with no owner', async () => {
+    const l = followerLookup(real, () => true, owner());
+    await expect(send(l, 'whatsapp', 'free')).rejects.toThrow('Send from');
+    await expect(send(l, 'whatsapp', 'led')).rejects.toThrow('Send from');
+    expect(sent).toEqual([]);
+  });
+
+  it('a row whose owner is gone runs nowhere: the refusal is all it gets', async () => {
+    const l = followerLookup(real, () => false, owner({ ownerOf: async () => 'gone-device-0001' }));
+    await expect(send(l, 'whatsapp', 'orphan')).rejects.toThrow('Send from gone-dev'.slice(0, 14));
+    expect(sent).toEqual([]);
+  });
+
+  it('moveable accounts keep the role gate', async () => {
+    expect(send(followerLookup(real, () => true, owner()), 'gmail', 'x')).toBeUndefined();
+    await send(followerLookup(real, () => false, owner()), 'gmail', 'x');
+    expect(sent).toEqual(['gmail:x']);
+  });
+
+  it('refusal text holds no credential', async () => {
+    const l = followerLookup(real, () => true, owner());
+    const err = await send(l, 'whatsapp', 'theirs')!.catch((e: Error) => e);
+    expect(String((err as Error).message)).not.toContain(SECRET);
+    expect(String((err as Error).stack)).not.toContain(SECRET);
+  });
+
+  it('whatsapp runs on its owner as a follower, and the master never starts another device\'s', () => {
+    const run = jest.fn(() => ({ status: 'running' }));
+    const e = { run, attach: jest.fn(), rerunDeferred: jest.fn() };
+    gateEngine(e, () => true, { ownsAccount: (id) => id === 'mine', ownsSource: () => true });
+    (e.run as unknown as (a: { id: string }) => unknown)({ id: 'mine' });
+    (e.run as unknown as (a: { id: string }) => unknown)({ id: 'theirs' });
+    expect(run).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe('gateEngine with device-owned accounts (step 3)', () => {
   const owned = {
     ownsAccount: (id: string) => id === 'mine',
