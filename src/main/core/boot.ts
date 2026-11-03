@@ -445,7 +445,14 @@ export async function bootCore(deps: BootDeps): Promise<CorePlatform> {
     initialReadOnly: readOnlyAtBoot,
     // A tracking master may have been replaced while it was off.
     fencedAtBoot: gateAtBoot.tracking && !readOnlyAtBoot,
-    onPromoted: () => platform.promote(),
+    // Fence cleared or promoted: the device can write user_prefs now, so a
+    // seed that had to wait runs.
+    onPromoted: async () => {
+      await prefs.seedUser().catch((err) =>
+        sink.log('sync', 'warn', `could not seed user preferences: ${String(err)}`),
+      );
+      await platform.promote();
+    },
     sources,
     log: (level, msg) => sink.log('sync', level, msg),
   });

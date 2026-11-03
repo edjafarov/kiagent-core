@@ -172,6 +172,9 @@ export interface CorePrefs extends Prefs {
   attachUser(store: UserPrefsStore): Promise<void>;
   /** Reload the mirror (after `sync.applied` touched `user_prefs`). */
   refreshUser(): Promise<void>;
+  /** Seed from the file if that has not happened and this device can write
+   *  now (called when a fence clears or the device is promoted). */
+  seedUser(): Promise<void>;
   /** Where a user-key write goes when `canWrite()` is false. It receives only
    *  the user part and rejects when the leader can't take it; the device part
    *  has already been applied by then. */
@@ -214,8 +217,11 @@ export function createPrefs(dir: string, user?: UserPrefsStore): CorePrefs {
   const emit = (): void => {
     for (const cb of listeners) cb(current);
   };
+  // The file keeps its user keys until a seed has succeeded on this device:
+  // dropping them earlier would turn the user's settings into defaults.
+  let seeded = false;
   const writeFile = (): void => {
-    if (!store) {
+    if (!store || !seeded) {
       fs.writeFileSync(file, JSON.stringify(fromFile, null, 2));
       return;
     }
@@ -224,89 +230,117 @@ export function createPrefs(dir: string, user?: UserPrefsStore): CorePrefs {
     fs.writeFileSync(file, JSON.stringify(device, null, 2));
   };
 
-  const attachUser = async (s: UserPrefsStore): Promise<void> => {
-    const loaded = await s.all();
-    if (s.canWrite()) {
-      for (const k of USER_PREF_KEYS) {
-        const t = tableKey(k);
-        if (t in loaded || sameJson(fromFile[k], DEFAULT_PREFS[k])) continue;
-        await s.set(t, fromFile[k]);
-        loaded[t] = fromFile[k];
-      }
+  // Every read-merge-write of the user part runs one at a time, so a patch
+  // always starts from the latest mirror.
+  let chain: Promise<unknown> = Promise.resolve();
+  const serial = <T>(fn: () => Promise<T>): Promise<T> => {
+    const r = chain.then(fn);
+    chain = r.catch(() => undefined);
+    return r;
+  };
+
+  /** Move the file's user keys into the table, once, when this device can
+   *  write it. Idempotent; runs inside the critical section. */
+  const seedLocked = async (): Promise<void> => {
+    const s = store;
+    if (!s || seeded || !s.canWrite()) return;
+    for (const k of USER_PREF_KEYS) {
+      const t = tableKey(k);
+      if (t in mirror || sameJson(fromFile[k], DEFAULT_PREFS[k])) continue;
+      await s.set(t, fromFile[k]);
+      mirror[t] = fromFile[k];
     }
-    store = s;
-    mirror = loaded;
+    seeded = true;
     const before = current;
     recompute();
-    // The file only ever seeds a device that can write; elsewhere it is left
-    // as it was, and the table (or its default) wins.
-    if (s.canWrite()) writeFile();
+    writeFile();
     if (!sameJson(before, current)) emit();
   };
+
+  const attachUser = (s: UserPrefsStore): Promise<void> =>
+    serial(async () => {
+      const loaded = await s.all();
+      store = s;
+      mirror = loaded;
+      const before = current;
+      recompute();
+      await seedLocked();
+      if (!sameJson(before, current)) emit();
+    });
 
   const prefs: CorePrefs = {
     ready: Promise.resolve(),
     get: () => current,
-    async patch(p) {
-      const next = sanitize({
-        ...current,
-        ...p,
-        processing: { ...current.processing, ...(p.processing ?? {}) },
-        models: { ...current.models, ...(p.models ?? {}) },
-        outbound: { ...current.outbound, ...(p.outbound ?? {}) },
-        calendar: { ...current.calendar, ...(p.calendar ?? {}) },
-        onboarding: { ...current.onboarding, ...(p.onboarding ?? {}) },
-        features: { ...current.features, ...(p.features ?? {}) },
-      });
-      if (!store) {
-        fromFile = next;
-        current = next;
-        writeFile();
-        emit();
-        return;
-      }
-      const { user: userPart, device } = splitPatch(p);
-      const touched = (Object.keys(userPart) as UserPrefKey[]).filter((k) =>
-        USER_KEY_SET.has(k),
-      );
-      // Device part first: it is applied whatever happens to the user part.
-      if (Object.keys(device).length > 0) {
-        const merged: Record<string, unknown> = { ...fromFile };
-        for (const k of Object.keys(device)) merged[k] = (next as unknown as Record<string, unknown>)[k];
-        fromFile = sanitize(merged);
-        writeFile();
-        recompute();
-        emit();
-      }
-      if (touched.length === 0) return;
-      if (store.canWrite()) {
-        for (const k of touched) {
-          await store.set(tableKey(k), next[k]);
-          mirror[tableKey(k)] = next[k];
+    patch: (p) =>
+      serial(async () => {
+        const next = sanitize({
+          ...current,
+          ...p,
+          processing: { ...current.processing, ...(p.processing ?? {}) },
+          models: { ...current.models, ...(p.models ?? {}) },
+          outbound: { ...current.outbound, ...(p.outbound ?? {}) },
+          calendar: { ...current.calendar, ...(p.calendar ?? {}) },
+          onboarding: { ...current.onboarding, ...(p.onboarding ?? {}) },
+          features: { ...current.features, ...(p.features ?? {}) },
+        });
+        if (!store) {
+          fromFile = next;
+          current = next;
+          writeFile();
+          emit();
+          return;
         }
-        recompute();
-        emit();
-      } else if (forwardUser) {
-        // The leader writes it and it comes back by the feed.
-        await forwardUser(userPart);
-      } else {
-        throw new Error('this device is a read-only copy: it cannot change this setting');
-      }
-    },
+        const { user: userPart, device } = splitPatch(p);
+        const touched = (Object.keys(userPart) as UserPrefKey[]).filter((k) =>
+          USER_KEY_SET.has(k),
+        );
+        // Device part first: it is applied whatever happens to the user part.
+        if (Object.keys(device).length > 0) {
+          const merged: Record<string, unknown> = { ...fromFile };
+          for (const k of Object.keys(device)) merged[k] = (next as unknown as Record<string, unknown>)[k];
+          fromFile = sanitize(merged);
+          writeFile();
+          recompute();
+          emit();
+        }
+        if (touched.length === 0) return;
+        await seedLocked();
+        if (store.canWrite()) {
+          for (const k of touched) {
+            await store.set(tableKey(k), next[k]);
+            mirror[tableKey(k)] = next[k];
+          }
+          recompute();
+          emit();
+        } else if (forwardUser) {
+          // The leader writes it and it comes back by the feed; until then the
+          // local mirror shows the change (the feed's value overwrites it).
+          await forwardUser(userPart);
+          for (const k of touched) mirror[tableKey(k)] = next[k];
+          recompute();
+          emit();
+        } else {
+          throw new Error('this device is a read-only copy: it cannot change this setting');
+        }
+      }),
     onChange(cb) {
       listeners.add(cb);
       return () => listeners.delete(cb);
     },
     attachUser,
-    async refreshUser() {
-      if (!store) return;
-      const loaded = await store.all();
-      if (sameJson(loaded, mirror)) return;
-      mirror = loaded;
-      const before = current;
-      recompute();
-      if (!sameJson(before, current)) emit();
-    },
+    refreshUser: () =>
+      serial(async () => {
+        if (!store) return;
+        const loaded = await store.all();
+        if (!sameJson(loaded, mirror)) {
+          mirror = loaded;
+          const before = current;
+          recompute();
+          if (!sameJson(before, current)) emit();
+        }
+        await seedLocked();
+      }),
+    seedUser: () => serial(seedLocked),
     setForwardUser(fn) {
       forwardUser = fn;
     },

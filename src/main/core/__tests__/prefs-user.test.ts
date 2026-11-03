@@ -135,7 +135,7 @@ describe('user prefs', () => {
     expect(calls).toEqual([{ theme: 'dark' }]);
     expect(store.sets).toEqual([]);
     expect(p.get().launchAtLogin).toBe(false);
-    expect(p.get().theme).toBe('system'); // changes only when the feed brings it back
+    expect(p.get().theme).toBe('dark'); // optimistic; the feed overwrites it
   });
 
   it('a refused forward rejects but keeps the device part', async () => {
@@ -159,5 +159,63 @@ describe('user prefs', () => {
     p.setForwardUser(fwd);
     await p.patch({ launchAtLogin: false });
     expect(fwd).not.toHaveBeenCalled();
+  });
+  it('P1: a device fenced at attach seeds once it can write, and a device-only patch before that keeps the file keys', async () => {
+    writeFile({ launchAtLogin: true, outbound: { defaultMode: 'chat' } });
+    const store = fakeStore({}, false);
+    const p = createPrefs(dir, store);
+    await p.ready;
+    await p.patch({ launchAtLogin: false });
+    expect(fileJson().outbound).toEqual({ defaultMode: 'chat' });
+    store.writable = true;
+    await p.seedUser();
+    expect(store.rows['core.outbound']).toEqual({ defaultMode: 'chat' });
+    expect(p.get().outbound.defaultMode).toBe('chat');
+    expect(fileJson()).not.toHaveProperty('outbound');
+    expect(fileJson().launchAtLogin).toBe(false);
+  });
+
+  it('P1: refreshUser and a user write also seed once the device became writable', async () => {
+    writeFile({ outbound: { defaultMode: 'chat' }, theme: 'dark' });
+    const store = fakeStore({}, false);
+    const p = createPrefs(dir, store);
+    await p.ready;
+    store.writable = true;
+    await p.refreshUser();
+    expect(store.rows['core.theme']).toBe('dark');
+    expect(store.rows['core.outbound']).toEqual({ defaultMode: 'chat' });
+    expect(fileJson()).not.toHaveProperty('theme');
+  });
+
+  it('P2: concurrent patches to one user key both land', async () => {
+    const store = fakeStore();
+    const realSet = store.set;
+    store.set = async (k, v) => {
+      await new Promise((r) => setTimeout(r, 5));
+      return realSet(k, v);
+    };
+    const p = createPrefs(dir, store);
+    await p.ready;
+    await Promise.all([
+      p.patch({ features: { a: true } }),
+      p.patch({ features: { b: true } }),
+    ]);
+    expect(p.get().features).toEqual({ a: true, b: true });
+    expect(store.rows['core.features']).toEqual({ a: true, b: true });
+  });
+
+  it('P3: a follower sees its forwarded change at once and fires onChange', async () => {
+    const store = fakeStore({}, false);
+    const p = createPrefs(dir, store);
+    await p.ready;
+    p.setForwardUser(async () => {});
+    const seen: string[] = [];
+    p.onChange((v) => seen.push(v.theme));
+    await p.patch({ theme: 'dark' });
+    expect(p.get().theme).toBe('dark');
+    expect(seen).toEqual(['dark']);
+    store.rows['core.theme'] = 'light';
+    await p.refreshUser();
+    expect(p.get().theme).toBe('light');
   });
 });
