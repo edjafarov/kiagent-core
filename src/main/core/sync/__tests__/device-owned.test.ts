@@ -202,7 +202,7 @@ describe('an owned commit and its queue row are one transaction', () => {
     );
     await expect(
       d.store.commit({ account: 'own' as never, documents: [doc('a')], cursor: { n: 1 } }),
-    ).rejects.toThrow();
+    ).rejects.toMatchObject({ message: expect.stringContaining('queue full') });
     expect(d.conn().prepare(`SELECT count(*) n FROM documents WHERE account_id = 'own'`).get()).toEqual({ n: 0 });
   });
 
@@ -213,7 +213,9 @@ describe('an owned commit and its queue row are one transaction', () => {
     d.conn().exec(
       `CREATE TRIGGER refuse_queue BEFORE INSERT ON sync_outbound BEGIN SELECT RAISE(ABORT, 'queue full'); END`,
     );
-    await expect(d.store.commit({ removeAccount: 'own' as never })).rejects.toThrow();
+    await expect(d.store.commit({ removeAccount: 'own' as never })).rejects.toMatchObject({
+      message: expect.stringContaining('queue full'),
+    });
     expect(d.conn().prepare(`SELECT count(*) n FROM accounts WHERE id = 'own'`).get()).toEqual({ n: 1 });
   });
 
