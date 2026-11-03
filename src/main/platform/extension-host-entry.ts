@@ -134,6 +134,7 @@ export const NS_METHODS: Record<string, string[]> = {
     'setDeviceNames',
     'beginJoin',
     'exportSources',
+    'hasMoveableLogins',
     'exportSettings',
     'importSettings',
     'finishJoin',

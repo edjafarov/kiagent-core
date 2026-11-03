@@ -89,6 +89,8 @@ export interface SyncStatus {
   joined: boolean;
   /** Documents that are not archived: the heartbeat's `doc_count`. */
   documents: number;
+  /** Accounts other than the synthetic worker, device-owned ones included. */
+  accounts: number;
   /** The last boot swap's result, until finishJoin or leaveJoin clears it. */
   lastSwap: 'swapped' | 'abandoned' | null;
   /** Size of the old database a join set aside, 0 when none. */
@@ -205,6 +207,9 @@ export interface SyncService {
   /** What to offer `toDevice`. Records the moveable accounts in `sync_moved`
    *  first, so a crash after the offer can't lose track of a login. */
   exportSources(toDevice: string): Promise<OfferedSource[]>;
+  /** Does this device hold a login it could move? A vault row on a moveable
+   *  account, or a connector hook that can mint one. Reads only. */
+  hasMoveableLogins(): Promise<boolean>;
   /** After the swap: the moved logins are deleted by their original ids, the
    *  device counts as joined for good, and its own device-owned accounts run
    *  again as their owner. Safe to repeat. */
@@ -603,6 +608,22 @@ export function createSyncService(deps: SyncServiceDeps): SyncService {
     beginJoin: async () => {
       await deps.db.run(`UPDATE sync_state SET joining = 1`);
       await refreshGate();
+    },
+    hasMoveableLogins: async () => {
+      const owned = DEVICE_OWNED_SOURCES.map(() => '?').join(', ');
+      const rows = (await deps.db.all(
+        `SELECT a.source AS source,
+                EXISTS(SELECT 1 FROM vault v WHERE v.account_id = a.id AND length(v.blob) > 0) AS has
+           FROM accounts a
+          WHERE a.source <> 'worker' AND a.source NOT IN (${owned})`,
+        [...DEVICE_OWNED_SOURCES],
+      )) as { source: string; has: number }[];
+      return rows.some(
+        (r) =>
+          r.has === 1 ||
+          !!deps.sources?.get(r.source)?.prepareExport ||
+          deps.sources?.advertisesPrepareExport?.(r.source) === true,
+      );
     },
     exportSources: async (toDevice) => {
       const list = await exportSources(deps.store, me(), log, deps.sources);

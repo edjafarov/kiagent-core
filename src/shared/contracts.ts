@@ -1647,6 +1647,8 @@ export interface SyncStatusWire {
   joining: boolean;
   joined: boolean;
   documents: number;
+  /** Accounts other than the synthetic worker, device-owned ones included. */
+  accounts: number;
   lastSwap: 'swapped' | 'abandoned' | null;
   /** Size of the old database a join set aside, 0 when none. */
   archiveBytes: number;
@@ -2001,6 +2003,8 @@ export interface CapSurfaces {
       setDeviceNames(list: { deviceId: string; label: string }[]): Promise<void>;
       beginJoin(): Promise<void>;
       exportSources(toDevice: string): Promise<OfferedSourceWire[]>;
+      /** Does this device hold a login it could move? Reads only; moves nothing. */
+      hasMoveableLogins(): Promise<boolean>;
       /** The joiner's user settings and connectors, for the offer (spec 7.9). */
       exportSettings(): Promise<OfferedSettingsWire>;
       /** The master adds what it lacks; a repeated `offerId` changes nothing. */

@@ -65,6 +65,7 @@ describe('through a real forked extension host', () => {
         setDeviceId: note('setDeviceId', undefined),
         beginJoin: note('beginJoin', undefined),
         exportSources: note('exportSources', [{ source: 'gmail' }]),
+        hasMoveableLogins: note('hasMoveableLogins', true),
         exportSettings: note('exportSettings', { prefs: { 'a.b': 1 }, extensions: {} }),
         importSettings: note('importSettings', { prefs: ['a.b'], extensions: [] }),
         finishJoin: note('finishJoin', undefined),
@@ -137,6 +138,7 @@ describe('through a real forked extension host', () => {
       importSettings: { prefs: ['a.b'], extensions: [] },
       importSources: { created: ['a'], existing: [], needsConnector: [] },
       canAcceptSources: true,
+      hasMoveableLogins: true,
       exportSecrets: [{ accountId: 'a', epoch: 1, n: 3, value: null }],
       importSecrets: { applied: 1 },
       readOnly: true,
@@ -156,7 +158,7 @@ describe('through a real forked extension host', () => {
     expect(Object.keys(seen).sort()).toEqual(
       [
         'applyDelta', 'beginJoin', 'buildDelta', 'buildSnapshot', 'canAcceptSources', 'demote',
-        'disableTracking', 'discardQueued', 'enableTracking', 'exportSecrets', 'exportSettings', 'exportSources', 'finishJoin', 'forgetMoved', 'importSecrets',
+        'disableTracking', 'discardQueued', 'enableTracking', 'exportSecrets', 'exportSettings', 'exportSources', 'finishJoin', 'forgetMoved', 'hasMoveableLogins', 'importSecrets',
         'importSettings', 'importSources', 'isBusy', 'leaveJoin', 'prepareRestore', 'prepareSwap', 'promote', 'queuedSettings', 'readOnly', 'setDeviceId',
         'setFenced', 'status',
       ],

@@ -286,6 +286,73 @@ describe('status', () => {
 });
 
 
+describe('hasMoveableLogins', () => {
+  let hooks: Set<string>;
+  let prepared: number;
+  let sync: SyncService;
+  beforeEach(() => {
+    hooks = new Set();
+    prepared = 0;
+    sync = createSyncService({
+      db,
+      store,
+      dbPath: conn().name,
+      workerFile: '',
+      deviceId: () => ME,
+      sources: {
+        get: (id: string) =>
+          hooks.has(id)
+            ? {
+                prepareExport: async () => {
+                  prepared += 1;
+                },
+              }
+            : undefined,
+        advertisesPrepareExport: (id: string) => hooks.has(id),
+      } as never,
+    });
+  });
+
+  it('is false with no accounts, with only device-owned accounts, and with accounts that have no vault row and no hook', async () => {
+    expect(await sync.hasMoveableLogins()).toBe(false);
+    await add('local-folder', '/p', { t: 1 });
+    await add('whatsapp', 'w', { t: 1 });
+    await add('gmail', 'nologin@x.com');
+    expect(await sync.hasMoveableLogins()).toBe(false);
+  });
+
+  it('is true for a vault row not in DEVICE_OWNED_SOURCES', async () => {
+    await add('gmail', 'a@x.com', { t: 1 });
+    expect(await sync.hasMoveableLogins()).toBe(true);
+  });
+
+  it('is true for an account without a vault row whose source advertises prepareExport', async () => {
+    await add('telegram', '42');
+    expect(await sync.hasMoveableLogins()).toBe(false);
+    hooks.add('telegram');
+    expect(await sync.hasMoveableLogins()).toBe(true);
+  });
+
+  it('does not call prepareExport, write sync_moved or open the vault blob', async () => {
+    await add('gmail', 'a@x.com', { t: 1 });
+    await add('telegram', '42');
+    hooks.add('telegram');
+    const loads = jest.spyOn(store.vault, 'load');
+    expect(await sync.hasMoveableLogins()).toBe(true);
+    expect(prepared).toBe(0);
+    expect(loads).not.toHaveBeenCalled();
+    expect((conn().prepare(`SELECT count(*) n FROM sync_moved`).get() as { n: number }).n).toBe(0);
+  });
+
+  it('status.accounts counts non-worker accounts, device-owned ones included, and ignores worker', async () => {
+    expect(readSyncStatus(conn()).accounts).toBe(0);
+    await add('gmail', 'a@x.com');
+    await add('local-folder', '/p');
+    await add('worker', 'w');
+    expect(readSyncStatus(conn()).accounts).toBe(2);
+  });
+});
+
 // ── Task 2: import ─────────────────────────────────────────────────────────
 describe('importSources', () => {
   const JOINER = 'abcdefgh-0000-1111';

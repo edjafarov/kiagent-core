@@ -15,6 +15,7 @@ module.exports = {
       setDeviceId: await host.sync.setDeviceId('dev'),
       beginJoin: await host.sync.beginJoin(),
       exportSources: await host.sync.exportSources('seed'),
+      hasMoveableLogins: await host.sync.hasMoveableLogins(),
       exportSettings: await host.sync.exportSettings(),
       importSettings: await host.sync.importSettings('offer', { prefs: { 'a.b': 1 }, extensions: {} }),
       finishJoin: await host.sync.finishJoin(),
