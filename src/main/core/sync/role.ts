@@ -86,7 +86,13 @@ export function gateEngine(
   readOnly: () => boolean,
   /** Device-owned accounts run on their owner whatever its role (step 3):
    *  asked per call, so a promotion or a new folder changes nothing here. */
-  owned: { ownsAccount(id: string): boolean; ownsSource(source: string): boolean } = {
+  owned: {
+    ownsAccount(id: string): boolean;
+    ownsSource(source: string): boolean;
+    /** Re-reads who owns what; called after a verb that may have created or
+     *  removed an owned account. */
+    loadOwned?(): Promise<void>;
+  } = {
     ownsAccount: () => false,
     ownsSource: () => false,
   },
@@ -116,7 +122,9 @@ export function gateEngine(
             : typeof a[0] === 'string' && owned.ownsAccount(a[0]);
         if (!mine) throw new SyncReadOnly(m);
       }
-      return real[m].apply(engine, a);
+      const result = await real[m].apply(engine, a);
+      if (readOnly()) await owned.loadOwned?.();
+      return result;
     };
   }
   return {

@@ -10,7 +10,7 @@ import type { CommitBatch } from '@shared/contracts';
 import { openDb, type AppDb } from '../../../db/app-db';
 import { migrate } from '../../store/schema';
 import { openStore, type CoreStore } from '../../store/store';
-import { SyncReadOnly } from '../role';
+import { gateEngine, SyncReadOnly } from '../role';
 import { createSyncService, type ForwardRequest, type SyncService } from '../service';
 import { runCommitBatch, splitBatch } from '../owned';
 
@@ -374,5 +374,134 @@ describe('splitBatch', () => {
     expect(splitBatch(small, 16 * 1024 * 1024)).toEqual([small]);
     const rm = { removeAccount: 'own' } as unknown as CommitBatch;
     expect(splitBatch(rm, 10)).toEqual([rm]);
+  });
+});
+
+describe('one ownership predicate, read per call', () => {
+  const engineOver = (d: Dev, connect: (x: unknown) => Promise<unknown>) => {
+    const e = {
+      run: jest.fn(() => 'real'),
+      attach: jest.fn(() => 'real'),
+      rerunDeferred: jest.fn(async () => undefined),
+      connect: jest.fn(connect),
+      reconnect: jest.fn(),
+      applyScope: jest.fn(),
+      remove: jest.fn(),
+      pause: jest.fn(),
+      resume: jest.fn(),
+      updateConfig: jest.fn(),
+      setOption: jest.fn(),
+    };
+    gateEngine(e as never, () => d.svc.readOnly(), d.svc);
+    return e;
+  };
+
+  it('a folder connected on a follower actually runs', async () => {
+    const d = await device({ follower: true });
+    await d.svc.setDeviceId(DEVICE);
+    await d.svc.loadOwned();
+    const e = engineOver(d, () => d.store.createAccount({ source: 'local-folder', identifier: 'this-machine' }));
+    const account = (await e.connect({ descriptor: { id: 'local-folder' } })) as { id: string };
+    expect((e.run as unknown as (a: { id: string }) => unknown)({ id: account.id })).toBe('real');
+  });
+
+  it.each([
+    ['a joined follower', { follower: true, joined: true, joining: false }, true],
+    ['a follower that never joined', { follower: true, joined: false, joining: false }, false],
+    ['a follower that is joining', { follower: true, joined: true, joining: true }, false],
+  ])('the engine and the writer guard agree for %s', async (_n, st, mayRun) => {
+    const d = await device({ follower: st.follower, joined: st.joined });
+    await d.svc.setDeviceId(DEVICE);
+    addAccount(d, 'own', 'local-folder', `this-machine#${SUFFIX}`, DEVICE);
+    if (st.joining) await d.svc.beginJoin();
+    await d.svc.loadOwned();
+    let wrote = true;
+    try {
+      await d.store.commit({ account: 'own' as never, documents: [doc('a')], cursor: null });
+    } catch {
+      wrote = false;
+    }
+    expect(wrote).toBe(mayRun);
+    expect(d.svc.ownsAccount('own')).toBe(mayRun);
+  });
+});
+
+describe('owner deletions converge on the leader', () => {
+  const ref = (externalId: string) => ({ externalId, type: 'file' });
+  const seqNow = (d: Dev) =>
+    (d.conn().prepare(`SELECT max(seq) s FROM documents`).get() as { s: number }).s;
+  const deliverAll = async (from: Dev, to: Dev) => {
+    to.svc.setRunners({
+      ui: jest.fn(),
+      core: jest.fn(),
+      commit: (p) => runCommitBatch(to, p as never),
+    });
+    const sentTo = to;
+    from.svc.setForwarder(async (r) => {
+      try {
+        return { ok: true, value: await (sentTo.svc.runForwarded(r) as Promise<{ ok: true; value: unknown }>).then((x) => x.value) };
+      } catch (e) {
+        return { ok: false, code: 'handler', message: String(e) };
+      }
+    });
+    return from.svc.drainOutbound();
+  };
+
+  it('a file deleted and a root removed on the owner disappear from the master', async () => {
+    const owner = await device({ follower: true });
+    await owner.svc.setDeviceId(DEVICE);
+    const identifier = `this-machine#${SUFFIX}`;
+    addAccount(owner, 'own', 'local-folder', identifier, DEVICE);
+    owner.conn().prepare(`UPDATE accounts SET config = ? WHERE id = 'own'`).run(JSON.stringify({ folderRoots: ['/x', '/y'] }));
+    const docs = [
+      { ...doc('x1'), scopeRootId: '/x' },
+      { ...doc('x2'), scopeRootId: '/x' },
+      { ...doc('y1'), scopeRootId: '/y' },
+    ];
+    await owner.store.commit({ account: 'own' as never, documents: docs, cursor: { n: 1 } });
+
+    const leader = await device();
+    await expect(deliverAll(owner, leader)).resolves.toEqual({ sent: 1, waiting: 0 });
+    const live = (d: Dev) =>
+      (d.conn().prepare(`SELECT external_id e FROM documents WHERE archived_at IS NULL ORDER BY 1`).all() as { e: string }[]).map((r) => r.e);
+    expect(live(leader)).toEqual(['x1', 'x2', 'y1']);
+
+    // x2 is deleted from disk: a reconcile pass archives it.
+    const start = seqNow(owner);
+    await owner.store.reconcileBegin('own' as never);
+    await owner.store.reconcileStage('own' as never, [ref('x1'), ref('y1')] as never);
+    await owner.store.reconcileArchiveChunk('own' as never, start as never);
+    expect(live(owner)).toEqual(['x1', 'y1']);
+    // Then the root /y is removed from the folder's scope.
+    const expectedConfigJson = (owner.conn().prepare(`SELECT config c FROM accounts WHERE id='own'`).get() as { c: string }).c;
+    await owner.store.applyFolderScope({
+      accountId: 'own' as never,
+      config: { folderRoots: ['/x'] },
+      cursor: { n: 2 },
+      archiveScopeRootIds: ['/y'],
+      reattributeScopeRoots: [],
+      archiveRefs: [],
+      expectedConfigJson,
+    } as never);
+    expect(live(owner)).toEqual(['x1']);
+    expect(owner.conn().prepare(`SELECT count(*) n FROM sync_outbound`).get()).toEqual({ n: 2 });
+
+    await expect(deliverAll(owner, leader)).resolves.toEqual({ sent: 2, waiting: 0 });
+    expect(live(leader)).toEqual(['x1']);
+    const cfg = leader.conn().prepare(`SELECT config c FROM accounts WHERE source='local-folder'`).get() as { c: string };
+    expect(JSON.parse(cfg.c).folderRoots).toEqual(['/x']);
+  });
+
+  it('nothing is queued when a pass archives nothing', async () => {
+    const d = await device({ follower: true });
+    await d.svc.setDeviceId(DEVICE);
+    addAccount(d, 'own', 'local-folder', `this-machine#${SUFFIX}`, DEVICE);
+    await d.store.commit({ account: 'own' as never, documents: [doc('a')], cursor: null });
+    const start = seqNow(d);
+    await d.store.reconcileBegin('own' as never);
+    await d.store.reconcileStage('own' as never, [ref('a')] as never);
+    await d.store.reconcileArchiveChunk('own' as never, start as never);
+    // Only the commit's own row.
+    expect(d.conn().prepare(`SELECT count(*) n FROM sync_outbound`).get()).toEqual({ n: 1 });
   });
 });

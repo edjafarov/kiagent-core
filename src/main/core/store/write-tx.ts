@@ -16,7 +16,13 @@ import type {
   SyncStatus,
 } from '@shared/contracts';
 import { isPlainObject } from '@shared/source-options';
-import { DEVICE_OWNED_SOURCES, deviceSuffix, isDeviceOwned } from '../sync/sources';
+import {
+  DEVICE_OWNED_SOURCES,
+  OWNER_OPEN_SQL,
+  deviceSuffix,
+  isDeviceOwned,
+  ownedByThisDeviceSql,
+} from '../sync/sources';
 import { splitBatch, type OwnedAccount } from '../sync/owned';
 import { copiedTables, primaryKeyColumns } from '../sync/tables';
 import { NEWER, STAMP_EPOCH, STAMP_N } from '../sync/vault-stamp';
@@ -1312,17 +1318,22 @@ export function createWriteTx(
                   AND lp.type = p.type)))`;
   };
 
+  let archivedRefs: ExternalRef[] | null = null;
   const archiveBatchTx = conn.transaction(
     (accountId: string, startSeq: Seq, limit: number): number => {
       const rows = conn
         .prepare(
-          `SELECT id FROM documents
+          `SELECT id, external_id, type FROM documents
             WHERE ${ELIGIBLE} AND ${unlisted(startSeq)}
             LIMIT ?`,
         )
         .all(accountId, startSeq, limit) as Array<{
         id: string;
+        external_id: string;
+        type: string;
       }>;
+      // An owner's pass tells the leader which documents went (see the guard).
+      for (const r of rows) archivedRefs?.push({ externalId: r.external_id, type: r.type } as ExternalRef);
       const upd = conn.prepare(
         `UPDATE documents SET archived_at = ?, seq = ?, updated_at = ? WHERE id = ?`,
       );
@@ -1896,23 +1907,18 @@ export function createWriteTx(
     ['reconcileEnd', (a) => String(a[0])],
     ['applyFolderScope', (a) => (a[0] as { accountId: string }).accountId],
   ]);
-  const ownedByMe = conn.prepare(
-    `SELECT 1 FROM accounts a, sync_state s
-      WHERE a.id = ? AND s.device_id IS NOT NULL AND a.owner_device_id = s.device_id
-        AND a.source IN (${DEVICE_OWNED_SOURCES.map(() => '?').join(', ')})`,
-  );
+  const ownedByMe = conn.prepare(ownedByThisDeviceSql(true));
   const ownerMayWrite = (name: string, args: unknown[]): boolean => {
     const pick = ownerOf.get(name);
     if (!pick) return false;
-    const gate = readGateSync(conn);
-    if (gate.role !== 'follower' || gate.joining || !gate.joined) return false;
     // A create for a device-owned source on this device is its own account.
     if (name === 'accountWrite') {
       const w = args[0] as { op: string; source?: string };
-      if (w.op === 'create' || w.op === 'getOrCreate') return isDeviceOwned(w.source ?? '');
+      if (w.op === 'create' || w.op === 'getOrCreate')
+        return isDeviceOwned(w.source ?? '') && !!conn.prepare(OWNER_OPEN_SQL).get();
     }
     const id = pick(args);
-    return id !== null && !!ownedByMe.get(id, ...DEVICE_OWNED_SOURCES);
+    return id !== null && !!ownedByMe.get(...DEVICE_OWNED_SOURCES, id);
   };
   const accountRow = conn.prepare(
     `SELECT id, source, identifier, config, cadence, owner_device_id FROM accounts WHERE id = ?`,
@@ -1969,6 +1975,44 @@ export function createWriteTx(
           throw new SyncReadOnly(name);
         // An owner's account batch and its delivery row are one transaction:
         // a crash between them would lose the batch for the leader.
+        if (name === 'reconcileArchiveChunk' || name === 'applyFolderScope') {
+          // Deletions on the owner reach the leader the same way its commits
+          // do: the archive and its delivery row are one transaction.
+          return conn.transaction(() => {
+            const account = ownedAccountOf({ account: ownerOf.get(name)!(args) } as unknown as CommitBatch);
+            archivedRefs = [];
+            let result: unknown;
+            try {
+              result = real(...args);
+              const refs = archivedRefs as ExternalRef[];
+              if (account && name === 'reconcileArchiveChunk' && refs.length > 0) {
+                queueOwned(account, {
+                  account: account.id as AccountId,
+                  documents: [],
+                  deletions: refs,
+                  cursor: undefined,
+                } as unknown as CommitBatch);
+              }
+              if (account && name === 'applyFolderScope' && !(result as { stale?: boolean }).stale) {
+                insertQueued.run(
+                  'core.folderScope',
+                  Buffer.from(
+                    JSON.stringify({
+                      kind: 'commit',
+                      name: 'core.folderScope',
+                      payload: { account, scope: args[0] },
+                    }),
+                    'utf8',
+                  ),
+                  deps.now(),
+                );
+              }
+            } finally {
+              archivedRefs = null;
+            }
+            return result;
+          })();
+        }
         if (name === 'commit') {
           const batch = args[0] as CommitBatch;
           return conn.transaction(() => {

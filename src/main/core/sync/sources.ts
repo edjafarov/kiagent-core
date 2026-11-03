@@ -40,6 +40,23 @@ export const STABLE_IDENTITY_SOURCES: readonly string[] = [
   'instagram',
 ];
 
+/** THE ownership predicate (r16 ruling 4), one text for everyone who asks
+ *  whether this device runs a device-owned account while it is a follower: the
+ *  writer guard (by id, per call) and the sync service (the set, which the
+ *  engine gate reads). It holds only for a joined, non-joining follower; a
+ *  device-owned account on any other device is not "owned" in this sense
+ *  because nothing is gated there. Bind `DEVICE_OWNED_SOURCES` after any id. */
+export const ownedByThisDeviceSql = (byId: boolean): string =>
+  `SELECT a.id FROM accounts a, sync_state s
+    WHERE s.device_id IS NOT NULL AND a.owner_device_id = s.device_id
+      AND s.role = 'follower' AND s.joined = 1 AND s.joining = 0
+      AND a.source IN (${DEVICE_OWNED_SOURCES.map(() => '?').join(', ')})${byId ? ' AND a.id = ?' : ''}`;
+
+/** The gate half of the same predicate, for a device-owned source that has no
+ *  account yet (a connect). */
+export const OWNER_OPEN_SQL = `SELECT 1 FROM sync_state
+  WHERE device_id IS NOT NULL AND role = 'follower' AND joined = 1 AND joining = 0`;
+
 export const isDeviceOwned = (source: string): boolean =>
   DEVICE_OWNED_SOURCES.includes(source);
 

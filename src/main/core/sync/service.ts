@@ -17,6 +17,8 @@ import {
   isDeviceOwned,
   isStableIdentity,
   deviceSuffix,
+  OWNER_OPEN_SQL,
+  ownedByThisDeviceSql,
   PAUSE_MOVED_SQL,
   type ExportSources,
   type OfferedSource,
@@ -220,6 +222,8 @@ export interface SyncServiceDeps {
   /** This device is a follower or joining: it takes no offers. An extra hold
    *  on top of what `sync_state` says; the service tracks that itself. */
   readOnly?: () => boolean;
+  /** Milliseconds, for the delivery queue's backoff. */
+  nowMs?: () => number;
   /** What `sync_state` said at boot (follower or joining). */
   initialReadOnly?: boolean;
   /** After a promotion's transaction: start what only a leader runs. */
@@ -248,15 +252,11 @@ export function createSyncService(deps: SyncServiceDeps): SyncService {
   };
   /** Accounts this device runs whatever its role: device-owned and mine. */
   let ownedIds = new Set<string>();
+  let ownerOpen = false;
   const refreshOwned = async (): Promise<void> => {
-    const me = deviceId ?? deps.deviceId?.() ?? null;
-    if (!me) return;
-    const marks = DEVICE_OWNED_SOURCES.map(() => '?').join(', ');
-    const rows = await deps.db.all(
-      `SELECT id FROM accounts WHERE owner_device_id = ? AND source IN (${marks})`,
-      [me, ...DEVICE_OWNED_SOURCES],
-    );
+    const rows = await deps.db.all(ownedByThisDeviceSql(false), [...DEVICE_OWNED_SOURCES]);
     ownedIds = new Set((rows as { id: string }[]).map((r) => r.id));
+    ownerOpen = (await deps.db.all(OWNER_OPEN_SQL)).length > 0;
   };
   const appliedListeners: ((tables: string[]) => void)[] = [];
   let forwarder: Forwarder | null = null;
@@ -284,26 +284,64 @@ export function createSyncService(deps: SyncServiceDeps): SyncService {
     }
   };
   let draining: Promise<{ sent: number; waiting: number }> | null = null;
+  const nowMs = deps.nowMs ?? Date.now;
+  /** A refusing handler is retried this many times, with a growing wait, and
+   *  then left in the queue for good: kept, never sent again, never blocking. */
+  const MAX_HANDLER_ATTEMPTS = 5;
+  const backoffMs = (attempts: number): number => Math.min(30_000 * 2 ** (attempts - 1), 60 * 60_000);
+  const retryAt = new Map<number, number>();
+  const spentLogged = new Set<number>();
+  const sourceName = (req: ForwardRequest): string => {
+    if (req.kind === 'ui') return req.extensionId ?? req.name;
+    if (req.kind === 'commit') {
+      const p = req.payload as { account?: { source?: string; identifier?: string } } | undefined;
+      return p?.account?.source ? `${p.account.source} (${p.account.identifier ?? '?'})` : req.name;
+    }
+    return req.name;
+  };
   const drainOnce = async (): Promise<{ sent: number; waiting: number }> => {
     let sent = 0;
     const waitingNow = async (): Promise<number> =>
       Number(((await deps.db.all(`SELECT count(*) AS n FROM sync_outbound`))[0] as { n: number }).n);
+    // Rows in id order; a spent row is skipped, so it never blocks the rest.
+    let after = 0;
     for (;;) {
       const next = (await deps.db.all(
-        `SELECT id, payload FROM sync_outbound ORDER BY id LIMIT 1`,
-      ))[0] as { id: number; payload: Buffer } | undefined;
+        `SELECT id, payload, attempts FROM sync_outbound WHERE id > ? ORDER BY id LIMIT 1`,
+        [after],
+      ))[0] as { id: number; payload: Buffer; attempts: number } | undefined;
       if (!next) break;
       const req = JSON.parse(Buffer.from(next.payload).toString('utf8')) as ForwardRequest;
+      if (next.attempts >= MAX_HANDLER_ATTEMPTS) {
+        if (!spentLogged.has(next.id)) {
+          spentLogged.add(next.id);
+          log('error', `sync: giving up on a queued ${req.name} from ${sourceName(req)} after ${next.attempts} refusals; it stays in the queue`);
+        }
+        after = next.id;
+        continue;
+      }
+      if ((retryAt.get(next.id) ?? 0) > nowMs()) break;
       // The role is read now: a row queued as a follower runs as the leader's
       // own after a promotion (ruling 3).
       const r = readOnly() ? await forward(req) : await dispatch(req);
-      if (r.ok || r.code === 'handler') {
-        // A handler that refuses will refuse again: drop it, keep the log line.
-        if (!r.ok) log('warn', `sync: a queued ${req.name} was refused and is dropped: ${r.message}`);
+      if (r.ok) {
         await deps.db.run(`DELETE FROM sync_outbound WHERE id = ?`, [next.id]);
-        if (r.ok) sent += 1;
+        retryAt.delete(next.id);
+        sent += 1;
+      } else if (r.code === 'handler') {
+        // The leader's handler refused. Keep the row: a later version of the
+        // handler or the data may accept it. Back off, and after the last try
+        // stop waiting on it.
+        const attempts = next.attempts + 1;
+        await deps.db.run(`UPDATE sync_outbound SET attempts = ? WHERE id = ?`, [attempts, next.id]);
+        retryAt.set(next.id, nowMs() + backoffMs(attempts));
+        log('warn', `sync: a queued ${req.name} from ${sourceName(req)} was refused (${attempts}/${MAX_HANDLER_ATTEMPTS}): ${r.message}`);
+        if (attempts < MAX_HANDLER_ATTEMPTS) break;
+        after = next.id;
+        spentLogged.add(next.id);
+        log('error', `sync: giving up on a queued ${req.name} from ${sourceName(req)}; it stays in the queue`);
       } else {
-        await deps.db.run(`UPDATE sync_outbound SET attempts = attempts + 1 WHERE id = ?`, [next.id]);
+        // No leader reachable: nothing was tried, so nothing is counted.
         break;
       }
     }
@@ -348,7 +386,7 @@ export function createSyncService(deps: SyncServiceDeps): SyncService {
     },
     runForwarded: async (req) => {
       if (readOnly()) {
-        return { ok: false, code: 'handler', message: 'this device is not the leader' };
+        return { ok: false, code: 'no-master', message: 'this device is not the leader' };
       }
       return dispatch(req);
     },
@@ -403,8 +441,8 @@ export function createSyncService(deps: SyncServiceDeps): SyncService {
       }
       await refreshOwned();
     },
-    ownsAccount: (accountId) => ownedIds.has(accountId),
-    ownsSource: (source) => isDeviceOwned(source),
+    ownsAccount: (accountId) => !fenced && ownedIds.has(accountId),
+    ownsSource: (source) => !fenced && ownerOpen && isDeviceOwned(source),
     beginJoin: async () => {
       await deps.db.run(`UPDATE sync_state SET joining = 1`);
       await refreshGate();

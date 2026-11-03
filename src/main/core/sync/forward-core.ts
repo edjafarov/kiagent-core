@@ -22,6 +22,9 @@ export type ForwardedChannel = (typeof FORWARDED_CHANNELS)[number];
 export const isForwardedChannel = (c: string): c is ForwardedChannel =>
   (FORWARDED_CHANNELS as readonly string[]).includes(c);
 
+/** The renderer push that carries the refusal sentence (`ext:push`). */
+export const SYNC_REFUSED_PUSH = { extensionId: 'core.sync', name: 'refused' } as const;
+
 /** What a user sees when a follower's edit finds no leader. */
 export const NO_MASTER_MESSAGE =
   "Can't save this yet. No other device is reachable; try again in a minute.";
@@ -40,9 +43,16 @@ export async function forwardCore(
   sync: Pick<SyncService, 'forward'>,
   channel: ForwardedChannel,
   req: unknown,
+  /** Told the sentence when no leader is reachable, so the UI shows its one
+   *  refused notice for a core channel as it does for an extension call. */
+  onNoMaster?: (message: string) => void,
 ): Promise<unknown> {
   const r = await sync.forward({ kind: 'core', name: channel, payload: req });
   if (r.ok) return r.value;
-  if (r.code === 'no-master') throw new SyncNoMaster();
+  if (r.code === 'no-master') {
+    const err = new SyncNoMaster();
+    onNoMaster?.(err.message);
+    throw err;
+  }
   throw new Error(r.message);
 }

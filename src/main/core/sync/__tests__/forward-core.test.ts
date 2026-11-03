@@ -41,3 +41,13 @@ it('no leader rejects with the exact copy and a code; a refusal carries the lead
   const refused = { forward: async () => ({ ok: false as const, code: 'handler' as const, message: 'already sent' }) };
   await expect(forwardCore(refused, 'outbox:send', {})).rejects.toThrow('already sent');
 });
+
+it('a missing leader is also told to the UI once, through onNoMaster; a refusal is not', async () => {
+  const seen: string[] = [];
+  const none = { forward: async () => ({ ok: false as const, code: 'no-master' as const, message: 'x' }) };
+  await forwardCore(none, 'outbox:send', {}, (m) => seen.push(m)).catch(() => undefined);
+  expect(seen).toEqual([NO_MASTER_MESSAGE]);
+  const refused = { forward: async () => ({ ok: false as const, code: 'handler' as const, message: 'already sent' }) };
+  await forwardCore(refused, 'outbox:send', {}, (m) => seen.push(m)).catch(() => undefined);
+  expect(seen).toEqual([NO_MASTER_MESSAGE]);
+});

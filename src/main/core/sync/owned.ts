@@ -4,6 +4,7 @@ import type { CommitBatch } from '@shared/contracts';
 
 import type { AppDb } from '../../db/app-db';
 import type { CoreStore } from '../store/store';
+import type { FolderScopeInput } from '../store/write-tx';
 
 /** The account an owner's batch belongs to. The leader may never have heard of
  *  it, so the row travels with every batch. */
@@ -14,6 +15,12 @@ export interface OwnedAccount {
   config: Record<string, unknown>;
   cadence: unknown;
   ownerDeviceId: string | null;
+}
+
+/** An owner's folder-scope edit, delivered as `core.folderScope`. */
+export interface ScopeInput {
+  account: OwnedAccount;
+  scope: FolderScopeInput;
 }
 
 export interface CommitInput {
@@ -64,9 +71,25 @@ export function splitBatch(batch: CommitBatch, maxBytes = MAX_BATCH_BYTES): Comm
  *  id the batch is moved to that id. The leader never runs the account: a new
  *  row rests as `paused`, as an offered one does (step 1). */
 export async function runCommitBatch(
-  deps: { db: Pick<AppDb, 'all' | 'run'>; store: Pick<CoreStore, 'commit'> },
-  input: CommitInput,
+  deps: { db: Pick<AppDb, 'all' | 'run'>; store: Pick<CoreStore, 'commit' | 'applyFolderScope'> },
+  input: CommitInput | ScopeInput,
 ): Promise<void> {
+  if ('scope' in input) {
+    // A folder-scope edit the owner made. The owner is the authority on its
+    // own account, so the stale-config guard compares against what this
+    // device holds now; the roots and the archive list are the owner's.
+    const row = (await deps.db.all(`SELECT id, config FROM accounts WHERE source = ? AND identifier = ?`, [
+      input.account.source,
+      input.account.identifier,
+    ])) as { id: string; config: string }[];
+    if (!row[0]) return;
+    await deps.store.applyFolderScope({
+      ...input.scope,
+      accountId: row[0].id as never,
+      expectedConfigJson: row[0].config,
+    });
+    return;
+  }
   const a = input.account;
   const found = (await deps.db.all(`SELECT id FROM accounts WHERE source = ? AND identifier = ?`, [
     a.source,
