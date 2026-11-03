@@ -469,6 +469,12 @@ export interface ExtensionPlatform {
   reconcileExtensions(set?: ExtensionsSet): Promise<ReconcileResult>;
   /** Once, on a device that can write: the set from what is installed now. */
   seedExtensionSet(): Promise<void>;
+  /** A join offer's connectors: marketplace installs with their refs, never a
+   *  dev install (spec 7.9 rule 6). */
+  offerExtensions(): ExtensionsSet;
+  /** Master side of a join: adds the offered entries the set lacks. Returns
+   *  the ids added. */
+  unionExtensions(offered: ExtensionsSet): Promise<string[]>;
   /** A user action's set write failed and is waiting for a retry. */
   hasPendingExtensionRecords(): boolean;
   /** What the last reconcile could not install here, for Settings. */
@@ -2058,7 +2064,7 @@ export function createExtensionPlatform(
     },
   } satisfies Omit<
     ExtensionPlatform,
-    'installFromRef' | 'reconcileExtensions' | 'seedExtensionSet' | 'failedExtensions' | 'hasPendingExtensionRecords'
+    'installFromRef' | 'reconcileExtensions' | 'seedExtensionSet' | 'failedExtensions' | 'hasPendingExtensionRecords' | 'offerExtensions' | 'unionExtensions'
   >;
   // The members below wrap the ones above, so they are added after.
   const full = api as ExtensionPlatform;
@@ -2164,6 +2170,12 @@ export function createExtensionPlatform(
     );
   };
   full.hasPendingExtensionRecords = () => setSync.hasPending();
+  full.offerExtensions = () => setSync.offer();
+  full.unionExtensions = async (offered) => {
+    // Before discovery the platform knows of no extension: the base would be empty.
+    if (!loaded) throw new Error('extensions are not loaded yet');
+    return setSync.union(offered);
+  };
   full.failedExtensions = () =>
     setSync.failed().map((f) => ({
       ...f,

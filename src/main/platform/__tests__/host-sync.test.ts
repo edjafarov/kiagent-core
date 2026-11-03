@@ -65,6 +65,8 @@ describe('through a real forked extension host', () => {
         setDeviceId: note('setDeviceId', undefined),
         beginJoin: note('beginJoin', undefined),
         exportSources: note('exportSources', [{ source: 'gmail' }]),
+        exportSettings: note('exportSettings', { prefs: { 'a.b': 1 }, extensions: {} }),
+        importSettings: note('importSettings', { prefs: ['a.b'], extensions: [] }),
         finishJoin: note('finishJoin', undefined),
         leaveJoin: note('leaveJoin', undefined),
         forgetMoved: note('forgetMoved', undefined),
@@ -129,6 +131,8 @@ describe('through a real forked extension host', () => {
       applyDelta: { applied: 2 },
       prepareSwap: 'ready',
       exportSources: [{ source: 'gmail' }],
+      exportSettings: { prefs: { 'a.b': 1 }, extensions: {} },
+      importSettings: { prefs: ['a.b'], extensions: [] },
       importSources: { created: ['a'], existing: [], needsConnector: [] },
       canAcceptSources: true,
       exportSecrets: [{ accountId: 'a', epoch: 1, n: 3, value: null }],
@@ -140,13 +144,14 @@ describe('through a real forked extension host', () => {
     expect(seen.setFenced).toEqual([true]);
     expect(seen.exportSecrets).toEqual([{ epoch: 1, n: 2 }]);
     expect(seen.importSources).toEqual(['offer', [], 'from']);
+    expect(seen.importSettings).toEqual(['offer', { prefs: { 'a.b': 1 }, extensions: {} }]);
     expect(seen.buildDelta).toEqual([{ seq: 1, cursor: 2 }, 'out', 5, 3]);
     expect(seen.prepareSwap).toEqual(['f', 'h', 'm']);
     expect(Object.keys(seen).sort()).toEqual(
       [
         'applyDelta', 'beginJoin', 'buildDelta', 'buildSnapshot', 'canAcceptSources', 'demote',
-        'disableTracking', 'enableTracking', 'exportSecrets', 'exportSources', 'finishJoin', 'forgetMoved', 'importSecrets',
-        'importSources', 'isBusy', 'leaveJoin', 'prepareRestore', 'prepareSwap', 'promote', 'readOnly', 'setDeviceId',
+        'disableTracking', 'enableTracking', 'exportSecrets', 'exportSettings', 'exportSources', 'finishJoin', 'forgetMoved', 'importSecrets',
+        'importSettings', 'importSources', 'isBusy', 'leaveJoin', 'prepareRestore', 'prepareSwap', 'promote', 'readOnly', 'setDeviceId',
         'setFenced', 'status',
       ],
     );

@@ -191,6 +191,15 @@ export interface CorePrefs extends Prefs {
   /** Atomic read-modify-write of such a row, on the leader only (a follower's
    *  copy changes by the feed). `fn` returning undefined leaves the row. */
   updateCore(key: string, fn: (current: unknown) => unknown): Promise<void>;
+  /** What this device would put in a join offer (spec 7.9 rule 6): every user
+   *  setting it holds, `core.<key>` and `<extension>.<name>`, including a user
+   *  key still in prefs.json that no seed has moved yet. Never a device key,
+   *  and never `core.extensions` (that set travels on its own). */
+  offerable(): Promise<Record<string, unknown>>;
+  /** The master's half: writes each offered key the table lacks, nothing else.
+   *  Master wins: an existing key keeps its value. Returns the keys written.
+   *  Rejects on a device that can't write the table. */
+  addMissing(entries: Record<string, unknown>): Promise<string[]>;
 }
 
 /** Extension settings share the table under `<extension id>.<name>`; the
@@ -214,6 +223,12 @@ function jsonCopy(value: unknown): unknown {
   if (text === undefined) throw new TypeError('a setting must be a JSON value');
   return JSON.parse(text);
 }
+
+/** The keys a join offer may carry: an extension's own, and the app's user
+ *  preferences. `core.extensions` has its own channel. */
+const offerableKey = (k: string): boolean =>
+  isExtKey(k) ||
+  (k.startsWith('core.') && USER_KEY_SET.has(k.slice('core.'.length)));
 
 const sameJson = (a: unknown, b: unknown): boolean =>
   JSON.stringify(a) === JSON.stringify(b);
@@ -420,6 +435,46 @@ export function createPrefs(dir: string, user?: UserPrefsStore): CorePrefs {
         if (sameJson(stored, mirror[key])) return;
         await store.set(key, stored);
         mirror[key] = stored;
+      }),
+    offerable: () =>
+      serial(async () => {
+        const rows = store ? await store.all() : mirror;
+        const out: Record<string, unknown> = {};
+        for (const [k, v] of Object.entries(rows)) if (offerableKey(k)) out[k] = v;
+        // A user key still in prefs.json (never seeded here) is a choice too.
+        for (const k of USER_PREF_KEYS) {
+          const t = tableKey(k);
+          if (!(t in out) && !sameJson(fromFile[k], DEFAULT_PREFS[k])) out[t] = fromFile[k];
+        }
+        return out;
+      }),
+    addMissing: (entries) =>
+      serial(async () => {
+        if (!store) throw new Error('settings are not ready yet');
+        if (!store.canWrite()) {
+          throw new Error('this device is a read-only copy: it cannot change this setting');
+        }
+        // The master's own file values count as the master's: move them first.
+        await seedLocked();
+        const added: string[] = [];
+        for (const [k, v] of Object.entries(entries)) {
+          if (!offerableKey(k) || k in mirror) continue;
+          let stored: unknown;
+          try {
+            stored = jsonCopy(v);
+          } catch {
+            continue; // one unusable value must not refuse the rest
+          }
+          await store.set(k, stored);
+          mirror[k] = stored;
+          added.push(k);
+        }
+        if (added.length === 0) return added;
+        const before = current;
+        recompute();
+        if (!sameJson(before, current)) emit();
+        for (const k of added) if (isExtKey(k)) fireExt(k, mirror[k]);
+        return added;
       }),
     onExtChange(cb) {
       extListeners.add(cb);

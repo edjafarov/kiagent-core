@@ -1609,6 +1609,14 @@ export interface SecretWire {
   value: string | null;
 }
 
+/** The settings a joining device adds to its offer (alpha-cent spec 7.9 rule
+ *  6): its user settings by `user_prefs` key, and its installed connectors as
+ *  the extension set holds them. */
+export interface OfferedSettingsWire {
+  prefs: Record<string, unknown>;
+  extensions: Record<string, { enabled: boolean; ref?: string }>;
+}
+
 export interface OfferedSourceWire {
   source: string;
   identifier: string;
@@ -1981,6 +1989,13 @@ export interface CapSurfaces {
       setDeviceNames(list: { deviceId: string; label: string }[]): Promise<void>;
       beginJoin(): Promise<void>;
       exportSources(toDevice: string): Promise<OfferedSourceWire[]>;
+      /** The joiner's user settings and connectors, for the offer (spec 7.9). */
+      exportSettings(): Promise<OfferedSettingsWire>;
+      /** The master adds what it lacks; a repeated `offerId` changes nothing. */
+      importSettings(
+        offerId: string,
+        settings: OfferedSettingsWire,
+      ): Promise<{ prefs: string[]; extensions: string[] }>;
       finishJoin(): Promise<void>;
       leaveJoin(): Promise<void>;
       forgetMoved(): Promise<void>;

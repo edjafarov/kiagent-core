@@ -277,6 +277,8 @@ function syncSurface(
     setDeviceNames: call('setDeviceNames'),
     beginJoin: call('beginJoin'),
     exportSources: call('exportSources'),
+    exportSettings: call('exportSettings'),
+    importSettings: call('importSettings'),
     finishJoin: call('finishJoin'),
     leaveJoin: call('leaveJoin'),
     forgetMoved: call('forgetMoved'),

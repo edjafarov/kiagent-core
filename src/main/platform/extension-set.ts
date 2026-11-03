@@ -71,6 +71,16 @@ export function setFromLocal(local: LocalExtension[]): ExtensionsSet {
   return out;
 }
 
+/** An entry a join may add: well formed, and a marketplace ref or none. A
+ *  local path is a dev install, and those are the joiner's own. */
+function offerable(e: unknown): e is { enabled: boolean; ref?: string } {
+  if (!e || typeof e !== 'object') return false;
+  const { enabled, ref } = e as { enabled?: unknown; ref?: unknown };
+  if (typeof enabled !== 'boolean') return false;
+  if (ref === undefined) return true;
+  return typeof ref === 'string' && ref.length > 0 && !/^([./\\~]|[A-Za-z]:|file:)/.test(ref);
+}
+
 export function createExtensionSync(d: {
   store: ExtensionSetStore;
   ops: ExtensionOps;
@@ -237,6 +247,28 @@ export function createExtensionSync(d: {
           );
         }
         return r;
+      }),
+    /** What this device would offer in a join: its marketplace installs with
+     *  their refs and the bundled extensions someone switched. Never a dev
+     *  (local-path) install. */
+    offer: (): ExtensionsSet => setFromLocal(ops.list()),
+    /** The master's half of a join: adds every offered entry the set lacks. An
+     *  entry already in the set keeps its value; nothing is removed. Returns
+     *  the ids added. */
+    union: (offered: ExtensionsSet): Promise<string[]> =>
+      serial(async () => {
+        const added: string[] = [];
+        await store.update((cur) => {
+          added.length = 0;
+          const next = { ...base(cur) };
+          for (const [id, e] of Object.entries(offered ?? {})) {
+            if (id in next || !offerable(e)) continue;
+            next[id] = e.ref ? { enabled: e.enabled, ref: e.ref } : { enabled: e.enabled };
+            added.push(id);
+          }
+          return added.length > 0 ? next : undefined;
+        });
+        return added;
       }),
     hasPending: (): boolean => pending.size > 0,
     recordEnabled,

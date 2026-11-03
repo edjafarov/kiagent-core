@@ -929,6 +929,28 @@ function registerIpc(
         );
     }
   });
+  // A join's offer carries this device's settings and connectors; as the seed
+  // it adds what it lacks, through the same paths a user change takes, so it
+  // reaches every follower by the feed (spec 7.9 rule 6).
+  p.sync.setSettingsOffer({
+    export: async () => ({
+      prefs: await p.prefs.offerable(),
+      extensions: extensions.offerExtensions(),
+    }),
+    import: async (s) => {
+      const prefs = await p.prefs.addMissing(s.prefs);
+      const added = await extensions.unionExtensions(s.extensions);
+      // The seed installs a joiner's connector the way any device does.
+      if (added.length > 0) {
+        void extensions
+          .reconcileExtensions()
+          .catch((err) =>
+            p.logSink.log('extensions', 'warn', `extension reconcile failed: ${String(err)}`),
+          );
+      }
+      return { prefs, extensions: added };
+    },
+  });
   p.sync.setRunners({
     ui: async (extensionId, name, payload) => {
       const r = await extensions.callUi(extensionId, name, payload);

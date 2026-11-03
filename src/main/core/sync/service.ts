@@ -3,7 +3,7 @@
  *  worker, so neither the window nor ingest waits for them. */
 import fs from 'node:fs';
 
-import type { CommitBatch, Source } from '@shared/contracts';
+import type { CommitBatch, OfferedSettingsWire, Source } from '@shared/contracts';
 import type { AppDb } from '../../db/app-db';
 import { openDbInWorker } from '../../db/worker-client';
 import type { CoreStore } from '../store/store';
@@ -124,6 +124,17 @@ export interface SyncService {
    *  No forwarder, or one that throws, is `no-master`: never an exception. */
   forward(req: ForwardRequest): Promise<ForwardResult>;
   setForwarder(f: Forwarder | null): void;
+  /** Installed by main once the preferences and the extension platform exist:
+   *  how this device reads its offerable settings and adds a joiner's. */
+  setSettingsOffer(h: SettingsOffer | null): void;
+  /** What this device would add to a join offer (spec 7.9 rule 6). */
+  exportSettings(): Promise<OfferedSettingsWire>;
+  /** Master side: adds the keys and connectors this device lacks, once per
+   *  offer id. Master wins; a follower refuses. */
+  importSettings(
+    offerId: string,
+    settings: OfferedSettingsWire,
+  ): Promise<{ prefs: string[]; extensions: string[] }>;
   setRunners(r: ForwardRunners | null): void;
   /** Runs a forwarded request on the leader, with no ledger: every forwarded
    *  handler is an idempotent upsert. A follower refuses. */
@@ -210,6 +221,11 @@ export interface SyncService {
   close(): Promise<void>;
 }
 
+export interface SettingsOffer {
+  export(): Promise<OfferedSettingsWire>;
+  import(s: OfferedSettingsWire): Promise<{ prefs: string[]; extensions: string[] }>;
+}
+
 export interface SyncServiceDeps {
   db: AppDb;
   store: Pick<CoreStore, 'applySyncDelta' | 'importSyncSources' | 'importSyncSecrets' | 'read' | 'vault'>;
@@ -248,6 +264,7 @@ export interface SyncServiceDeps {
 
 export function createSyncService(deps: SyncServiceDeps): SyncService {
   let deviceId: string | null = null;
+  let settingsOffer: SettingsOffer | null = null;
   const me = (): string => {
     const id = deviceId ?? deps.deviceId?.() ?? null;
     if (!id) throw new Error('this device has no id yet');
@@ -410,6 +427,34 @@ export function createSyncService(deps: SyncServiceDeps): SyncService {
     forward,
     setForwarder: (f) => {
       forwarder = f;
+    },
+    setSettingsOffer: (h) => {
+      settingsOffer = h;
+    },
+    exportSettings: async () =>
+      (await settingsOffer?.export()) ?? { prefs: {}, extensions: {} },
+    importSettings: async (offerId, settings) => {
+      if (readOnly()) throw new Error('this device is not the seed and takes no settings');
+      if (!settingsOffer) throw new Error('settings are not ready on this device yet');
+      // Its own marker beside the sources': both ride one offer id.
+      const marker = `settings:${offerId}`;
+      const seen = await deps.db.all(`SELECT 1 FROM sync_offers WHERE offer_id = ?`, [marker]);
+      if (seen.length > 0) return { prefs: [], extensions: [] };
+      const isObj = (v: unknown): v is Record<string, unknown> =>
+        !!v && typeof v === 'object' && !Array.isArray(v);
+      const r = await settingsOffer.import({
+        prefs: isObj(settings?.prefs) ? settings.prefs : {},
+        extensions: isObj(settings?.extensions) ? (settings.extensions as OfferedSettingsWire['extensions']) : {},
+      });
+      await deps.db.run(`INSERT OR IGNORE INTO sync_offers(offer_id, at) VALUES(?, ?)`, [
+        marker,
+        new Date().toISOString(),
+      ]);
+      log(
+        'info',
+        `sync: offer ${offerId.slice(0, 8)}: ${r.prefs.length} settings and ${r.extensions.length} connectors added to the set`,
+      );
+      return r;
     },
     setRunners: (r) => {
       runners = r;
