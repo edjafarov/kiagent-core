@@ -56,3 +56,24 @@ export async function forwardCore(
   }
   throw new Error(r.message);
 }
+
+/** Wraps the forwarded entries of the channel-handler map in place (the app
+ *  overlay patches the text of `dispatch`, so the map is wrapped, not the
+ *  dispatcher). On a follower the call runs on the leader, read now on every
+ *  call; on the leader it runs here unchanged. Returns the unwrapped handlers,
+ *  which the leader runs for a forwarded request. A channel an overlay handles
+ *  is skipped: its owner wraps it. */
+export function wrapForwardedChannels(
+  table: Record<string, (req: unknown) => unknown>,
+  sync: Pick<SyncService, 'forward' | 'readOnly'>,
+  onNoMaster?: (message: string) => void,
+): Map<string, (req: unknown) => unknown> {
+  const local = new Map<string, (req: unknown) => unknown>();
+  for (const channel of FORWARDED_CHANNELS) {
+    const fn = table[channel];
+    if (!fn) continue;
+    local.set(channel, fn);
+    table[channel] = (req) => (sync.readOnly() ? forwardCore(sync, channel, req, onNoMaster) : fn(req));
+  }
+  return local;
+}

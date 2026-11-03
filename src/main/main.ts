@@ -75,7 +75,7 @@ import type { MarketplaceCatalog } from './marketplace/catalog';
 import { buildMainApi } from './main-api';
 import { createBusyRegistry } from './core/busy';
 import { wireOutboxPush } from './outbox-push';
-import { FORWARDED_CHANNELS, SYNC_REFUSED_PUSH, forwardCore } from './core/sync/forward-core';
+import { SYNC_REFUSED_PUSH, wrapForwardedChannels } from './core/sync/forward-core';
 import { runCommitBatch, type CommitInput } from './core/sync/owned';
 import { followerLookup } from './core/sync/role';
 import { wireAttentionPush } from './attention/push';
@@ -877,21 +877,11 @@ function registerIpc(
   // leader, read now on every call; on the leader they run here unchanged. The
   // map is wrapped in place, not `dispatch`, so the app overlay's patch of
   // `dispatch` still finds its text.
-  const forwardedLocal = new Map<string, (req: unknown) => unknown>();
-  {
-    const table = handlers as unknown as Record<string, (req: unknown) => unknown>;
-    for (const channel of FORWARDED_CHANNELS) {
-      const local = table[channel];
-      if (!local) continue; // an overlay-handled channel is wrapped by its owner
-      forwardedLocal.set(channel, local);
-      table[channel] = (req) =>
-        p.sync.readOnly()
-          ? forwardCore(p.sync, channel, req, (message) =>
-              broadcast('ext:push', { ...SYNC_REFUSED_PUSH, payload: { message } }),
-            )
-          : local(req);
-    }
-  }
+  const forwardedLocal = wrapForwardedChannels(
+    handlers as unknown as Record<string, (req: unknown) => unknown>,
+    p.sync,
+    (message) => broadcast('ext:push', { ...SYNC_REFUSED_PUSH, payload: { message } }),
+  );
   p.sync.setRunners({
     ui: async (extensionId, name, payload) => {
       const r = await extensions.callUi(extensionId, name, payload);
