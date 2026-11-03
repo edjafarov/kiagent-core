@@ -1389,6 +1389,19 @@ const MIGRATIONS: Migration[] = [
     UNIQUE(tbl, pk)
   );
   `,
+  // v22: the offline settings queue (alpha-cent spec 6c). A setting changed
+  // with no leader reachable waits in `sync_outbound` under a coalesce key, so
+  // a newer edit of the same setting replaces the older. NULL for every other
+  // row, which are never coalesced. Local, not synced.
+  (db) => {
+    const have = db
+      .prepare(`SELECT 1 FROM pragma_table_info('sync_outbound') WHERE name = 'coalesce_key'`)
+      .get();
+    if (!have) db.exec(`ALTER TABLE sync_outbound ADD COLUMN coalesce_key TEXT`);
+    db.exec(
+      `CREATE UNIQUE INDEX IF NOT EXISTS sync_outbound_coalesce ON sync_outbound(coalesce_key) WHERE coalesce_key IS NOT NULL`,
+    );
+  },
 ];
 
 /**

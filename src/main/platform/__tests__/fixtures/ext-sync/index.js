@@ -29,6 +29,8 @@ module.exports = {
       demote: await host.sync.demote('m1'),
       setFenced: await host.sync.setFenced(true),
       readOnly: await host.sync.readOnly(),
+      queuedSettings: await host.sync.queuedSettings(),
+      discardQueued: await host.sync.discardQueued(7),
     };
     fs.writeFileSync(process.env.KIA_SYNC_FIXTURE_OUT, JSON.stringify(calls));
   },

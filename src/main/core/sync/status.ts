@@ -3,6 +3,7 @@ import path from 'node:path';
 
 import type BetterSqlite3 from 'better-sqlite3';
 
+import { QUEUED_SETTINGS_SQL, queuedSettingsOf } from './settings-queue';
 import { copiedSetDigest } from './tables';
 import type { SyncRole } from './role';
 import type { SyncStatus } from './service';
@@ -52,6 +53,9 @@ export function readSyncStatus(conn: BetterSqlite3.Database): SyncStatus {
   return {
     elsewhere,
     outbound: { waiting: waiting.n },
+    queuedSettings: queuedSettingsOf(
+      conn.prepare(QUEUED_SETTINGS_SQL).all() as Parameters<typeof queuedSettingsOf>[0],
+    ),
     deviceId: s.device_id,
     copiedSet: copiedSetDigest(conn),
     secretsAfter: secrets ?? { epoch: 0, n: 0 },

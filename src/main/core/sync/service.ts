@@ -10,6 +10,7 @@ import type { CoreStore } from '../store/store';
 import type { ImportSourcesResult } from '../store/write-tx';
 import type { DeltaResult, SyncCursor } from './delta';
 import { splitBatch, type OwnedAccount } from './owned';
+import { QUEUED_SETTINGS_SQL, queuedSettingsOf, type QueuedSetting } from './settings-queue';
 import type { SyncRole } from './role';
 import {
   DEVICE_OWNED_SOURCES,
@@ -48,6 +49,13 @@ export interface ForwardRequest {
 export type ForwardResult =
   | { ok: true; value: unknown }
   | { ok: false; code: 'no-master' | 'handler'; message: string };
+
+/** A keyed row of `sync_outbound` left the queue. */
+export interface QueueChange {
+  kind: 'delivered' | 'discarded';
+  rowId: number;
+  coalesceKey: string | null;
+}
 
 export type Forwarder = (req: ForwardRequest) => Promise<ForwardResult>;
 
@@ -91,6 +99,9 @@ export interface SyncStatus {
   deviceId: string | null;
   /** Results of this device that wait in `sync_outbound` for a leader. */
   outbound: { waiting: number };
+  /** Settings changed with no leader reachable that still wait to be
+   *  delivered: one entry per coalesce key. */
+  queuedSettings: QueuedSetting[];
   /** The database file plus its journal: a cheap stand-in for the size of a
    *  snapshot, so a joiner can weigh its disk before anything is built. */
   dbBytes: number;
@@ -139,8 +150,16 @@ export interface SyncService {
   /** Runs a forwarded request on the leader, with no ledger: every forwarded
    *  handler is an idempotent upsert. A follower refuses. */
   runForwarded(req: ForwardRequest): Promise<ForwardResult>;
-  /** Writes `sync_outbound`: a result that waits for a reachable leader. */
-  enqueue(req: ForwardRequest): Promise<void>;
+  /** Writes `sync_outbound`: a result that waits for a reachable leader.
+   *  Returns the row id. With a `coalesceKey` the older row of that key is
+   *  replaced in the same transaction. */
+  enqueue(req: ForwardRequest, opts?: { coalesceKey: string }): Promise<number>;
+  /** Tells `cb` when a keyed row was delivered or discarded. Core-internal. */
+  onQueueChange(cb: (e: QueueChange) => void): void;
+  /** The settings still waiting, one per key, newest. */
+  queuedSettings(): Promise<QueuedSetting[]>;
+  /** Drops a waiting setting. Only a keyed row can be dropped. */
+  discardQueued(rowId: number): Promise<void>;
   /** Sends each waiting row, in order, to the leader (or runs it here when
    *  this device leads now). A row is deleted only on success. */
   drainOutbound(): Promise<{ sent: number; waiting: number }>;
@@ -345,28 +364,47 @@ export function createSyncService(deps: SyncServiceDeps): SyncService {
     }
     return req.name;
   };
+  const queueListeners: ((e: QueueChange) => void)[] = [];
+  const fireQueue = (e: QueueChange): void => {
+    for (const cb of queueListeners) {
+      try {
+        cb(e);
+      } catch (err) {
+        log('warn', `sync: a queue listener failed: ${String(err)}`);
+      }
+    }
+  };
   const drainOnce = async (): Promise<{ sent: number; waiting: number }> => {
     let sent = 0;
     const waitingNow = async (): Promise<number> =>
       Number(((await deps.db.all(`SELECT count(*) AS n FROM sync_outbound`))[0] as { n: number }).n);
     // Rows in id order; a spent row is skipped, so it never blocks the rest.
+    // A refused or backing-off row without a key holds back the later rows
+    // without one (order kept) but never a settings row; the same on a keyed
+    // row skips only that row.
+    let blockedUnkeyed = false;
     let after = 0;
     for (;;) {
       const next = (await deps.db.all(
-        `SELECT id, payload, attempts FROM sync_outbound WHERE id > ? ORDER BY id LIMIT 1`,
+        `SELECT id, payload, attempts, coalesce_key FROM sync_outbound WHERE id > ? ORDER BY id LIMIT 1`,
         [after],
-      ))[0] as { id: number; payload: Buffer; attempts: number } | undefined;
+      ))[0] as { id: number; payload: Buffer; attempts: number; coalesce_key: string | null } | undefined;
       if (!next) break;
+      after = next.id;
+      const isKeyed = next.coalesce_key !== null;
       const req = JSON.parse(Buffer.from(next.payload).toString('utf8')) as ForwardRequest;
       if (next.attempts >= MAX_HANDLER_ATTEMPTS) {
         if (!spentLogged.has(next.id)) {
           spentLogged.add(next.id);
           log('error', `sync: giving up on a queued ${req.name} from ${sourceName(req)} after ${next.attempts} refusals; it stays in the queue`);
         }
-        after = next.id;
         continue;
       }
-      if ((retryAt.get(next.id) ?? 0) > nowMs()) break;
+      if (!isKeyed && blockedUnkeyed) continue;
+      if ((retryAt.get(next.id) ?? 0) > nowMs()) {
+        if (!isKeyed) blockedUnkeyed = true;
+        continue;
+      }
       // The role is read now: a row queued as a follower runs as the leader's
       // own after a promotion (ruling 3).
       const r = readOnly() ? await forward(req) : await dispatch(req);
@@ -374,6 +412,7 @@ export function createSyncService(deps: SyncServiceDeps): SyncService {
         await deps.db.run(`DELETE FROM sync_outbound WHERE id = ?`, [next.id]);
         retryAt.delete(next.id);
         sent += 1;
+        fireQueue({ kind: 'delivered', rowId: next.id, coalesceKey: next.coalesce_key });
       } else if (r.code === 'handler') {
         // The leader's handler refused. Keep the row: a later version of the
         // handler or the data may accept it. Back off, and after the last try
@@ -382,8 +421,10 @@ export function createSyncService(deps: SyncServiceDeps): SyncService {
         await deps.db.run(`UPDATE sync_outbound SET attempts = ? WHERE id = ?`, [attempts, next.id]);
         retryAt.set(next.id, nowMs() + backoffMs(attempts));
         log('warn', `sync: a queued ${req.name} from ${sourceName(req)} was refused (${attempts}/${MAX_HANDLER_ATTEMPTS}): ${r.message}`);
-        if (attempts < MAX_HANDLER_ATTEMPTS) break;
-        after = next.id;
+        if (attempts < MAX_HANDLER_ATTEMPTS) {
+          if (!isKeyed) blockedUnkeyed = true;
+          continue;
+        }
         spentLogged.add(next.id);
         log('error', `sync: giving up on a queued ${req.name} from ${sourceName(req)}; it stays in the queue`);
       } else {
@@ -465,16 +506,40 @@ export function createSyncService(deps: SyncServiceDeps): SyncService {
       }
       return dispatch(req);
     },
-    enqueue: async (req) => {
-      await deps.db.run(
-        `INSERT INTO sync_outbound(kind, extension_id, payload, created_at) VALUES(?, ?, ?, ?)`,
-        [
-          req.kind === 'commit' ? 'core.commitBatch' : req.name,
-          req.extensionId ?? null,
-          Buffer.from(JSON.stringify(req), 'utf8'),
-          new Date().toISOString(),
-        ],
-      );
+    enqueue: async (req, opts) => {
+      const kind = req.kind === 'commit' ? 'core.commitBatch' : req.name;
+      const params = [
+        kind,
+        req.extensionId ?? null,
+        Buffer.from(JSON.stringify(req), 'utf8'),
+        new Date().toISOString(),
+        opts?.coalesceKey ?? null,
+      ];
+      const insert = `INSERT INTO sync_outbound(kind, extension_id, payload, created_at, coalesce_key) VALUES(?, ?, ?, ?, ?) RETURNING id`;
+      // The replace is one transaction: a failing insert leaves the older row.
+      const results = opts
+        ? await deps.db.batch([
+            { sql: `DELETE FROM sync_outbound WHERE coalesce_key = ?`, params: [opts.coalesceKey] },
+            { sql: insert, params },
+          ])
+        : await deps.db.batch([{ sql: insert, params }]);
+      return Number(results[results.length - 1].row?.id);
+    },
+    onQueueChange: (cb) => {
+      queueListeners.push(cb);
+    },
+    queuedSettings: async () =>
+      queuedSettingsOf((await deps.db.all(QUEUED_SETTINGS_SQL)) as Parameters<typeof queuedSettingsOf>[0]),
+    discardQueued: async (rowId) => {
+      const row = (await deps.db.all(
+        `SELECT coalesce_key FROM sync_outbound WHERE id = ? AND coalesce_key IS NOT NULL`,
+        [rowId],
+      ))[0] as { coalesce_key: string } | undefined;
+      if (!row) return;
+      await deps.db.run(`DELETE FROM sync_outbound WHERE id = ?`, [rowId]);
+      retryAt.delete(rowId);
+      spentLogged.delete(rowId);
+      fireQueue({ kind: 'discarded', rowId, coalesceKey: row.coalesce_key });
     },
     drainOutbound: () => {
       // One drain at a time, so a pull and the timer never send a row twice.

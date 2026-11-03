@@ -296,6 +296,8 @@ function syncSurface(
     runForwarded: call('runForwarded'),
     drainOutbound: call('drainOutbound'),
     retained: call('retained'),
+    queuedSettings: call('queuedSettings'),
+    discardQueued: call('discardQueued'),
   };
 }
 

@@ -80,6 +80,8 @@ describe('through a real forked extension host', () => {
         setFenced: note('setFenced', undefined),
         readOnly: note('readOnly', true),
         deleteArchive: note('deleteArchive', undefined),
+        queuedSettings: note('queuedSettings', [{ rowId: 3, key: 'core.theme', value: 'dark' }]),
+        discardQueued: note('discardQueued', undefined),
         close: async () => undefined,
       } as never,
       sources: { register: () => {}, get: () => undefined, list: () => [], unregister: () => {} },
@@ -138,7 +140,10 @@ describe('through a real forked extension host', () => {
       exportSecrets: [{ accountId: 'a', epoch: 1, n: 3, value: null }],
       importSecrets: { applied: 1 },
       readOnly: true,
+      queuedSettings: [{ rowId: 3, key: 'core.theme', value: 'dark' }],
     });
+    // onQueueChange and enqueue are core-internal: no extension can reach them.
+    expect(seen.discardQueued).toEqual([7]);
     expect(seen.promote).toEqual([2]);
     expect(seen.demote).toEqual(['m1']);
     expect(seen.setFenced).toEqual([true]);
@@ -150,8 +155,8 @@ describe('through a real forked extension host', () => {
     expect(Object.keys(seen).sort()).toEqual(
       [
         'applyDelta', 'beginJoin', 'buildDelta', 'buildSnapshot', 'canAcceptSources', 'demote',
-        'disableTracking', 'enableTracking', 'exportSecrets', 'exportSettings', 'exportSources', 'finishJoin', 'forgetMoved', 'importSecrets',
-        'importSettings', 'importSources', 'isBusy', 'leaveJoin', 'prepareRestore', 'prepareSwap', 'promote', 'readOnly', 'setDeviceId',
+        'disableTracking', 'discardQueued', 'enableTracking', 'exportSecrets', 'exportSettings', 'exportSources', 'finishJoin', 'forgetMoved', 'importSecrets',
+        'importSettings', 'importSources', 'isBusy', 'leaveJoin', 'prepareRestore', 'prepareSwap', 'promote', 'queuedSettings', 'readOnly', 'setDeviceId',
         'setFenced', 'status',
       ],
     );

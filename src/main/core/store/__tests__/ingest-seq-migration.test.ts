@@ -24,7 +24,7 @@ describe('documents.ingest_seq migration (v7)', () => {
       migrate(db);
       expect(
         db.prepare(`SELECT value FROM meta WHERE key='schemaVersion'`).get(),
-      ).toEqual({ value: '21' });
+      ).toEqual({ value: '22' });
       expect(
         db
           .prepare(
@@ -36,7 +36,7 @@ describe('documents.ingest_seq migration (v7)', () => {
       migrate(db);
       expect(
         db.prepare(`SELECT value FROM meta WHERE key='schemaVersion'`).get(),
-      ).toEqual({ value: '21' });
+      ).toEqual({ value: '22' });
     } finally {
       db.close();
     }
