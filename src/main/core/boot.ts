@@ -52,7 +52,7 @@ import {
   type LlmAccel,
 } from './host-profile';
 import { createLogs } from './logs';
-import { createPrefs } from './prefs';
+import { createDbUserPrefsStore, createPrefs, type CorePrefs } from './prefs';
 import { createScheduler } from './scheduler';
 import type { CoreScheduler } from './scheduler';
 import { gateEngine, gateFrom, readSyncGate } from './sync/role';
@@ -209,7 +209,7 @@ export interface CorePlatform {
   engine: ReturnType<typeof createEngine>;
   scheduler: CoreScheduler;
   inference: InferencePlane;
-  prefs: Prefs;
+  prefs: CorePrefs;
   logs: LogStore;
   logSink: LogSink;
   sources: SourceRegistry & SourceRegistrations;
@@ -457,6 +457,9 @@ export async function bootCore(deps: BootDeps): Promise<CorePlatform> {
   });
   // Asked on every call, so a promotion opens this same engine.
   await sync.loadOwned();
+  // The user's preferences come from the copied table from here on; a device
+  // that can write it moves any it still keeps in prefs.json there, once.
+  await prefs.attachUser(createDbUserPrefsStore(db, () => !sync.readOnly()));
   const gate = gateEngine(engine, () => sync.readOnly(), sync);
   // A follower's copied rows change only by what the master sends.
   let archiveSweep = false;

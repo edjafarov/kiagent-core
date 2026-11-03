@@ -4,6 +4,7 @@ import {
   isForwardedChannel,
   NO_MASTER_MESSAGE,
   SyncNoMaster,
+  wrapForwardedChannels,
 } from '../forward-core';
 
 it('the writing channels are forwarded, reads are not', () => {
@@ -18,11 +19,12 @@ it('the writing channels are forwarded, reads are not', () => {
     'calendar-out:retry',
     'calendar-out:discard',
     'calendar-out:restore',
+    'prefs:patch',
   ])
     expect(isForwardedChannel(c)).toBe(true);
   for (const c of ['attention:list', 'outbox:list', 'calendar-out:list', 'accounts:list'])
     expect(isForwardedChannel(c)).toBe(false);
-  expect(FORWARDED_CHANNELS).toHaveLength(10);
+  expect(FORWARDED_CHANNELS).toHaveLength(11);
 });
 
 it('forwardCore sends kind core with the channel name and returns the leader value', async () => {
@@ -50,4 +52,16 @@ it('a missing leader is also told to the UI once, through onNoMaster; a refusal 
   const refused = { forward: async () => ({ ok: false as const, code: 'handler' as const, message: 'already sent' }) };
   await forwardCore(refused, 'outbox:send', {}, (m) => seen.push(m)).catch(() => undefined);
   expect(seen).toEqual([NO_MASTER_MESSAGE]);
+});
+
+it('prefs:patch is a forwarded verb the leader can run, but a follower does not forward it whole', async () => {
+  const handler = jest.fn(async () => 'ran');
+  const send = jest.fn(async () => 'x');
+  const table: Record<string, (r: unknown) => unknown> = { 'prefs:patch': handler, 'outbox:send': send };
+  const forward = jest.fn(async () => ({ ok: true as const, value: 'leader' }));
+  const local = wrapForwardedChannels(table, { forward, readOnly: () => true });
+  expect(local.get('prefs:patch')).toBe(handler);
+  expect(table['prefs:patch']).toBe(handler); // the handler splits and forwards its own user part
+  await expect(table['outbox:send']({})).resolves.toBe('leader');
+  expect(forward).toHaveBeenCalledTimes(1);
 });

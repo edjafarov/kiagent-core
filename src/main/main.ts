@@ -77,7 +77,7 @@ import { createBusyRegistry } from './core/busy';
 import { wireOutboxPush } from './outbox-push';
 import { wireSyncAppliedPush } from './sync-applied-push';
 import { guardDraftTools } from './outbound/follower-tools';
-import { SYNC_REFUSED_PUSH, wrapForwardedChannels } from './core/sync/forward-core';
+import { forwardCore, SYNC_REFUSED_PUSH, wrapForwardedChannels } from './core/sync/forward-core';
 import { runCommitBatch, type CommitInput } from './core/sync/owned';
 import { followerLookup } from './core/sync/role';
 import { wireAttentionPush } from './attention/push';
@@ -884,6 +884,17 @@ function registerIpc(
     p.sync,
     (message) => broadcast('ext:push', { ...SYNC_REFUSED_PUSH, payload: { message } }),
   );
+  // `prefs:patch` forwards only its user keys (the handler splits; see
+  // SELF_FORWARDING_CHANNELS). The device part has been applied by then.
+  p.prefs.setForwardUser(async (user) => {
+    await forwardCore(p.sync, 'prefs:patch', user, (message) =>
+      broadcast('ext:push', { ...SYNC_REFUSED_PUSH, payload: { message } }),
+    );
+  });
+  // What the leader changed in user_prefs arrives by the feed.
+  p.sync.onApplied((tables) => {
+    if (tables.includes('user_prefs')) void p.prefs.refreshUser();
+  });
   p.sync.setRunners({
     ui: async (extensionId, name, payload) => {
       const r = await extensions.callUi(extensionId, name, payload);

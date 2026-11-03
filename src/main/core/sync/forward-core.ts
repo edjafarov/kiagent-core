@@ -4,6 +4,8 @@
  *  after a lost reply changes nothing twice. */
 import type { SyncService } from './service';
 
+export type ForwardedChannel = (typeof FORWARDED_CHANNELS)[number];
+
 export const FORWARDED_CHANNELS = [
   'attention:act',
   'outbox:send',
@@ -15,9 +17,15 @@ export const FORWARDED_CHANNELS = [
   'calendar-out:retry',
   'calendar-out:discard',
   'calendar-out:restore',
+  'prefs:patch',
 ] as const;
 
-export type ForwardedChannel = (typeof FORWARDED_CHANNELS)[number];
+/** Forwarded verbs that are not forwarded whole: the handler splits its own
+ *  request and forwards only the part that belongs to the leader (a mixed
+ *  `prefs:patch` applies its device keys here). They stay in the returned map,
+ *  so the leader can still run them for a forwarded request. */
+export const SELF_FORWARDING_CHANNELS: readonly ForwardedChannel[] = ['prefs:patch'];
+
 
 export const isForwardedChannel = (c: string): c is ForwardedChannel =>
   (FORWARDED_CHANNELS as readonly string[]).includes(c);
@@ -73,6 +81,7 @@ export function wrapForwardedChannels(
     const fn = table[channel];
     if (!fn) continue;
     local.set(channel, fn);
+    if (SELF_FORWARDING_CHANNELS.includes(channel)) continue;
     table[channel] = (req) => (sync.readOnly() ? forwardCore(sync, channel, req, onNoMaster) : fn(req));
   }
   return local;
