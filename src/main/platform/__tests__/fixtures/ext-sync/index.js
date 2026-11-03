@@ -9,7 +9,7 @@ module.exports = {
       disableTracking: await host.sync.disableTracking(),
       buildDelta: await host.sync.buildDelta(c, 'out', 5, 3),
       buildSnapshot: await host.sync.buildSnapshot('snap'),
-      applyDelta: await host.sync.applyDelta('stage'),
+      applyDelta: await host.sync.applyDelta('stage', { pullStartedAt: 5 }),
       prepareSwap: await host.sync.prepareSwap('f', 'h', 'm'),
       prepareRestore: await host.sync.prepareRestore(),
       setDeviceId: await host.sync.setDeviceId('dev'),

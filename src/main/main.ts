@@ -77,7 +77,8 @@ import { createBusyRegistry } from './core/busy';
 import { wireOutboxPush } from './outbox-push';
 import { wireSyncAppliedPush } from './sync-applied-push';
 import { guardDraftTools } from './outbound/follower-tools';
-import { forwardCore, SYNC_REFUSED_PUSH, wrapForwardedChannels } from './core/sync/forward-core';
+import { SYNC_REFUSED_PUSH, wrapForwardedChannels } from './core/sync/forward-core';
+import { installOfflineSettings, restoreOfflineSettings } from './core/sync/offline-settings';
 import { runCommitBatch, type CommitInput } from './core/sync/owned';
 import { followerLookup } from './core/sync/role';
 import { wireAttentionPush } from './attention/push';
@@ -894,24 +895,19 @@ function registerIpc(
   // leader, read now on every call; on the leader they run here unchanged. The
   // map is wrapped in place, not `dispatch`, so the app overlay's patch of
   // `dispatch` still finds its text.
+  // A setting changed with no leader applies here and waits in the queue
+  // (`installOfflineSettings`); the data verbs below still refuse.
+  const offlineHandlers = installOfflineSettings(p.prefs, p.sync);
   const forwardedLocal = wrapForwardedChannels(
     handlers as unknown as Record<string, (req: unknown) => unknown>,
     p.sync,
     (message) => broadcast('ext:push', { ...SYNC_REFUSED_PUSH, payload: { message } }),
+    offlineHandlers,
   );
-  // `prefs:patch` forwards only its user keys (the handler splits; see
-  // SELF_FORWARDING_CHANNELS). The device part has been applied by then.
-  p.prefs.setForwardUser(async (user) => {
-    await forwardCore(p.sync, 'prefs:patch', user, (message) =>
-      broadcast('ext:push', { ...SYNC_REFUSED_PUSH, payload: { message } }),
-    );
-  });
-  // An extension setting written on a follower is stored by the leader.
-  p.prefs.setForwardExt(async (key, value) => {
-    await forwardCore(p.sync, 'prefs:set-ext', { key, value }, (message) =>
-      broadcast('ext:push', { ...SYNC_REFUSED_PUSH, payload: { message } }),
-    );
-  });
+  // What was queued before the last quit shows again.
+  void restoreOfflineSettings(p.prefs, p.sync).catch((err) =>
+    p.logSink.log('sync', 'warn', `queued settings were not restored: ${String(err)}`),
+  );
   // A device that just became able to write seeds the extension set once.
   p.afterPromote(() => syncExtensions(extensions, p));
   // A connector that could not install here is tried again every hour.
@@ -919,11 +915,11 @@ function registerIpc(
     if (extensions.failedExtensions().length > 0 || extensions.hasPendingExtensionRecords()) void syncExtensions(extensions, p);
   }, EXTENSION_RETRY_MS).unref();
   // What the leader changed in user_prefs arrives by the feed.
-  p.sync.onApplied((tables) => {
+  p.sync.onApplied((tables, meta) => {
     if (tables.includes('user_prefs')) {
       // The extension set is one of the rows that may have changed.
       void p.prefs
-        .refreshUser()
+        .refreshUser({ prefKeys: meta.prefKeys, pullStartedAt: meta.pullStartedAt })
         .then(() => extensions.reconcileExtensions())
         .catch((err) =>
           p.logSink.log('extensions', 'warn', `extension reconcile failed: ${String(err)}`),

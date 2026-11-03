@@ -1979,7 +1979,15 @@ export interface CapSurfaces {
       ): Promise<{ bytes: number; target: SyncCursorWire; sha256: string }>;
       applyDelta(
         stagePath: string,
-      ): Promise<{ applied: number; target: SyncCursorWire; tables: string[] }>;
+        /** `pullStartedAt`: when the pull that fetched the stage began (ms). */
+        opts?: { pullStartedAt?: number },
+      ): Promise<{
+        applied: number;
+        target: SyncCursorWire;
+        tables: string[];
+        /** The `user_prefs` keys the delta upserted or deleted. */
+        prefKeys: string[];
+      }>;
       prepareSwap(
         file: string,
         sha256: string,

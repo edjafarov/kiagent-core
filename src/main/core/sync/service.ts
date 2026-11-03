@@ -50,6 +50,12 @@ export type ForwardResult =
   | { ok: true; value: unknown }
   | { ok: false; code: 'no-master' | 'handler'; message: string };
 
+/** What an applied delta carried besides table names. */
+export interface AppliedMeta {
+  prefKeys: string[];
+  pullStartedAt?: number;
+}
+
 /** A keyed row of `sync_outbound` left the queue. */
 export interface QueueChange {
   kind: 'delivered' | 'discarded';
@@ -120,10 +126,15 @@ export interface SyncService {
     fromEpoch?: number,
   ): Promise<DeltaResult>;
   buildSnapshot(out: string): Promise<{ bytes: number; target: SyncCursor; sha256: string }>;
-  applyDelta(stagePath: string): Promise<{ applied: number; target: SyncCursor; tables: string[] }>;
+  /** `pullStartedAt`: when the pull that fetched the stage began, so a queued
+   *  setting the leader acknowledged later is not released by an older delta. */
+  applyDelta(
+    stagePath: string,
+    opts?: { pullStartedAt?: number },
+  ): Promise<{ applied: number; target: SyncCursor; tables: string[]; prefKeys: string[] }>;
   /** Tells `cb` which copied tables each applied delta touched, so extensions
    *  can refresh (platform bus event `sync.applied`). Core-internal. */
-  onApplied(cb: (tables: string[]) => void): void;
+  onApplied(cb: (tables: string[], meta: AppliedMeta) => void): void;
   prepareSwap(
     file: string,
     sha256: string,
@@ -323,7 +334,7 @@ export function createSyncService(deps: SyncServiceDeps): SyncService {
     ownedIds = new Set((rows as { id: string }[]).map((r) => r.id));
     ownerOpen = (await deps.db.all(OWNER_OPEN_SQL)).length > 0;
   };
-  const appliedListeners: ((tables: string[]) => void)[] = [];
+  const appliedListeners: ((tables: string[], meta: AppliedMeta) => void)[] = [];
   let forwarder: Forwarder | null = null;
   let runners: ForwardRunners | null = null;
   const dispatch = async (req: ForwardRequest): Promise<ForwardResult> => {
@@ -453,11 +464,12 @@ export function createSyncService(deps: SyncServiceDeps): SyncService {
     buildDelta: (after, out, capBytes, fromEpoch) =>
       onWorker('buildDelta', { after, out, capBytes, fromEpoch: fromEpoch ?? Number.MAX_SAFE_INTEGER }),
     buildSnapshot: (out) => onWorker('buildSnapshot', { out }),
-    applyDelta: async (stagePath) => {
+    applyDelta: async (stagePath, opts) => {
       const r = await deps.store.applySyncDelta(stagePath);
+      const meta: AppliedMeta = { prefKeys: r.prefKeys ?? [], pullStartedAt: opts?.pullStartedAt };
       if (r.tables.includes('accounts')) await refreshOwned();
-      if (r.tables.length) for (const cb of appliedListeners) cb(r.tables);
-      return r;
+      if (r.tables.length) for (const cb of appliedListeners) cb(r.tables, meta);
+      return { ...r, prefKeys: meta.prefKeys };
     },
     onApplied: (cb) => {
       appliedListeners.push(cb);

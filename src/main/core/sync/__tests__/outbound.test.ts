@@ -532,3 +532,29 @@ describe('the settings queue (phase 6c)', () => {
     expect(readSyncStatus(d.conn()).queuedSettings).toEqual([{ rowId: id, key: 'core.theme', value: 'light' }]);
   });
 });
+
+it('applyDelta passes pullStartedAt and the touched user_prefs keys to onApplied listeners', async () => {
+  const d = await device();
+  const fake = createSyncService({
+    db: d.db,
+    store: {
+      ...d.store,
+      applySyncDelta: async () => ({
+        applied: 1,
+        target: { seq: 1, cursor: 1 },
+        tables: ['user_prefs'],
+        prefKeys: ['core.theme'],
+      }),
+    } as never,
+    dbPath: path.join(d.dir, 'a.db'),
+    workerFile: '',
+  });
+  const seen: unknown[] = [];
+  fake.onApplied((t, meta) => seen.push([t, meta]));
+  await fake.applyDelta('stage', { pullStartedAt: 123 });
+  await fake.applyDelta('stage');
+  expect(seen).toEqual([
+    [['user_prefs'], { prefKeys: ['core.theme'], pullStartedAt: 123 }],
+    [['user_prefs'], { prefKeys: ['core.theme'], pullStartedAt: undefined }],
+  ]);
+});

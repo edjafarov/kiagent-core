@@ -69,6 +69,12 @@ export async function forwardCore(
   throw new Error(r.message);
 }
 
+/** What a channel does when no leader is reachable instead of refusing:
+ *  `runLocal` is the channel's own handler on this device. */
+export type OfflineHandlers = Partial<
+  Record<ForwardedChannel, (req: unknown, runLocal: () => unknown) => Promise<unknown>>
+>;
+
 /** Wraps the forwarded entries of the channel-handler map in place (the app
  *  overlay patches the text of `dispatch`, so the map is wrapped, not the
  *  dispatcher). On a follower the call runs on the leader, read now on every
@@ -79,6 +85,7 @@ export function wrapForwardedChannels(
   table: Record<string, (req: unknown) => unknown>,
   sync: Pick<SyncService, 'forward' | 'readOnly'>,
   onNoMaster?: (message: string) => void,
+  offline?: OfflineHandlers,
 ): Map<string, (req: unknown) => unknown> {
   const local = new Map<string, (req: unknown) => unknown>();
   for (const channel of FORWARDED_CHANNELS) {
@@ -86,6 +93,21 @@ export function wrapForwardedChannels(
     if (!fn) continue;
     local.set(channel, fn);
     if (SELF_FORWARDING_CHANNELS.includes(channel)) continue;
+    const whenOffline = offline?.[channel];
+    if (whenOffline) {
+      // A setting: with no leader it is taken by the handler for the offline
+      // case (applied here and queued), and the refusal sentence is not shown.
+      table[channel] = async (req) => {
+        if (!sync.readOnly()) return fn(req);
+        try {
+          return await forwardCore(sync, channel, req);
+        } catch (err) {
+          if (err instanceof SyncNoMaster) return whenOffline(req, () => fn(req));
+          throw err;
+        }
+      };
+      continue;
+    }
     table[channel] = (req) => (sync.readOnly() ? forwardCore(sync, channel, req, onNoMaster) : fn(req));
   }
   return local;

@@ -338,3 +338,30 @@ describe('more copied tables (step 2)', () => {
     expect(() => destTx.applyDelta(stage)).toThrow(SyncStageInvalid);
   });
 });
+
+describe('user_prefs keys (phase 6c)', () => {
+  const put = (k: string, v: unknown) =>
+    src()
+      .prepare(`INSERT INTO user_prefs(key, value_json) VALUES(?, ?) ON CONFLICT(key) DO UPDATE SET value_json = excluded.value_json`)
+      .run(k, JSON.stringify(v));
+
+  it('applyDelta reports the user_prefs keys it touched, upserts and deletes', () => {
+    put('core.theme', 'dark');
+    put('kiagent.meetings.language', 'de');
+    const first = sync();
+    expect(first.prefKeys).toEqual(['core.theme', 'kiagent.meetings.language']);
+    put('core.theme', 'light');
+    src().prepare(`DELETE FROM user_prefs WHERE key = ?`).run('kiagent.meetings.language');
+    const second = sync();
+    expect(second.prefKeys).toEqual(['core.theme', 'kiagent.meetings.language']);
+    expect(dst().prepare(`SELECT key FROM user_prefs`).all()).toEqual([{ key: 'core.theme' }]);
+  });
+
+  it('a delta without user_prefs rows reports no keys, and a second apply does not remember the first', async () => {
+    put('core.theme', 'dark');
+    sync();
+    const a = await account();
+    await commit(a.id, [doc('d1')]);
+    expect(sync().prefKeys).toEqual([]);
+  });
+});

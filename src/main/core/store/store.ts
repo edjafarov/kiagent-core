@@ -209,7 +209,7 @@ export interface CoreStore extends Store {
   /** Applies a stage from the master and wakes everything a commit wakes. */
   applySyncDelta(
     stagePath: string,
-  ): Promise<{ applied: number; target: SyncCursor; tables: string[] }>;
+  ): Promise<{ applied: number; target: SyncCursor; tables: string[]; prefKeys: string[] }>;
   /** Takes an offer of accounts and logins from another device in one
    *  transaction (alpha-cent spec 7.7), and wakes what a commit wakes. */
   importSyncSources(input: ImportSourcesInput): Promise<ImportSourcesResult>;
@@ -781,6 +781,7 @@ export function openStore(db: AppDb, deps: StoreDeps): CoreStore {
             applied: number;
             target: SyncCursor;
             tables: string[];
+            prefKeys: string[];
           });
       corpus.invalidateLanguages();
       emitCommit();

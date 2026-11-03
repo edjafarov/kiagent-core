@@ -68,3 +68,38 @@ it('prefs:patch is a forwarded verb the leader can run, but a follower does not 
   await expect(table['outbox:send']({})).resolves.toBe('leader');
   expect(forward).toHaveBeenCalledTimes(1);
 });
+
+describe('an offline handler for a setting channel', () => {
+  const noLeader = { ok: false as const, code: 'no-master' as const, message: 'x' };
+  it('a follower with no leader hands the request to it, without the refusal sentence', async () => {
+    const seen: string[] = [];
+    const local = jest.fn(async (r: unknown) => ({ ok: true, r }));
+    const table: Record<string, (r: unknown) => unknown> = { 'extension:set-enabled': local, 'outbox:send': jest.fn() };
+    const offline = jest.fn(async (req: unknown, runLocal: () => unknown) => ({ queued: req, ran: await runLocal() }));
+    wrapForwardedChannels(table, { forward: async () => noLeader, readOnly: () => true }, (m) => seen.push(m), {
+      'extension:set-enabled': offline,
+    });
+    await expect(table['extension:set-enabled']({ id: 'a', enabled: true })).resolves.toEqual({
+      queued: { id: 'a', enabled: true },
+      ran: { ok: true, r: { id: 'a', enabled: true } },
+    });
+    expect(seen).toEqual([]);
+    await expect(Promise.resolve(table['outbox:send']({}))).rejects.toBeInstanceOf(SyncNoMaster);
+    expect(seen).toEqual([NO_MASTER_MESSAGE]);
+  });
+
+  it('a reachable leader gets the request; a refusal rethrows; the leader runs it here', async () => {
+    const offline = jest.fn();
+    const local = jest.fn(async () => 'local');
+    const table: Record<string, (r: unknown) => unknown> = { 'extension:set-enabled': local };
+    const forward = jest.fn(async () => ({ ok: true as const, value: 'leader' }));
+    let readOnly = true;
+    wrapForwardedChannels(table, { forward, readOnly: () => readOnly }, undefined, { 'extension:set-enabled': offline });
+    await expect(table['extension:set-enabled']({})).resolves.toBe('leader');
+    forward.mockResolvedValueOnce({ ok: false, code: 'handler', message: 'refused' } as never);
+    await expect(Promise.resolve(table['extension:set-enabled']({}))).rejects.toThrow('refused');
+    readOnly = false;
+    await expect(table['extension:set-enabled']({})).resolves.toBe('local');
+    expect(offline).not.toHaveBeenCalled();
+  });
+});

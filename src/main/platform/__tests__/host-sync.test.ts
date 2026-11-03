@@ -144,6 +144,7 @@ describe('through a real forked extension host', () => {
     });
     // onQueueChange and enqueue are core-internal: no extension can reach them.
     expect(seen.discardQueued).toEqual([7]);
+    expect(seen.applyDelta).toEqual(['stage', { pullStartedAt: 5 }]);
     expect(seen.promote).toEqual([2]);
     expect(seen.demote).toEqual(['m1']);
     expect(seen.setFenced).toEqual([true]);
