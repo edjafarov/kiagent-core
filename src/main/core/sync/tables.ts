@@ -26,6 +26,7 @@ export const LOCAL_CORE_TABLES: readonly string[] = [
   'consumers',
   'meta',
   'schedule',
+  'sync_imported',
   'sync_moved',
   'sync_offers',
   'sync_outbound',

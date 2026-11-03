@@ -54,6 +54,19 @@ export function promote(conn: BetterSqlite3.Database, epoch: number): void {
     if (s.role === 'follower' && s.epoch < epoch) {
       renumberUnseen(conn, s.pre_demote_epoch ?? s.epoch, s.pre_demote_epoch !== null);
     }
+    // What this device only applied from an interim leader is not in its
+    // sync_rows: publish it now, numbered in the new epoch, so a device that
+    // skipped that leader still gets it. Same delete-then-insert as trackKey.
+    const imported = conn
+      .prepare(`SELECT tbl, pk FROM sync_imported ORDER BY id`)
+      .all() as { tbl: string; pk: string }[];
+    const forget = conn.prepare(`DELETE FROM sync_rows WHERE tbl = ? AND pk = ?`);
+    const publish = conn.prepare(`INSERT INTO sync_rows(tbl, pk) VALUES(?, ?)`);
+    for (const k of imported) {
+      forget.run(k.tbl, k.pk);
+      publish.run(k.tbl, k.pk);
+    }
+    conn.exec(`DELETE FROM sync_imported`);
     // Workers re-seed from the new range and skip what the ledger said was done
     // on the master; this device's own bookkeeping would point into the old one.
     conn.exec(`DELETE FROM work_ledger; DELETE FROM consumers;`);

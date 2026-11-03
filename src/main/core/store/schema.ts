@@ -1376,6 +1376,19 @@ const MIGRATIONS: Migration[] = [
       .get();
     if (!have) db.exec(`ALTER TABLE sync_state ADD COLUMN pre_demote_epoch INTEGER`);
   },
+  // v21: relaying. The keys (table, primary key as a JSON array) a follower
+  // applied from a delta, including deletions, kept until it leads. Its
+  // promotion publishes them into sync_rows with fresh cursors so a device
+  // that skipped the interim leader still receives them, then clears the set.
+  // Local, not synced.
+  `
+  CREATE TABLE IF NOT EXISTS sync_imported (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tbl TEXT NOT NULL,
+    pk TEXT NOT NULL,
+    UNIQUE(tbl, pk)
+  );
+  `,
 ];
 
 /**

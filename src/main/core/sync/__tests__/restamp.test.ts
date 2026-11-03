@@ -306,8 +306,49 @@ describe('a follower that skipped an epoch asks a relaying leader', () => {
 });
 
 describe('relaying to a third device (codex review point 5)', () => {
-  it('KNOWN GAP, pinned: what an interim leader changed in a non-document table does not travel on from a device that merely applied it', async () => {
+  it('a device that merely applied an interim leader\'s changes sends them on: an account, a pref change and a deletion', async () => {
     const third = await open('relay-third');
+    try {
+      enableTracking(mac.conn());
+      const a = await mac.store.createAccount({ source: 'test', identifier: 'shared' });
+      const gone = await mac.store.createAccount({ source: 'test', identifier: 'doomed' });
+      await mac.store.commit({ account: a.id as never, documents: [doc('d1')], cursor: null });
+      mac.conn().prepare(`INSERT INTO user_prefs(key, value_json) VALUES('p1', '1')`).run();
+      for (const d of [vm, third]) d.conn().prepare(`UPDATE sync_state SET role = 'follower'`).run();
+      pull(mac, vm);
+      pull(mac, third);
+      expect(names(third)).toContain('doomed');
+      // The VM leads at 14 and changes things that are not documents.
+      promote(vm.conn(), 14);
+      await vm.store.createAccount({ source: 'test', identifier: 'vm-only' });
+      vm.conn().prepare(`UPDATE user_prefs SET value_json = '2' WHERE key = 'p1'`).run();
+      vm.conn().prepare(`DELETE FROM accounts WHERE id = ?`).run(gone.id);
+      // The Mac applies it as a follower, then leads at 15.
+      demote(mac.conn(), 'vm');
+      pull(vm, mac);
+      promote(mac.conn(), 15);
+      expect(names(mac)).toContain('vm-only');
+      // The third device, away through epoch 14, asks the Mac.
+      demote(third.conn(), 'mac');
+      pull(mac, third);
+      expect(state(third).epoch).toBe(15);
+      expect(names(third)).toContain('vm-only');
+      expect(names(third)).not.toContain('doomed');
+      expect(
+        third.conn().prepare(`SELECT value_json AS v FROM user_prefs WHERE key = 'p1'`).get(),
+      ).toEqual({ v: '2' });
+      // The imported set is spent: a second promotion has nothing left to send.
+      expect(
+        mac.conn().prepare(`SELECT count(*) AS n FROM sync_imported`).get(),
+      ).toEqual({ n: 0 });
+    } finally {
+      third.reader.close();
+      await third.db.close();
+    }
+  });
+
+  it('an update to a document that keeps its seq travels on too', async () => {
+    const third = await open('relay-third-doc');
     try {
       enableTracking(mac.conn());
       const a = await mac.store.createAccount({ source: 'test', identifier: 'shared' });
@@ -315,21 +356,20 @@ describe('relaying to a third device (codex review point 5)', () => {
       for (const d of [vm, third]) d.conn().prepare(`UPDATE sync_state SET role = 'follower'`).run();
       pull(mac, vm);
       pull(mac, third);
-      // The VM leads at 14 and changes something that is not a document.
       promote(vm.conn(), 14);
-      await vm.store.createAccount({ source: 'test', identifier: 'vm-only' });
-      // The Mac applies it as a follower, then leads at 15.
+      // Updates that leave seq alone (and a deletion) are tracked, not seq-fed.
+      vm.conn().prepare(`UPDATE documents SET title = 'renamed' WHERE external_id = 'd1'`).run();
+      await vm.store.commit({ account: a.id as never, documents: [doc('d2')], cursor: null });
+      vm.conn().prepare(`DELETE FROM documents WHERE external_id = 'd2'`).run();
       demote(mac.conn(), 'vm');
       pull(vm, mac);
       promote(mac.conn(), 15);
-      expect(names(mac)).toContain('vm-only');
-      // The third device, away through epoch 14, asks the Mac. It is served
-      // (no re-copy), from the lowest grant it skipped...
       demote(third.conn(), 'mac');
       pull(mac, third);
-      expect(state(third).epoch).toBe(15);
-      // ...but the Mac never tracked the account row it only applied.
-      expect(names(third)).not.toContain('vm-only');
+      const titles = (d: Dev) =>
+        d.conn().prepare(`SELECT external_id AS e, title AS t FROM documents ORDER BY e`).all();
+      expect(titles(third)).toEqual(titles(mac));
+      expect(titles(third)).toEqual([{ e: 'd1', t: 'renamed' }]);
     } finally {
       third.reader.close();
       await third.db.close();

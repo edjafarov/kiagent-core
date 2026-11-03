@@ -1726,8 +1726,17 @@ export function createWriteTx(
         stmt.run(...pk);
       };
       const searchedText = conn.prepare(
-        `SELECT title, markdown, languages FROM documents WHERE id = ?`,
+        `SELECT title, markdown, languages, seq FROM documents WHERE id = ?`,
       );
+      // Everything applied here must reach a device that skips this one's
+      // interim leader: kept until this device leads, then published.
+      const noteKey = (tbl: string, pk: unknown[]): void => {
+        conn
+          .prepare(
+            `INSERT OR IGNORE INTO sync_imported(tbl, pk) VALUES(?, json_array(${pk.map(() => '?').join(', ')}))`,
+          )
+          .run(tbl, ...(pk as never[]));
+      };
       const addChange = conn.prepare(
         `INSERT OR IGNORE INTO changes(seq, kind, ref_id, at) VALUES(?, 'document', ?, ?)`,
       );
@@ -1744,6 +1753,7 @@ export function createWriteTx(
         }
         touchedTables.add(e.tbl);
         if (e.op === 'delete') {
+          noteKey(e.tbl, e.pk);
           const id = e.pk[0] as string;
           if (e.tbl === 'documents') {
             ftsDelete(id);
@@ -1762,8 +1772,14 @@ export function createWriteTx(
                 title: string | null;
                 markdown: string | null;
                 languages: string;
+                seq: number;
               }
             | undefined;
+          // A document that moves to a higher seq is found by seq. One that
+          // keeps it (or arrives without one) is found only by its key.
+          if ((e.row.seq as number) <= 0 || (before && (e.row.seq as number) <= before.seq)) {
+            noteKey('documents', [id]);
+          }
           upsertRow('documents', e.row);
           if (
             !before ||
@@ -1781,6 +1797,7 @@ export function createWriteTx(
           if ((e.row.seq as number) > 0)
             addChange.run(e.row.seq, id, deps.now());
         } else {
+          noteKey(e.tbl, keyOf(e.tbl).map((c) => e.row[c]));
           upsertRow(e.tbl, e.row);
         }
       }
