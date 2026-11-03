@@ -75,6 +75,7 @@ import type { MarketplaceCatalog } from './marketplace/catalog';
 import { buildMainApi } from './main-api';
 import { createBusyRegistry } from './core/busy';
 import { wireOutboxPush } from './outbox-push';
+import { wireSyncAppliedPush } from './sync-applied-push';
 import { SYNC_REFUSED_PUSH, wrapForwardedChannels } from './core/sync/forward-core';
 import { runCommitBatch, type CommitInput } from './core/sync/owned';
 import { followerLookup } from './core/sync/role';
@@ -1057,6 +1058,11 @@ app
     const p = platform;
 
     attentionPush = wireAttentionPush(broadcast);
+    // A follower's pages read again when a delta from the leader lands.
+    wireSyncAppliedPush(p.sync, {
+      attentionHint: () => attentionPush?.hint(),
+      broadcast,
+    });
     const attention = createAttentionService({
       db: p.db,
       log: (message) => p.logSink.log('attention', 'warn', message),
