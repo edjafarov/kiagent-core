@@ -262,7 +262,7 @@ describe('the gate', () => {
   });
 
   it('boot gates a joining device', async () => {
-    expect(await readSyncGate(db)).toEqual({ role: 'normal', joining: false, joined: false });
+    expect(await readSyncGate(db)).toEqual({ role: 'normal', joining: false, joined: false, tracking: false });
     conn().prepare(`UPDATE sync_state SET joining = 1`).run();
     const g = await readSyncGate(db);
     expect(g.joining).toBe(true);
