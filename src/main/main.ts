@@ -915,7 +915,7 @@ function registerIpc(
   p.afterPromote(() => syncExtensions(extensions, p));
   // A connector that could not install here is tried again every hour.
   setInterval(() => {
-    if (extensions.failedExtensions().length > 0) void syncExtensions(extensions, p);
+    if (extensions.failedExtensions().length > 0 || extensions.hasPendingExtensionRecords()) void syncExtensions(extensions, p);
   }, EXTENSION_RETRY_MS).unref();
   // What the leader changed in user_prefs arrives by the feed.
   p.sync.onApplied((tables) => {

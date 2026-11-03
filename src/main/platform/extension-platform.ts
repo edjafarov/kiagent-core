@@ -469,6 +469,8 @@ export interface ExtensionPlatform {
   reconcileExtensions(set?: ExtensionsSet): Promise<ReconcileResult>;
   /** Once, on a device that can write: the set from what is installed now. */
   seedExtensionSet(): Promise<void>;
+  /** A user action's set write failed and is waiting for a retry. */
+  hasPendingExtensionRecords(): boolean;
   /** What the last reconcile could not install here, for Settings. */
   failedExtensions(): { id: string; name: string; error: string }[];
   setEnabled(
@@ -2056,7 +2058,7 @@ export function createExtensionPlatform(
     },
   } satisfies Omit<
     ExtensionPlatform,
-    'installFromRef' | 'reconcileExtensions' | 'seedExtensionSet' | 'failedExtensions'
+    'installFromRef' | 'reconcileExtensions' | 'seedExtensionSet' | 'failedExtensions' | 'hasPendingExtensionRecords'
   >;
   // The members below wrap the ones above, so they are added after.
   const full = api as ExtensionPlatform;
@@ -2098,27 +2100,23 @@ export function createExtensionPlatform(
     },
     log: (message) => deps.logSink.log('extensions', 'warn', message),
   });
-  // A record failure must not turn a done action into a failed one: the next
-  // boot's seed or the next write of this id puts the set right.
-  const record = (what: string, p: Promise<void>): Promise<void> =>
-    p.catch((error) =>
-      deps.logSink.log('extensions', 'warn', `could not record ${what} in the extension set: ${String(error)}`),
-    );
   const recordedRef = (id: string): string | undefined => {
     const r = readInstalled(deps.extDir).find((x) => x.id === id);
     return r?.origin === 'marketplace' ? r.ref : undefined;
   };
 
-  full.setEnabled = async (id, enabled) => {
-    const r = await rawSetEnabled(id, enabled);
-    if (r.ok) await record('enabled state', setSync.recordEnabled(id, enabled));
-    return r;
-  };
-  full.uninstall = async (id) => {
-    const r = await rawUninstall(id);
-    if (r.ok) await record('uninstall', setSync.recordUninstalled(id));
-    return r;
-  };
+  // Each action and its recording into the set run on the one queue that
+  // reconcile uses; a failed recording rejects (and is retried later).
+  full.setEnabled = (id, enabled) =>
+    setSync.act(
+      () => rawSetEnabled(id, enabled),
+      () => ({ kind: 'enabled', id, enabled }),
+    );
+  full.uninstall = (id) =>
+    setSync.act(
+      () => rawUninstall(id),
+      () => ({ kind: 'uninstalled', id }),
+    );
   full.installCommit = async (token) => {
     let staged: { ref: string; origin: 'marketplace' | 'dev' } | undefined;
     try {
@@ -2141,14 +2139,16 @@ export function createExtensionPlatform(
         return { ok: false, error: e instanceof Error ? e.message : String(e) };
       }
     }
-    const r = await rawInstallCommit(token);
-    if (r.id) await record('install', setSync.recordInstalled(r.id, recordedRef(r.id)));
-    return r;
+    return setSync.act(
+      () => rawInstallCommit(token),
+      (r) => (r.id ? { kind: 'installed', id: r.id, ref: recordedRef(r.id) } : undefined),
+    );
   };
   full.installFromRef = async (ref) => {
-    const r = await rawInstallFromRef(ref, { grantConsent: true });
-    if (r.id) await record('install', setSync.recordInstalled(r.id, recordedRef(r.id)));
-    return r;
+    return setSync.act(
+      () => rawInstallFromRef(ref, { grantConsent: true }),
+      (r) => (r.id ? { kind: 'installed', id: r.id, ref: recordedRef(r.id) } : undefined),
+    );
   };
   // Before discovery the platform knows of no extension: a seed would write an
   // empty set and a reconcile would install what is already on disk.
@@ -2159,8 +2159,11 @@ export function createExtensionPlatform(
         ? setSync.reconcile(set)
         : setSync.runFromStore();
   full.seedExtensionSet = async () => {
-    if (loaded) await record('the first set', setSync.seed());
+    if (loaded) await setSync.seed().catch((error) =>
+      deps.logSink.log('extensions', 'warn', `could not seed the extension set: ${String(error)}`),
+    );
   };
+  full.hasPendingExtensionRecords = () => setSync.hasPending();
   full.failedExtensions = () =>
     setSync.failed().map((f) => ({
       ...f,

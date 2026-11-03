@@ -44,6 +44,11 @@ export interface ExtensionOps {
   uninstall(id: string): Promise<{ ok: boolean; error?: string }>;
 }
 
+export type PendingRecord =
+  | { kind: 'enabled'; id: string; enabled: boolean }
+  | { kind: 'installed'; id: string; ref: string | undefined }
+  | { kind: 'uninstalled'; id: string };
+
 export interface ReconcileResult {
   installed: string[];
   failed: { id: string; error: string }[];
@@ -80,14 +85,25 @@ export function createExtensionSync(d: {
     return r;
   };
 
+  const pending = new Map<string, PendingRecord>();
+
   const reconcileNow = async (set: ExtensionsSet): Promise<ReconcileResult> => {
     const installed: string[] = [];
     const failed: { id: string; error: string }[] = [];
     const fail = (id: string, error?: string): void => {
       failed.push({ id, error: error ?? 'unknown error' });
     };
+    const applyEnabled = async (id: string, want: boolean): Promise<void> => {
+      const now = ops.list().find((e) => e.id === id);
+      if (now && now.enabled === want) return;
+      const s = await ops.setEnabled(id, want);
+      if (!s.ok) fail(id, s.error);
+    };
     const local = new Map(ops.list().map((e) => [e.id, e]));
+    // Absence never uninstalls: a connector missing from the set is left alone.
     for (const [id, want] of Object.entries(set)) {
+      // A user action here not yet in the set must not be reverted.
+      if (pending.has(id)) continue;
       const have = local.get(id);
       if (!have) {
         if (!want.ref) continue; // a bundled extension this build doesn't ship
@@ -97,19 +113,23 @@ export function createExtensionSync(d: {
           continue;
         }
         installed.push(id);
-        if (!want.enabled) {
-          const s = await ops.setEnabled(id, false);
-          if (!s.ok) fail(id, s.error);
+        await applyEnabled(id, want.enabled);
+      } else if (
+        have.origin === 'marketplace' &&
+        want.ref &&
+        have.ref !== want.ref
+      ) {
+        const r = await ops.installFromRef(want.ref, { grantConsent: true });
+        if (!r.ok) {
+          fail(id, r.error);
+          continue;
         }
+        installed.push(id);
+        await applyEnabled(id, want.enabled);
       } else if (have.enabled !== want.enabled) {
         const s = await ops.setEnabled(id, want.enabled);
         if (!s.ok) fail(id, s.error);
       }
-    }
-    for (const have of local.values()) {
-      if (have.origin !== 'marketplace' || have.id in set) continue;
-      const r = await ops.uninstall(have.id);
-      if (!r.ok) fail(have.id, r.error);
     }
     failedNow = failed;
     for (const f of failed)
@@ -120,28 +140,7 @@ export function createExtensionSync(d: {
   const base = (cur: ExtensionsSet | undefined): ExtensionsSet =>
     cur ?? setFromLocal(ops.list());
 
-  return {
-    /** Bring this device in line with `set`. One at a time; a second call
-     *  waits and finds nothing left to do. */
-    reconcile: (set: ExtensionsSet): Promise<ReconcileResult> =>
-      serial(() => reconcileNow(set)),
-    /** Reconcile to whatever the table holds; nothing before a set exists. */
-    runFromStore: (): Promise<ReconcileResult> =>
-      serial(async () => {
-        const set = store.get();
-        if (!set) return { installed: [], failed: [] };
-        return reconcileNow(set);
-      }),
-    /** The connectors the last reconcile could not install here. */
-    failed: (): { id: string; error: string }[] =>
-      failedNow.map((f) => ({ ...f })),
-    /** Once, on a device that can write: the set from what is installed now.
-     *  An existing row is never replaced. */
-    seed: async (): Promise<void> => {
-      if (!store.canWrite()) return;
-      await store.update((cur) => (cur ? undefined : setFromLocal(ops.list())));
-    },
-    recordEnabled: async (id: string, enabled: boolean): Promise<void> => {
+  const recordEnabled = async (id: string, enabled: boolean): Promise<void> => {
       if (!store.canWrite()) return;
       await store.update((cur) => {
         const next = { ...base(cur) };
@@ -154,24 +153,94 @@ export function createExtensionSync(d: {
         };
         return next;
       });
-    },
-    recordInstalled: async (
+  };
+  const recordInstalled = async (
       id: string,
       ref: string | undefined,
-    ): Promise<void> => {
+  ): Promise<void> => {
       if (!ref || !store.canWrite()) return;
       await store.update((cur) => ({
         ...base(cur),
         [id]: { enabled: true, ref },
       }));
-    },
-    recordUninstalled: async (id: string): Promise<void> => {
+  };
+  const recordUninstalled = async (id: string): Promise<void> => {
       if (!store.canWrite()) return;
       await store.update((cur) => {
         const next = { ...base(cur) };
         delete next[id];
         return next;
       });
-    },
+  };
+
+  const applyRecord = async (p: PendingRecord): Promise<void> => {
+    if (p.kind === 'enabled') return recordEnabled(p.id, p.enabled);
+    if (p.kind === 'installed') return recordInstalled(p.id, p.ref);
+    return recordUninstalled(p.id);
+  };
+  const flushPending = async (): Promise<void> => {
+    for (const [id, p] of [...pending]) {
+      try {
+        await applyRecord(p);
+        pending.delete(id);
+      } catch (e) {
+        d.log(`extension ${id} still could not be recorded in the set: ${String(e)}`);
+      }
+    }
+  };
+
+  return {
+    /** Bring this device in line with `set`. One at a time; a second call
+     *  waits and finds nothing left to do. */
+    reconcile: (set: ExtensionsSet): Promise<ReconcileResult> =>
+      serial(async () => {
+        await flushPending();
+        return reconcileNow(set);
+      }),
+    /** Reconcile to whatever the table holds; nothing before a set exists. */
+    runFromStore: (): Promise<ReconcileResult> =>
+      serial(async () => {
+        await flushPending();
+        const set = store.get();
+        if (!set) return { installed: [], failed: [] };
+        return reconcileNow(set);
+      }),
+    /** The connectors the last reconcile could not install here. */
+    failed: (): { id: string; error: string }[] =>
+      failedNow.map((f) => ({ ...f })),
+    /** Once, on a device that can write: the set from what is installed now.
+     *  An existing row is never replaced. */
+    seed: (): Promise<void> =>
+      serial(async () => {
+        if (!store.canWrite()) return;
+        await store.update((cur) => (cur ? undefined : setFromLocal(ops.list())));
+      }),
+    /** A user action and its recording into the set, on the same queue as
+     *  reconcile. The local op runs first; when it succeeded and the set could
+     *  not be written, the record is kept for a retry and the call rejects. */
+    act: <R extends { ok: boolean }>(
+      op: () => Promise<R>,
+      rec: (r: R) => PendingRecord | undefined,
+    ): Promise<R> =>
+      serial(async () => {
+        const r = await op();
+        if (!r.ok) return r;
+        const p = rec(r);
+        if (!p) return r;
+        pending.set(p.id, p);
+        try {
+          await applyRecord(p);
+          pending.delete(p.id);
+        } catch (e) {
+          throw new Error(
+            `${p.id} was changed on this device but could not be recorded in the extension set (${e instanceof Error ? e.message : String(e)}); it will be retried`,
+          );
+        }
+        return r;
+      }),
+    hasPending: (): boolean => pending.size > 0,
+    recordEnabled,
+    recordInstalled,
+    recordUninstalled,
   };
 }

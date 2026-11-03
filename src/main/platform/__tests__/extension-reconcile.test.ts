@@ -24,8 +24,9 @@ import {
 
 function fakeStore(initial?: ExtensionsSet, writable = true) {
   let value: ExtensionsSet | undefined = initial;
-  const store: ExtensionSetStore & { writes: number; writable: boolean; set(v: ExtensionsSet | undefined): void } = {
+  const store: ExtensionSetStore & { writes: number; writable: boolean; failNext: boolean; set(v: ExtensionsSet | undefined): void } = {
     writable,
+    failNext: false,
     set(v) {
       value = v;
     },
@@ -36,6 +37,10 @@ function fakeStore(initial?: ExtensionsSet, writable = true) {
     },
     async update(fn) {
       if (!this.writable) throw new Error('read only');
+      if (this.failNext) {
+        this.failNext = false;
+        throw new Error('disk full');
+      }
       const next = fn(value);
       if (next !== undefined && JSON.stringify(next) !== JSON.stringify(value)) {
         value = next;
@@ -104,10 +109,26 @@ describe('reconcile', () => {
     expect(ops.calls).toEqual(['install:github:kia-plugins/slack@v2:true', 'enable:kia.slack:false']);
   });
 
-  it('uninstalls a marketplace connector that left the set', async () => {
+  it('never uninstalls a marketplace connector for being absent from the set', async () => {
     const ops = fakeOps([{ id: 'kia.old', origin: 'marketplace', enabled: true, ref: 'github:x/old@1' }]);
     await mk(fakeStore(), ops).reconcile({});
-    expect(ops.calls).toEqual(['uninstall:kia.old']);
+    expect(ops.calls).toEqual([]);
+  });
+
+  it('reinstalls a marketplace connector whose local ref differs from the pinned one, then applies enabled', async () => {
+    const ops = fakeOps([{ id: 'kia.slack', origin: 'marketplace', enabled: true, ref: 'github:kia-plugins/slack@v1' }]);
+    const r = await mk(fakeStore(), ops).reconcile({
+      'kia.slack': { enabled: false, ref: 'github:kia-plugins/slack@v2' },
+    });
+    expect(ops.calls).toEqual(['install:github:kia-plugins/slack@v2:true', 'enable:kia.slack:false']);
+    expect(r.installed).toEqual(['kia.slack']);
+    expect(ops.local.get('kia.slack')?.ref).toBe('github:kia-plugins/slack@v2');
+  });
+
+  it('does not reinstall when the refs match', async () => {
+    const ops = fakeOps([{ id: 'kia.slack', origin: 'marketplace', enabled: true, ref: 'github:kia-plugins/slack@v2' }]);
+    await mk(fakeStore(), ops).reconcile({ 'kia.slack': { enabled: true, ref: 'github:kia-plugins/slack@v2' } });
+    expect(ops.calls).toEqual([]);
   });
 
   it('leaves a bundled extension and a dev install alone when missing from the set', async () => {
@@ -173,6 +194,60 @@ describe('reconcile', () => {
     const set = { 'kia.slack': { enabled: true, ref: 'github:kia-plugins/slack@v2' } };
     await Promise.all([sync.reconcile(set), sync.reconcile(set)]);
     expect(ops.calls.filter((c) => c.startsWith('install'))).toHaveLength(1);
+  });
+});
+
+describe('one queue and recorded actions', () => {
+  it('a reconcile started during a user action reads the set after the action recorded it', async () => {
+    const store = fakeStore({ 'kiagent.people': { enabled: true } });
+    const ops = fakeOps([{ id: 'kiagent.people', origin: 'bundled', enabled: true }]);
+    const sync = mk(store, ops);
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    const act = sync.act(
+      async () => {
+        await gate;
+        ops.local.get('kiagent.people')!.enabled = false;
+        return { ok: true };
+      },
+      () => ({ kind: 'enabled', id: 'kiagent.people', enabled: false }),
+    );
+    const rec = sync.runFromStore();
+    release();
+    await act;
+    await rec;
+    expect(store.get()).toEqual({ 'kiagent.people': { enabled: false } });
+    expect(ops.calls).toEqual([]); // reconcile did not flip it back
+  });
+
+  it('a failed set write rejects the action, keeps a pending record, and the next reconcile retries it', async () => {
+    const store = fakeStore({ 'kiagent.people': { enabled: true } });
+    const ops = fakeOps([{ id: 'kiagent.people', origin: 'bundled', enabled: true }]);
+    const sync = mk(store, ops);
+    store.failNext = true;
+    await expect(
+      sync.act(
+        async () => {
+          ops.local.get('kiagent.people')!.enabled = false;
+          return { ok: true };
+        },
+        () => ({ kind: 'enabled', id: 'kiagent.people', enabled: false }),
+      ),
+    ).rejects.toThrow(/could not be recorded in the extension set/);
+    expect(sync.hasPending()).toBe(true);
+    expect(store.get()).toEqual({ 'kiagent.people': { enabled: true } });
+    await sync.runFromStore();
+    expect(sync.hasPending()).toBe(false);
+    expect(store.get()).toEqual({ 'kiagent.people': { enabled: false } });
+    expect(ops.calls).toEqual([]); // never reverted the user's change
+  });
+
+  it('does not record when the local op failed', async () => {
+    const store = fakeStore({});
+    const sync = mk(store, fakeOps([]));
+    const r = await sync.act(async () => ({ ok: false }), () => ({ kind: 'uninstalled', id: 'x' }));
+    expect(r.ok).toBe(false);
+    expect(store.writes).toBe(0);
   });
 });
 
@@ -413,7 +488,7 @@ describe('platform wiring', () => {
     expect(setStore.get()).toEqual({});
   });
 
-  it('reconcile installs a missing connector from the set with consent, then uninstalls it when it leaves', async () => {
+  it('reconcile installs a missing connector from the set with consent, then leaves it alone when it leaves the set', async () => {
     sync.readOnly.mockReturnValue(true); // a follower: nothing is recorded
     setStore.writable = false;
     const r = await platform.reconcileExtensions({ 'test.basic': { enabled: true, ref: REF } });
@@ -423,7 +498,22 @@ describe('platform wiring', () => {
     await platform.reconcileExtensions({ 'test.basic': { enabled: false, ref: REF } });
     expect(enabled('test.basic')).toBe(false);
     await platform.reconcileExtensions({});
-    expect(platform.snapshot().some((e) => e.id === 'test.basic')).toBe(false);
+    expect(platform.snapshot().some((e) => e.id === 'test.basic')).toBe(true); // absence never uninstalls
+    expect((await platform.uninstall('test.basic')).ok).toBe(true);
     setStore.writable = true;
+  });
+
+  it('setEnabled whose set write fails rejects with a clear message, and the next reconcile records it', async () => {
+    setStore.set({ 'test.fwd': { enabled: true } });
+    await platform.setEnabled('test.fwd', true);
+    setStore.failNext = true;
+    await expect(platform.setEnabled('test.fwd', false)).rejects.toThrow(/could not be recorded in the extension set/);
+    expect(enabled('test.fwd')).toBe(false);
+    expect(platform.hasPendingExtensionRecords()).toBe(true);
+    await platform.reconcileExtensions();
+    expect(platform.hasPendingExtensionRecords()).toBe(false);
+    expect(setStore.get()).toEqual({ 'test.fwd': { enabled: false } });
+    expect(enabled('test.fwd')).toBe(false);
+    await platform.setEnabled('test.fwd', true);
   });
 });
