@@ -216,6 +216,14 @@ test('fakeSession: explicit null credentials stay null', async () => {
   assert.equal(await fakeSession({ credentials: null }).credentials(), null);
 });
 
+test('fakeSession: saveCredentials replaces the login and records each save', async () => {
+  const s = fakeSession({ credentials: { password: 'pw' } });
+  assert.deepEqual(s.saved, []);
+  await s.saveCredentials({ secret: 'blob' });
+  assert.deepEqual(await s.credentials(), { secret: 'blob' });
+  assert.deepEqual(s.saved, [{ secret: 'blob' }]);
+});
+
 test('fakeSession: log() records [level, msg] tuples into .logs', () => {
   const s = fakeSession();
   assert.deepEqual(s.logs, []);

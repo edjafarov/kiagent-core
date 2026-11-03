@@ -129,15 +129,18 @@ export function scriptedFetch(
 }
 
 /** A Session for pull/backfill tests. `.logs` collects every `log()` call as a
- *  `[level, msg]` tuple, so a test can assert on what the source reported. */
+ *  `[level, msg]` tuple, so a test can assert on what the source reported.
+ *  `.saved` lists every `saveCredentials()` call. */
 export function fakeSession(
   overrides: {
     account?: Partial<Account>;
     credentials?: Credentials | null;
     signal?: AbortSignal;
   } = {},
-): Session & { logs: [LogLevel, string][] } {
+): Session & { logs: [LogLevel, string][]; saved: Credentials[] } {
   const logs: [LogLevel, string][] = [];
+  const saved: Credentials[] = [];
+  let current: Credentials | null = overrides.credentials ?? null;
   const account: Account = {
     id: 'acct-1',
     source: 'test',
@@ -153,11 +156,17 @@ export function fakeSession(
     // A fresh controller's signal is never aborted and never garbage —
     // sources that pass it to fetch/abort checks see a live, open session.
     signal: overrides.signal ?? new AbortController().signal,
-    credentials: async () => overrides.credentials ?? null,
+    credentials: async () => current,
+    // The real verb replaces the vault row; `saved` lists every call.
+    saveCredentials: async (c: Credentials) => {
+      current = c;
+      saved.push(c);
+    },
     log: (level: LogLevel, msg: string) => {
       logs.push([level, msg]);
     },
     logs,
+    saved,
   };
 }
 
