@@ -201,6 +201,16 @@ it('an online edit over a queued key replaces the row and the drain delivers onl
   ]);
 });
 
+it('a forwarded set-enabled over an acknowledged one drops the old optimistic entry', async () => {
+  const w = await wire();
+  await w.table['extension:set-enabled']({ id: 'conn.a', enabled: true });
+  w.svc.setForwarder(async () => ({ ok: true, value: { ok: true } }));
+  await w.svc.drainOutbound(); // acknowledged: held as optimistic
+  expect(w.prefs.getCore(EXTENSIONS_KEY)).toEqual({ 'conn.a': { enabled: true } });
+  await w.table['extension:set-enabled']({ id: 'conn.a', enabled: false });
+  expect(w.prefs.getCore(EXTENSIONS_KEY)).not.toEqual({ 'conn.a': { enabled: true } });
+});
+
 it('delivery: the drain sends the row, the ack drops the overlay, the value is held until a later delta', async () => {
   const w = await wire();
   await w.prefs.patch({ theme: 'dark' });

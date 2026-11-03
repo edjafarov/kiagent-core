@@ -76,6 +76,8 @@ export type OfflineHandler = ((req: unknown, runLocal: () => unknown) => Promise
    *  then goes through the queue without asking the leader, so it replaces
    *  that row instead of racing it. */
   held?: (req: unknown) => boolean;
+  /** Called after the leader took the request directly. */
+  forwarded?: (req: unknown) => void;
 };
 export type OfflineHandlers = Partial<Record<ForwardedChannel, OfflineHandler>>;
 
@@ -105,7 +107,9 @@ export function wrapForwardedChannels(
         if (!sync.readOnly()) return fn(req);
         if (whenOffline.held?.(req)) return whenOffline(req, () => fn(req));
         try {
-          return await forwardCore(sync, channel, req);
+          const out = await forwardCore(sync, channel, req);
+          whenOffline.forwarded?.(req);
+          return out;
         } catch (err) {
           if (err instanceof SyncNoMaster) return whenOffline(req, () => fn(req));
           throw err;

@@ -28,6 +28,7 @@ export function installOfflineSettings(
     return r;
   };
   setEnabled.held = (req) => prefs.hasQueued(extensionEnabledKey((req as { id: string }).id));
+  setEnabled.forwarded = (req) => prefs.dropOptimistic(extensionEnabledKey((req as { id: string }).id));
   return { 'extension:set-enabled': setEnabled };
 }
 

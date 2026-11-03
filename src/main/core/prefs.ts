@@ -200,6 +200,9 @@ export interface CorePrefs extends Prefs {
   /** Is a change of `key` waiting in the queue? A newer edit then goes
    *  through the queue too, so it replaces the row instead of racing it. */
   hasQueued(key: string): boolean;
+  /** A newer value for `key` went straight to the leader: forget the copy of
+   *  an older acknowledged one. */
+  dropOptimistic(key: string): void;
   /** An extension switch changed with no leader: queued under
    *  `core.extensions.<id>` and shown by `getCore('core.extensions')`. */
   queueExtensionEnabled(id: string, enabled: boolean): Promise<void>;
@@ -511,6 +514,7 @@ export function createPrefs(dir: string, user?: UserPrefsStore): CorePrefs {
         await seedLocked();
       }),
     hasQueued: (key) => overlay.has(key),
+    dropOptimistic: (key) => void optimistic.delete(key),
     setOfflineQueue(q) {
       queue = q;
     },
