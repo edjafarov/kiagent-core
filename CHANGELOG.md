@@ -1,5 +1,36 @@
 # Changelog
 
+## [0.119.0](https://github.com/edjafarov/kiagent-core/compare/v0.118.2...v0.119.0) (2026-11-04)
+
+### Added
+
+- Multi-device sync, steps 2 to 6 (still off until a bundled extension turns it on):
+  - a device joins by itself and takes over leadership while running;
+  - logins travel versioned over the sync channel;
+  - edits from any device are forwarded to the leader;
+  - device-owned accounts write locally and deliver to the leader;
+  - user settings and enabled extensions follow the user (`host.prefs`, `user_prefs`);
+  - settings changed while no leader is reachable apply locally and queue until the leader acks them.
+- Settings can ask which connectors failed to install on this device, and whether a device has logins to move.
+- A compiled test gate (`KIA_SMOKE_HOOKS`) lets a smoke build reach one literal loopback port. Normal builds never carry it.
+- Platform API 2.19.0.
+
+### Fixed
+
+- Split-brain after a takeover: lease eligibility follows the head epoch, and a new leader re-sends imported rows only when another device could lack them.
+- A promotion made while fenced stays closed until the fence lifts. A master that wakes with tracking on starts fenced.
+- An account another device owns never runs here.
+
+### Migration
+
+- Schema v14 to v22, all additive:
+  - joining state, takeover epochs and versioned vault rows;
+  - `sync_outbound` for edits and owned results;
+  - `user_prefs`;
+  - the split-brain and relay bookkeeping;
+  - `coalesce_key` for the settings queue.
+- No existing column changes.
+
 ## [0.118.2](https://github.com/edjafarov/kiagent-core/compare/v0.118.1...v0.118.2) (2026-11-02)
 
 ### Bug Fixes
