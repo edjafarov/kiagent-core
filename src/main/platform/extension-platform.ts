@@ -105,7 +105,8 @@ import {
 import { reconcileDeclaredRoots } from './declared-roots';
 import type { FileRootRegistry } from './file-roots';
 import { createScopedFiles } from './scoped-files';
-import { createNetworkService } from './network-service';
+import { createNetworkService, scopedTestNetFetch } from './network-service';
+import { KIA_TEST_HOOKS, KIA_TEST_HOOKS_SENTINEL } from './test-hooks';
 import type { NetworkService } from './network-service';
 import { createInMemoryHostPair, type HostTransport } from './transport';
 import { runExtensionHost } from './extension-host-entry';
@@ -1148,6 +1149,8 @@ export function createExtensionPlatform(
             opened = true;
           }
           const serviceOwner = `${e.manifest.id}:${owner.handle ?? 'host'}`;
+          if (KIA_TEST_HOOKS_SENTINEL)
+            deps.logSink.log('extensions', 'info', KIA_TEST_HOOKS_SENTINEL);
           network = e.manifest.caps.includes('net')
             ? (deps.networkFactory?.(
                 serviceOwner,
@@ -1156,6 +1159,13 @@ export function createExtensionPlatform(
               createNetworkService({
                 owner: serviceOwner,
                 signal: context?.signal,
+                // Compiled test builds only, remote-mcp only, one literal
+                // 127.0.0.1:<port>; undefined (default guard) otherwise.
+                fetch: scopedTestNetFetch(
+                  e.manifest.id,
+                  process.env,
+                  KIA_TEST_HOOKS,
+                ),
                 log: (event) =>
                   deps.logSink.log(
                     'extensions',

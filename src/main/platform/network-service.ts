@@ -1,5 +1,6 @@
 import {
   createNetFetch,
+  testNetAllow,
   type NetFetchInit,
   type NetFetchResult,
 } from './net-guard';
@@ -180,4 +181,23 @@ export function createNetworkService(
       owner.dispose();
     },
   };
+}
+
+/** Extension that may use the compiled test-build loopback allowance. */
+const TEST_NET_EXTENSION = 'kiagent.remote-mcp';
+
+/**
+ * A guarded fetch carrying the test loopback allowance, for the one extension
+ * allowed to have it. Undefined (use the default guard) for every other
+ * extension, and whenever the compiled `gate` or the env is off.
+ */
+export function scopedTestNetFetch(
+  extensionId: string,
+  env: Record<string, string | undefined>,
+  gate: boolean,
+): ((url: string, init?: NetFetchInit) => Promise<NetFetchResult>) | undefined {
+  if (extensionId !== TEST_NET_EXTENSION) return undefined;
+  const allowLoopbackPort = testNetAllow(env, gate);
+  if (allowLoopbackPort === undefined) return undefined;
+  return createNetFetch({ allowLoopbackPort });
 }

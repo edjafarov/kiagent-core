@@ -1,4 +1,6 @@
 /** @jest-environment node */
+import http from 'node:http';
+import type { AddressInfo } from 'node:net';
 import { MAX_FETCH_BYTES } from '@shared/file-indexability';
 import {
   assertPublicHostname,
@@ -8,8 +10,10 @@ import {
   normalizeAddress,
   NetDestinationError,
   pinnedDispatcher,
+  testNetAllow,
   type LookupFn,
 } from '../net-guard';
+import { scopedTestNetFetch } from '../network-service';
 
 /** Resolves every name to fixed answers; no DNS in these tests. */
 function stubLookup(map: Record<string, string[]>): LookupFn {
@@ -355,5 +359,202 @@ describe('pinnedDispatcher', () => {
       process.off('uncaughtException', onUncaught);
       await dispatcher.close();
     }
+  });
+});
+
+describe('test loopback allowance (compiled gate)', () => {
+  const servers: http.Server[] = [];
+  const seen: string[] = [];
+  async function listen(
+    handler?: http.RequestListener,
+  ): Promise<{ port: number }> {
+    const server = http.createServer(
+      handler ??
+        ((req, res) => {
+          seen.push(`${req.headers.host}${req.url}`);
+          res.end('ok');
+        }),
+    );
+    await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));
+    servers.push(server);
+    return { port: (server.address() as AddressInfo).port };
+  }
+  afterEach(async () => {
+    seen.length = 0;
+    await Promise.all(
+      servers.splice(0).map((s) => new Promise((r) => s.close(r))),
+    );
+  });
+  const noLookup: LookupFn = async (h) => {
+    throw new Error(`unexpected lookup for ${h}`);
+  };
+  const text = (b: Uint8Array) => Buffer.from(b).toString();
+
+  it('refuses 127.0.0.1:<port> by default', async () => {
+    const { port } = await listen();
+    const f = createNetFetch({ lookup: noLookup });
+    await expect(f(`http://127.0.0.1:${port}/`)).rejects.toThrow(
+      NetDestinationError,
+    );
+    expect(seen).toEqual([]);
+  });
+
+  it('allows exactly 127.0.0.1:<port> when the allowance is on', async () => {
+    const { port } = await listen();
+    const f = createNetFetch({ lookup: noLookup, allowLoopbackPort: port });
+    const r = await f(`http://127.0.0.1:${port}/x`);
+    expect(r.status).toBe(200);
+    expect(text(r.body)).toBe('ok');
+    expect(seen).toEqual([`127.0.0.1:${port}/x`]);
+  });
+
+  it.each([
+    ['localhost', (p: number) => `http://localhost:${p}/`],
+    ['0.0.0.0', (p: number) => `http://0.0.0.0:${p}/`],
+    ['::1', (p: number) => `http://[::1]:${p}/`],
+    ['127.0.0.2', (p: number) => `http://127.0.0.2:${p}/`],
+  ])('refuses %s even when 127.0.0.1:<port> is allowed', async (_n, mk) => {
+    const { port } = await listen();
+    const f = createNetFetch({
+      lookup: stubLookup({ localhost: ['127.0.0.1'] }),
+      allowLoopbackPort: port,
+    });
+    await expect(f(mk(port))).rejects.toThrow(NetDestinationError);
+    expect(seen).toEqual([]);
+  });
+
+  it('refuses another loopback port', async () => {
+    const a = await listen();
+    const b = await listen();
+    const f = createNetFetch({ lookup: noLookup, allowLoopbackPort: a.port });
+    await expect(f(`http://127.0.0.1:${b.port}/`)).rejects.toThrow(
+      NetDestinationError,
+    );
+    expect(seen).toEqual([]);
+  });
+
+  it('refuses 169.254.169.254 and 10.0.0.1 with the allowance on', async () => {
+    const { port } = await listen();
+    const f = createNetFetch({ lookup: noLookup, allowLoopbackPort: port });
+    await expect(f(`http://169.254.169.254:${port}/`)).rejects.toThrow(
+      NetDestinationError,
+    );
+    await expect(f(`http://10.0.0.1:${port}/`)).rejects.toThrow(
+      NetDestinationError,
+    );
+  });
+
+  it('a redirect from the allowed port to another loopback port is refused', async () => {
+    const other = await listen();
+    const a = await listen((req, res) => {
+      res.writeHead(302, { location: `http://127.0.0.1:${other.port}/` });
+      res.end();
+    });
+    const f = createNetFetch({ lookup: noLookup, allowLoopbackPort: a.port });
+    await expect(f(`http://127.0.0.1:${a.port}/`)).rejects.toThrow(
+      NetDestinationError,
+    );
+    expect(seen).toEqual([]);
+  });
+
+  it('a redirect from the allowed port to a private address is refused', async () => {
+    const a = await listen((req, res) => {
+      res.writeHead(302, { location: 'http://10.0.0.1/' });
+      res.end();
+    });
+    const f = createNetFetch({ lookup: noLookup, allowLoopbackPort: a.port });
+    await expect(f(`http://127.0.0.1:${a.port}/`)).rejects.toThrow(
+      NetDestinationError,
+    );
+  });
+
+  it('a redirect on the allowed origin itself is followed', async () => {
+    const a = await listen((req, res) => {
+      if (req.url === '/start') {
+        res.writeHead(302, { location: '/end' });
+        res.end();
+      } else res.end('landed');
+    });
+    const f = createNetFetch({ lookup: noLookup, allowLoopbackPort: a.port });
+    const r = await f(`http://127.0.0.1:${a.port}/start`);
+    expect(text(r.body)).toBe('landed');
+  });
+
+  it('a redirect from a public stub to the allowed port is refused', async () => {
+    const a = await listen();
+    const fetchImpl = jest.fn(async () =>
+      res(302, { location: `http://127.0.0.1:${a.port}/` }),
+    );
+    const f = createNetFetch({
+      lookup: stubLookup({ 'pub.example': ['93.184.216.34'] }),
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+      allowLoopbackPort: a.port,
+    });
+    await expect(f('http://pub.example/')).rejects.toThrow(NetDestinationError);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(seen).toEqual([]);
+  });
+
+  it('the request is made through the pinned dispatcher', async () => {
+    const { port } = await listen();
+    const calls: Array<[string, string[]]> = [];
+    const f = createNetFetch({
+      lookup: noLookup,
+      allowLoopbackPort: port,
+      dispatcherFactory: (hostname, addresses) => {
+        calls.push([hostname, addresses]);
+        return pinnedDispatcher(hostname, addresses);
+      },
+    });
+    await f(`http://127.0.0.1:${port}/`);
+    expect(calls).toEqual([['127.0.0.1', ['127.0.0.1']]]);
+  });
+
+  describe('testNetAllow', () => {
+    const env = { KIA_TEST_SYNC: '1', KIA_TEST_NET_ALLOW: '127.0.0.1:4242' };
+    it('is undefined when the gate is false, whatever the env says', () => {
+      expect(testNetAllow(env, false)).toBeUndefined();
+    });
+    it('needs KIA_TEST_SYNC=1 as well', () => {
+      expect(
+        testNetAllow({ KIA_TEST_NET_ALLOW: '127.0.0.1:4242' }, true),
+      ).toBeUndefined();
+    });
+    it('parses only the literal 127.0.0.1:<port>', () => {
+      expect(testNetAllow(env, true)).toBe(4242);
+      for (const v of [
+        'localhost:4242',
+        '127.0.0.2:4242',
+        '0.0.0.0:4242',
+        '127.0.0.1',
+        '127.0.0.1:0',
+        '127.0.0.1:99999',
+        '127.0.0.1:42x',
+        '',
+      ])
+        expect(
+          testNetAllow({ KIA_TEST_SYNC: '1', KIA_TEST_NET_ALLOW: v }, true),
+        ).toBeUndefined();
+    });
+  });
+
+  describe('scopedTestNetFetch', () => {
+    const env = { KIA_TEST_SYNC: '1', KIA_TEST_NET_ALLOW: '127.0.0.1:4242' };
+    it('applies to kiagent.remote-mcp only', () => {
+      expect(scopedTestNetFetch('kiagent.remote-mcp', env, true)).toBeDefined();
+      expect(
+        scopedTestNetFetch('kiagent.documents', env, true),
+      ).toBeUndefined();
+      expect(
+        scopedTestNetFetch('kiagent.remote-mcp', env, false),
+      ).toBeUndefined();
+    });
+    it('an extension other than remote-mcp is still refused', async () => {
+      const { port } = await listen();
+      const e = { KIA_TEST_SYNC: '1', KIA_TEST_NET_ALLOW: `127.0.0.1:${port}` };
+      const ok = scopedTestNetFetch('kiagent.remote-mcp', e, true)!;
+      expect((await ok(`http://127.0.0.1:${port}/`)).status).toBe(200);
+      expect(scopedTestNetFetch('kiagent.people', e, true)).toBeUndefined();
+    });
   });
 });

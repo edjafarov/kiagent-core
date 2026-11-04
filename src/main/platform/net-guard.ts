@@ -173,11 +173,44 @@ export async function assertPublicHostname(
   await validatedAddresses(hostname, lookup);
 }
 
+/** The one literal host a compiled test build may reach. */
+const TEST_LOOPBACK_HOST = '127.0.0.1';
+
+/**
+ * Parses `KIA_TEST_NET_ALLOW=127.0.0.1:<port>` into the single port the net
+ * guard may let through. Undefined unless `gate` (the COMPILED constant
+ * `__KIA_TEST_HOOKS__`) is true AND `KIA_TEST_SYNC=1`; the env alone never
+ * enables anything.
+ */
+export function testNetAllow(
+  env: Record<string, string | undefined>,
+  gate: boolean,
+): number | undefined {
+  if (gate !== true || env.KIA_TEST_SYNC !== '1') return undefined;
+  const m = /^127\.0\.0\.1:(\d{1,5})$/.exec(env.KIA_TEST_NET_ALLOW ?? '');
+  if (!m) return undefined;
+  const port = Number(m[1]);
+  return port >= 1 && port <= 65535 ? port : undefined;
+}
+
+/** Effective port of a parsed URL (the default for its scheme if implicit). */
+function effectivePort(url: URL): number {
+  if (url.port) return Number(url.port);
+  return url.protocol === 'https:' ? 443 : 80;
+}
+
 async function validatedAddresses(
   hostname: string,
   lookup: LookupFn,
+  destination?: { port: number; allowLoopbackPort?: number },
 ): Promise<string[]> {
   const bare = hostname.replace(/^\[|\]$/g, '');
+  if (
+    destination?.allowLoopbackPort !== undefined &&
+    bare === TEST_LOOPBACK_HOST &&
+    destination.port === destination.allowLoopbackPort
+  )
+    return [TEST_LOOPBACK_HOST];
   if (net.isIP(bare) !== 0) {
     const reason = classifyAddress(bare);
     if (reason) {
@@ -393,6 +426,10 @@ export interface NetFetchOptions {
   fetchImpl?: typeof fetch;
   maxBytes?: number;
   maxRedirects?: number;
+  /** Compiled-test-build only (see `testNetAllow`): the one port of the
+   *  literal `127.0.0.1` the guard lets through, on the first hop and on every
+   *  redirect, via the same validation and pinned dispatcher. */
+  allowLoopbackPort?: number;
   /** Test seam; production uses an undici Agent pinned to validated answers. */
   dispatcherFactory?: (hostname: string, addresses: string[]) => unknown;
 }
@@ -436,6 +473,7 @@ export function createNetFetch(options: NetFetchOptions = {}) {
     fetchImpl = fetch,
     maxBytes = MAX_NET_FETCH_BYTES,
     maxRedirects = MAX_NET_FETCH_REDIRECTS,
+    allowLoopbackPort,
     dispatcherFactory = (hostname, addresses) =>
       pinnedDispatcher(hostname, addresses),
   } = options;
@@ -464,7 +502,10 @@ export function createNetFetch(options: NetFetchOptions = {}) {
           throw new NetDestinationError('net.fetch only supports http(s) URLs');
         return {
           parsed,
-          addresses: await validatedAddresses(parsed.hostname, lookup),
+          addresses: await validatedAddresses(parsed.hostname, lookup, {
+            port: effectivePort(parsed),
+            allowLoopbackPort,
+          }),
         };
       })(),
       signal,
@@ -472,6 +513,10 @@ export function createNetFetch(options: NetFetchOptions = {}) {
     const { parsed: initialUrl, addresses: initialAddresses } = initial;
     const { origin } = initialUrl;
     let addresses = initialAddresses;
+    const startedOnAllowedLoopback =
+      allowLoopbackPort !== undefined &&
+      initialUrl.hostname === TEST_LOOPBACK_HOST &&
+      effectivePort(initialUrl) === allowLoopbackPort;
 
     for (let hop = 0; ; hop += 1) {
       // eslint-disable-next-line no-await-in-loop
@@ -523,7 +568,14 @@ export function createNetFetch(options: NetFetchOptions = {}) {
               'net.fetch only supports http(s) URLs',
             );
           const nextAddresses = await raceAbort(
-            validatedAddresses(parsed.hostname, lookup),
+            validatedAddresses(parsed.hostname, lookup, {
+              port: effectivePort(parsed),
+              // A redirect may stay on the allowed loopback origin but a
+              // public destination must never bounce a request onto it.
+              allowLoopbackPort: startedOnAllowedLoopback
+                ? allowLoopbackPort
+                : undefined,
+            }),
             signal,
           );
           if (parsed.origin !== origin) {
