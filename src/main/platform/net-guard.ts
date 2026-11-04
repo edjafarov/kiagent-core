@@ -199,17 +199,61 @@ function effectivePort(url: URL): number {
   return url.protocol === 'https:' ? 443 : 80;
 }
 
+/** The test allowance for one fetch: `live` is revoked for good the moment any
+ *  hop is not the allowed origin. */
+interface LoopbackAllowance {
+  port: number | undefined;
+  live: boolean;
+}
+
+const RAW_AUTHORITY = /^(?:[a-z][a-z0-9+.-]*:)?\/\/([^/?#\\]*)/i;
+
+/**
+ * True only when the allowance is still live and the destination is spelled
+ * exactly `127.0.0.1:<port>` in the RAW input. WHATWG `URL` collapses `127.1`,
+ * `2130706433`, `0x7f000001`, `127.000.000.001` and `[::ffff:127.0.0.1]` to
+ * 127.0.0.1, so the normalised host cannot tell them apart. A relative
+ * redirect (no authority) stays on the current origin and so inherits the
+ * allowance.
+ */
+function onAllowedLoopback(
+  raw: string,
+  parsed: URL,
+  allow: LoopbackAllowance,
+): boolean {
+  if (!allow.live || allow.port === undefined) return false;
+  const authority = RAW_AUTHORITY.exec(raw)?.[1];
+  if (authority === undefined) return true;
+  return (
+    authority === `${TEST_LOOPBACK_HOST}:${allow.port}` &&
+    parsed.hostname === TEST_LOOPBACK_HOST &&
+    effectivePort(parsed) === allow.port
+  );
+}
+
+/**
+ * The ONE per-hop destination check, used for the first hop and every
+ * redirect: decides whether the hop is the allowed loopback origin (revoking
+ * the allowance permanently if it is not), then validates the addresses.
+ */
+async function validateHop(
+  raw: string,
+  parsed: URL,
+  lookup: LookupFn,
+  allow: LoopbackAllowance,
+): Promise<string[]> {
+  const onAllowed = onAllowedLoopback(raw, parsed, allow);
+  if (!onAllowed) allow.live = false;
+  return validatedAddresses(parsed.hostname, lookup, onAllowed);
+}
+
 async function validatedAddresses(
   hostname: string,
   lookup: LookupFn,
-  destination?: { port: number; allowLoopbackPort?: number },
+  loopbackAllowed = false,
 ): Promise<string[]> {
   const bare = hostname.replace(/^\[|\]$/g, '');
-  if (
-    destination?.allowLoopbackPort !== undefined &&
-    bare === TEST_LOOPBACK_HOST &&
-    destination.port === destination.allowLoopbackPort
-  )
+  if (loopbackAllowed && bare === TEST_LOOPBACK_HOST)
     return [TEST_LOOPBACK_HOST];
   if (net.isIP(bare) !== 0) {
     const reason = classifyAddress(bare);
@@ -486,6 +530,10 @@ export function createNetFetch(options: NetFetchOptions = {}) {
     const { signal } = i;
     if (signal?.aborted) throw abortError();
     let target = String(url);
+    const allow: LoopbackAllowance = {
+      port: allowLoopbackPort,
+      live: allowLoopbackPort !== undefined,
+    };
     let { method, body } = i;
     let headers = { ...(i.headers ?? {}) };
     const initial = await raceAbort(
@@ -502,10 +550,7 @@ export function createNetFetch(options: NetFetchOptions = {}) {
           throw new NetDestinationError('net.fetch only supports http(s) URLs');
         return {
           parsed,
-          addresses: await validatedAddresses(parsed.hostname, lookup, {
-            port: effectivePort(parsed),
-            allowLoopbackPort,
-          }),
+          addresses: await validateHop(target, parsed, lookup, allow),
         };
       })(),
       signal,
@@ -513,10 +558,6 @@ export function createNetFetch(options: NetFetchOptions = {}) {
     const { parsed: initialUrl, addresses: initialAddresses } = initial;
     const { origin } = initialUrl;
     let addresses = initialAddresses;
-    const startedOnAllowedLoopback =
-      allowLoopbackPort !== undefined &&
-      initialUrl.hostname === TEST_LOOPBACK_HOST &&
-      effectivePort(initialUrl) === allowLoopbackPort;
 
     for (let hop = 0; ; hop += 1) {
       // eslint-disable-next-line no-await-in-loop
@@ -568,14 +609,7 @@ export function createNetFetch(options: NetFetchOptions = {}) {
               'net.fetch only supports http(s) URLs',
             );
           const nextAddresses = await raceAbort(
-            validatedAddresses(parsed.hostname, lookup, {
-              port: effectivePort(parsed),
-              // A redirect may stay on the allowed loopback origin but a
-              // public destination must never bounce a request onto it.
-              allowLoopbackPort: startedOnAllowedLoopback
-                ? allowLoopbackPort
-                : undefined,
-            }),
+            validateHop(location, parsed, lookup, allow),
             signal,
           );
           if (parsed.origin !== origin) {
