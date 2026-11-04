@@ -598,6 +598,41 @@ describe('test loopback allowance (compiled gate)', () => {
       expect(seen).toEqual([]);
     });
 
+    it.each([
+      ['tab in the scheme', 'ht\ttp://127.1:{p}/x'],
+      ['tab after the slash', '/\t/127.1:{p}/x'],
+      ['CR in the scheme', 'ht\rtp://127.1:{p}/x'],
+      ['LF in the scheme', 'ht\ntp://127.1:{p}/x'],
+      ['CR after the slash', '/\r/127.1:{p}/x'],
+      ['LF after the slash', '/\n/127.1:{p}/x'],
+      ['tab inside the literal host', 'http://127.0.0.\t1:{p}/x'],
+      ['space in an otherwise exact literal', 'http://127.0.0.1:{p}/a b'],
+    ])('a redirect Location with an embedded control (%s) is refused', async (_n, tpl) => {
+      const target = await listen();
+      // Real Response headers reject raw CR/LF, so drive the guard through a
+      // stubbed fetch that returns the Location verbatim.
+      const fetchImpl = jest.fn(async (u: string, init?: RequestInit) => {
+        if (u.endsWith('/start'))
+          return res(302, { location: tpl.replace('{p}', String(target.port)) });
+        return fetch(u, init);
+      });
+      const f = createNetFetch({
+        lookup: noLookup,
+        fetchImpl: fetchImpl as unknown as typeof fetch,
+        allowLoopbackPort: target.port,
+      });
+      await expect(f(`http://127.0.0.1:${target.port}/start`)).rejects.toThrow();
+      expect(seen).toEqual([]);
+    });
+
+    it('a tab in a first-hop input is refused', async () => {
+      const { port } = await listen();
+      const f = createNetFetch({ lookup: noLookup, allowLoopbackPort: port });
+      await expect(f(`http://127.0.0.1:${port}/a\tb`)).rejects.toThrow(NetDestinationError);
+      await expect(f(`ht\ttp://127.0.0.1:${port}/`)).rejects.toThrow(NetDestinationError);
+      expect(seen).toEqual([]);
+    });
+
     it.each(['\\\\public.example/hop', '//public.example/hop', '/\\public.example/hop'])(
       'loopback -> %s -> loopback is refused (the backslash hop revokes)',
       async (hopLocation) => {
