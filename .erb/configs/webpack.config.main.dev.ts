@@ -63,8 +63,8 @@ const configuration: webpack.Configuration = {
 
     new webpack.DefinePlugin({
       'process.type': '"browser"',
-      // Compiled test-hooks gate: true only for KIA_TEST_BUILD=1 builds.
-      __KIA_TEST_HOOKS__: JSON.stringify(process.env.KIA_TEST_BUILD === '1'),
+      // Compiled test-hooks gate: true only for KIA_SMOKE_HOOKS=1 builds.
+      __KIA_TEST_HOOKS__: JSON.stringify(process.env.KIA_SMOKE_HOOKS === '1'),
       ...oauthEnvDefines(),
     }),
 

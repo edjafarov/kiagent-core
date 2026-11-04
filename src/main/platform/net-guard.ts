@@ -206,43 +206,68 @@ interface LoopbackAllowance {
   live: boolean;
 }
 
-const RAW_AUTHORITY = /^(?:[a-z][a-z0-9+.-]*:)?\/\/([^/?#\\]*)/i;
+/** Characters a genuinely relative redirect may not start with. */
+const NOT_RELATIVE_START = /^[\\/\s\u0000-\u001f]/;
 
-/**
- * True only when the allowance is still live and the destination is spelled
- * exactly `127.0.0.1:<port>` in the RAW input. WHATWG `URL` collapses `127.1`,
- * `2130706433`, `0x7f000001`, `127.000.000.001` and `[::ffff:127.0.0.1]` to
- * 127.0.0.1, so the normalised host cannot tell them apart. A relative
- * redirect (no authority) stays on the current origin and so inherits the
- * allowance.
- */
-function onAllowedLoopback(
+/** True when the raw string is exactly `http://127.0.0.1:<port>` followed by
+ *  end, `/`, `?` or `#`: no trimming, no other spelling of the host. */
+function exactAllowedPrefix(raw: string, port: number): boolean {
+  const prefix = `http://${TEST_LOOPBACK_HOST}:${port}`;
+  if (!raw.startsWith(prefix)) return false;
+  const next = raw.charAt(prefix.length);
+  return next === '' || next === '/' || next === '?' || next === '#';
+}
+
+/** First hop: the allowance applies only to the exact literal origin. WHATWG
+ *  `URL` collapses `127.1`, `2130706433`, `0x7f000001`, ` http://...` (leading
+ *  space) and friends to 127.0.0.1, so the parsed host cannot tell them apart. */
+function firstHopAllowed(
   raw: string,
   parsed: URL,
   allow: LoopbackAllowance,
 ): boolean {
   if (!allow.live || allow.port === undefined) return false;
-  const authority = RAW_AUTHORITY.exec(raw)?.[1];
-  if (authority === undefined) return true;
   return (
-    authority === `${TEST_LOOPBACK_HOST}:${allow.port}` &&
+    exactAllowedPrefix(raw, allow.port) &&
+    parsed.protocol === 'http:' &&
     parsed.hostname === TEST_LOOPBACK_HOST &&
     effectivePort(parsed) === allow.port
   );
 }
 
+/** A path-relative reference: one leading `/` (not `//` or `/\`), or no
+ *  scheme and no leading separator, whitespace or control character. */
+function isPathRelative(raw: string): boolean {
+  if (raw.startsWith('/')) return !/^\/[\\/]/.test(raw);
+  if (NOT_RELATIVE_START.test(raw)) return false;
+  return !/^[a-z][a-z0-9+.-]*:/i.test(raw);
+}
+
+/** Redirect: survives only if the RESOLVED origin is the allowed origin and the
+ *  raw Location is the exact literal or a genuine path-relative reference. */
+function redirectAllowed(
+  raw: string,
+  resolved: URL,
+  allow: LoopbackAllowance,
+): boolean {
+  if (!allow.live || allow.port === undefined) return false;
+  if (resolved.origin !== `http://${TEST_LOOPBACK_HOST}:${allow.port}`)
+    return false;
+  return exactAllowedPrefix(raw, allow.port) || isPathRelative(raw);
+}
+
 /**
  * The ONE per-hop destination check, used for the first hop and every
- * redirect: decides whether the hop is the allowed loopback origin (revoking
- * the allowance permanently if it is not), then validates the addresses.
+ * redirect: the caller decides whether the hop is the allowed loopback origin
+ * (anything else revokes the allowance permanently), then the parsed
+ * destination is validated by the normal guard.
  */
 async function validateHop(
-  raw: string,
   parsed: URL,
   lookup: LookupFn,
   allow: LoopbackAllowance,
+  onAllowed: boolean,
 ): Promise<string[]> {
-  const onAllowed = onAllowedLoopback(raw, parsed, allow);
   if (!onAllowed) allow.live = false;
   return validatedAddresses(parsed.hostname, lookup, onAllowed);
 }
@@ -550,7 +575,12 @@ export function createNetFetch(options: NetFetchOptions = {}) {
           throw new NetDestinationError('net.fetch only supports http(s) URLs');
         return {
           parsed,
-          addresses: await validateHop(target, parsed, lookup, allow),
+          addresses: await validateHop(
+            parsed,
+            lookup,
+            allow,
+            firstHopAllowed(target, parsed, allow),
+          ),
         };
       })(),
       signal,
@@ -609,7 +639,12 @@ export function createNetFetch(options: NetFetchOptions = {}) {
               'net.fetch only supports http(s) URLs',
             );
           const nextAddresses = await raceAbort(
-            validateHop(location, parsed, lookup, allow),
+            validateHop(
+              parsed,
+              lookup,
+              allow,
+              redirectAllowed(location, parsed, allow),
+            ),
             signal,
           );
           if (parsed.origin !== origin) {

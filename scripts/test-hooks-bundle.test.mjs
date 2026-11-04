@@ -3,7 +3,7 @@
 //   node --test scripts/test-hooks-bundle.test.mjs
 //
 // Builds the production main bundle twice into temp dirs: without
-// KIA_TEST_BUILD (must contain NO `kia-test-hooks:on`) and with it (must
+// KIA_SMOKE_HOOKS (must contain NO `kia-test-hooks:on`) and with it (must
 // contain it, which proves the scan can actually see the string). Run from the
 // project root of the repo that owns the webpack configs; the release
 // packaging check should call this before shipping.
@@ -20,6 +20,7 @@ const root = process.cwd();
 function build(env) {
   const out = fs.mkdtempSync(path.join(os.tmpdir(), 'kia-hooks-bundle-'));
   const cleanEnv = { ...process.env, ...env };
+  if (!env.KIA_SMOKE_HOOKS) delete cleanEnv.KIA_SMOKE_HOOKS;
   if (!env.KIA_TEST_BUILD) delete cleanEnv.KIA_TEST_BUILD;
   const r = spawnSync(
     'npx',
@@ -57,10 +58,14 @@ function build(env) {
   return hits;
 }
 
-test('a production build without KIA_TEST_BUILD has no test-hooks sentinel', () => {
+test('a production build without KIA_SMOKE_HOOKS has no test-hooks sentinel', () => {
   assert.deepEqual(build({}), []);
 });
 
-test('control: a KIA_TEST_BUILD=1 build does contain it', () => {
-  assert.ok(build({ KIA_TEST_BUILD: '1' }).length > 0);
+test('a prerelease candidate build (KIA_TEST_BUILD=1 alone) has no test-hooks sentinel', () => {
+  assert.deepEqual(build({ KIA_TEST_BUILD: '1' }), []);
+});
+
+test('control: a KIA_SMOKE_HOOKS=1 build does contain it', () => {
+  assert.ok(build({ KIA_SMOKE_HOOKS: '1' }).length > 0);
 });

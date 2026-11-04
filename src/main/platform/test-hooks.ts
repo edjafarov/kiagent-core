@@ -2,7 +2,7 @@
  * Compile-time gate for the two-instance sync smoke harness.
  *
  * `__KIA_TEST_HOOKS__` is substituted by webpack's DefinePlugin: `true` only
- * when the bundle was built with `KIA_TEST_BUILD=1`, `false` otherwise. It is
+ * when the bundle was built with `KIA_SMOKE_HOOKS=1`, `false` otherwise. It is
  * deliberately NOT read from the environment, a file or `app.isPackaged`, so a
  * shipped artifact cannot be switched on from outside. Where the define is
  * absent (jest, ts-node) the gate is false.
