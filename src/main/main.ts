@@ -52,6 +52,7 @@ import {
   setAccountCadence,
 } from './core/boot';
 import type { CorePlatform } from './core/boot';
+import { installCrashRecovery } from './core/crash-recovery';
 import { createActivityLog, type ActivityLog } from './core/mcp/activity';
 import { createSqlRunner } from './core/mcp/sql-runner';
 import { utilityRunnerChild } from './core/mcp/sql-runner-spawn';
@@ -1247,24 +1248,12 @@ app
       senders: senderLookup,
       session: (a, signal) => p.engine.session(a, signal, 'owner-mail'),
     });
-    try {
-      // A 'creating' event draft also means a process died mid-create.
-      if (!p.readOnly()) await calendarOut.recover();
-    } catch (err) {
-      p.logSink.log('calendar-out', 'error', 'boot-time recover failed', {
-        error: err instanceof Error ? err.message : String(err),
-      });
-    }
-    try {
-      if (!p.readOnly()) await p.store.outbox.recoverOrphanedSending();
-    } catch (err) {
-      p.logSink.log(
-        'outbound',
-        'error',
-        'boot-time recoverOrphanedSending sweep failed — sending rows left in place for the next boot',
-        { error: err instanceof Error ? err.message : String(err) },
-      );
-    }
+    await installCrashRecovery({
+      platform: p,
+      recoverCalendar: () => calendarOut.recover(),
+      recoverOutbox: () => p.store.outbox.recoverOrphanedSending(),
+      logSink: p.logSink,
+    });
 
     // Scheduled sends (spec §8): one tick now settles anything due or
     // missed while the app was closed, then every 30 s.
