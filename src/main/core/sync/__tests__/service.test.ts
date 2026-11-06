@@ -33,9 +33,12 @@ beforeEach(async () => {
   );
   execArgv = [
     '--no-experimental-strip-types',
-    '-r', preload,
-    '-r', 'ts-node/register/transpile-only',
-    '-r', 'tsconfig-paths/register',
+    '-r',
+    preload,
+    '-r',
+    'ts-node/register/transpile-only',
+    '-r',
+    'tsconfig-paths/register',
   ];
   db = await openDbInWorker(dbPath, entry, { execArgv });
   store = openStore(db, {
@@ -58,7 +61,14 @@ const seed = async () => {
   await store.commit({
     account: id,
     documents: [
-      { externalId: 'e', type: 'file', title: 't', markdown: 'body', metadata: {}, createdAt: null },
+      {
+        externalId: 'e',
+        type: 'file',
+        title: 't',
+        markdown: 'body',
+        metadata: {},
+        createdAt: null,
+      },
     ],
     cursor: null,
   });
@@ -66,7 +76,12 @@ const seed = async () => {
 
 it('reports status and turns tracking on when it leads', async () => {
   let s = await sync.status();
-  expect(s).toMatchObject({ role: 'normal', tracking: false, historyId: null, masterDeviceId: null });
+  expect(s).toMatchObject({
+    role: 'normal',
+    tracking: false,
+    historyId: null,
+    masterDeviceId: null,
+  });
   expect(s.schemaVersion).toBeGreaterThanOrEqual(13);
   await sync.lead({ epoch: 1 });
   s = await sync.status();
@@ -103,7 +118,13 @@ it('applyDelta on a follower moves its position and wakes its feed', async () =>
     detectLanguages: () => ['eng'],
     profileDir: fdir,
   } as never);
-  const fSync = createSyncService({ db: fDb, store: fStore, dbPath: fPath, workerFile: entry, execArgv });
+  const fSync = createSyncService({
+    db: fDb,
+    store: fStore,
+    dbPath: fPath,
+    workerFile: entry,
+    execArgv,
+  });
   await fDb.run(`UPDATE sync_state SET role = 'follower'`);
   const feed = fStore.feed(0 as never)[Symbol.asyncIterator]();
   const woken = feed.next();
@@ -139,13 +160,17 @@ it('resetState on a fenced tracking device clears the half gate: writable, a lea
     priorRenewedAt: null,
   });
   expect(sync.readOnly()).toBe(true);
-  await expect(store.createAccount({ source: 's', identifier: 'i' })).rejects.toThrow();
+  await expect(
+    store.createAccount({ source: 's', identifier: 'i' }),
+  ).rejects.toThrow();
   // Lease says nothing more: the wipe is what lifts the fence and drops tracking.
   await sync.resetState();
   expect(sync.readOnly()).toBe(false);
   expect(sync.role().follower).toBe(false);
-  expect(await db.all(`SELECT role, tracking, history_id FROM sync_state`)).toEqual([
-    { role: 'normal', tracking: 0, history_id: null },
-  ]);
-  await expect(store.createAccount({ source: 's', identifier: 'i' })).resolves.toBeDefined();
+  expect(
+    await db.all(`SELECT role, tracking, history_id FROM sync_state`),
+  ).toEqual([{ role: 'normal', tracking: 0, history_id: null }]);
+  await expect(
+    store.createAccount({ source: 's', identifier: 'i' }),
+  ).resolves.toBeDefined();
 }, 60_000);

@@ -500,8 +500,12 @@ export interface ExtensionPlatform {
     extensionId: string,
     contributionId: string,
   ): Promise<{ source: string }>;
-  /** Factory-reset extension-owned namespaces, then restart eligible hosts. */
-  resetAll(): Promise<ResetAllResult>;
+  /** Factory-reset extension-owned namespaces, then restart eligible hosts.
+   *  `beforeCoreWipe` runs after every extension reset succeeded and right
+   *  before the core wipe; it does not run when an extension reset failed. */
+  resetAll(opts?: {
+    beforeCoreWipe?: () => Promise<void>;
+  }): Promise<ResetAllResult>;
   /**
    * Re-resolves `laneState()` and emits `platform.lane` when it changed
    * since the last emission — see `createLaneGate`. Called from main.ts's
@@ -1671,7 +1675,7 @@ export function createExtensionPlatform(
       }
     },
 
-    async resetAll() {
+    async resetAll(opts) {
       const candidates = [...entries.values()].filter((e) => e.enabled);
       // Under runExclusive, like the restore loop in the finally block below:
       // a bare deactivate(e) here could interleave with a concurrent
@@ -1705,7 +1709,10 @@ export function createExtensionPlatform(
             break;
           }
         }
-        if (failed.length === 0) await deps.store.maintenance.resetAll();
+        if (failed.length === 0) {
+          await opts?.beforeCoreWipe?.();
+          await deps.store.maintenance.resetAll();
+        }
       } finally {
         // A storage failure is reported for that plugin and its durable marker
         // remains; all other previously-enabled extensions must not be left

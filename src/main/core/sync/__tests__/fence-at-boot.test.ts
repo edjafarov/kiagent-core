@@ -17,7 +17,8 @@ const dirs: string[] = [];
 const dbs: AppDb[] = [];
 afterEach(async () => {
   for (const d of dbs.splice(0)) await d.close();
-  for (const d of dirs.splice(0)) fs.rmSync(d, { recursive: true, force: true });
+  for (const d of dirs.splice(0))
+    fs.rmSync(d, { recursive: true, force: true });
 });
 
 async function boot(tracking: boolean) {
@@ -26,7 +27,8 @@ async function boot(tracking: boolean) {
   const db = await openDb(path.join(dir, 'a.db'));
   dbs.push(db);
   migrate(db._conn!);
-  if (tracking) db._conn!.prepare(`UPDATE sync_state SET tracking = 1, joined = 1`).run();
+  if (tracking)
+    db._conn!.prepare(`UPDATE sync_state SET tracking = 1, joined = 1`).run();
   // What boot.ts does, in this order.
   const gate = await readSyncGate(db);
   const store = openStore(db, {
@@ -58,7 +60,13 @@ describe('a master that wakes with tracking on', () => {
     expect(svc.readOnly()).toBe(true);
     const sendScheduled = jest.fn(async () => 'sent' as const);
     const sched = createOutboxScheduler({
-      store: { outbox: { listDue: async () => [{ id: 'd1', sendAt: '2000-01-01T00:00:00.000Z' }] } } as never,
+      store: {
+        outbox: {
+          listDue: async () => [
+            { id: 'd1', sendAt: '2000-01-01T00:00:00.000Z' },
+          ],
+        },
+      } as never,
       service: { sendScheduled },
       logSink: { log: () => undefined },
       readOnly: () => svc.readOnly(),

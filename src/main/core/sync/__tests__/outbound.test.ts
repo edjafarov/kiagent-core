@@ -32,7 +32,7 @@ async function device(
   follower = false,
   extra: {
     nowMs?: () => number;
-    fencedAtBoot?: boolean;
+    trackingAtBoot?: boolean;
     log?: (l: 'info' | 'warn' | 'error', m: string) => void;
   } = {},
 ): Promise<Device> {
@@ -49,7 +49,7 @@ async function device(
   (db as unknown as { proc: unknown }).proc = leadProc(conn);
   if (follower) conn().prepare(`UPDATE sync_state SET role = 'follower'`).run();
   // An old master wakes with tracking on.
-  if (extra.fencedAtBoot)
+  if (extra.trackingAtBoot)
     conn().prepare(`UPDATE sync_state SET tracking = 1, joined = 1`).run();
   const svc = createSyncService({
     bootGate: readGateSync(conn()),
@@ -209,7 +209,7 @@ describe('the delivery queue', () => {
   const settle = () => new Promise((r) => setImmediate(r));
 
   it('the fence lifting while a drain is in flight sends each row once', async () => {
-    const d = await device(false, { fencedAtBoot: true });
+    const d = await device(false, { trackingAtBoot: true });
     await d.svc.enqueue(ui('import', { n: 1 }));
     await d.svc.enqueue(ui('import', { n: 2 }));
     const sent: number[] = [];

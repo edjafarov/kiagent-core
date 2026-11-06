@@ -38,9 +38,18 @@ export interface FactoryResetDeps {
     read: { accounts(): Promise<readonly unknown[]> };
   };
   /** Resets extension data, then the store; null before extensions boot. */
-  platform: { resetAll(): Promise<ResetAllResult> } | null | undefined;
-  /** Returns sync_state to a seed (`SyncService.resetState`) before the wipe,
-   *  so the wipe is not tracked and the device is not left half-gated. */
+  platform:
+    | {
+        resetAll(opts?: {
+          beforeCoreWipe?: () => Promise<void>;
+        }): Promise<ResetAllResult>;
+      }
+    | null
+    | undefined;
+  /** Returns sync_state to a seed (`SyncService.resetState`) after every
+   *  extension reset and immediately before the core wipe, so the wipe is not
+   *  tracked and the device is not left half-gated. Not called when an
+   *  extension reset fails (no wipe happens then). */
   resetSync?: () => Promise<void>;
   /** Stops every sync loop so none commits against a deleted account. */
   pauseSources(): Promise<void>;
@@ -76,14 +85,16 @@ export async function runFactoryReset(
   let failed: FactoryResetOutcome['failed'] = [];
   let error: string | null = null;
   try {
-    await deps.resetSync?.();
     if (deps.platform) {
-      const result = await deps.platform.resetAll();
+      const result = await deps.platform.resetAll({
+        beforeCoreWipe: deps.resetSync,
+      });
       failed = result.failed.map(({ pluginId, error: e }) => ({
         pluginId,
         error: e,
       }));
     } else {
+      await deps.resetSync?.();
       await deps.store.maintenance.resetAll();
     }
   } catch (err) {

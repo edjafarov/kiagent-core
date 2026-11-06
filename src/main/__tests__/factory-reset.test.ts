@@ -121,7 +121,7 @@ describe('runFactoryReset', () => {
     ]);
   });
 
-  it('sync_state is reset before any wipe, so the wipe is untracked', async () => {
+  it('sync_state is reset through the platform hook, right before the core wipe', async () => {
     const { store, wipe } = fakeStore();
     const { d, calls } = deps({
       store,
@@ -129,19 +129,59 @@ describe('runFactoryReset', () => {
         calls.push('resetSync');
       },
       platform: {
-        resetAll: async () => {
-          calls.push('platform');
+        resetAll: async (opts) => {
+          calls.push('extensions');
+          await opts?.beforeCoreWipe?.();
           await wipe();
+          calls.push('wipe');
           return { ok: true, failed: [] };
         },
       },
     });
     await runFactoryReset(d);
+    expect(calls.slice(0, 5)).toEqual([
+      'journal.begin',
+      'pause',
+      'extensions',
+      'resetSync',
+      'wipe',
+    ]);
+  });
+
+  it('a failing extension reset leaves sync_state untouched', async () => {
+    const { store } = fakeStore();
+    const resetSync = jest.fn(async () => undefined);
+    const { d } = deps({
+      store,
+      resetSync,
+      platform: {
+        // The platform stops at the failing namespace: no hook, no wipe.
+        resetAll: async () => ({ ok: false, failed: [failure('ext.a')] }),
+      },
+    });
+    await runFactoryReset(d);
+    expect(resetSync).not.toHaveBeenCalled();
+  });
+
+  it('with no platform, sync_state is reset right before the store wipe', async () => {
+    const { store } = fakeStore();
+    const { d, calls } = deps({
+      store,
+      resetSync: async () => {
+        calls.push('resetSync');
+      },
+    });
+    const real = store.maintenance.resetAll;
+    store.maintenance.resetAll = jest.fn(async () => {
+      calls.push('wipe');
+      await real();
+    }) as never;
+    await runFactoryReset(d);
     expect(calls.slice(0, 4)).toEqual([
       'journal.begin',
       'pause',
       'resetSync',
-      'platform',
+      'wipe',
     ]);
   });
 

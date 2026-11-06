@@ -1284,6 +1284,51 @@ describe('createExtensionPlatform', () => {
       expect(status(failing)).toBe('activated');
     });
 
+    it('beforeCoreWipe runs after every extension reset and right before the core wipe, and not when one fails', async () => {
+      await platform.start();
+      await installDbExtensions(platform);
+      await platform.stop();
+
+      const order: string[] = [];
+      let failing: string | null = null;
+      const db = {
+        registerPluginSource: jest.fn(async () => undefined),
+        plugin: jest.fn(async (request: { op: string; pluginId?: string }) => {
+          if (request.op === 'reset') {
+            if (request.pluginId === failing) throw new Error('SQLITE_BUSY');
+            order.push(`reset:${request.pluginId}`);
+          }
+          return undefined;
+        }),
+      };
+      platform = makePlatform({ db: db as never });
+      await platform.load();
+      const wipe = jest
+        .spyOn(store.maintenance, 'resetAll')
+        .mockImplementation(async () => {
+          order.push('wipe');
+        });
+      const beforeCoreWipe = jest.fn(async () => {
+        order.push('sync');
+      });
+
+      await platform.resetAll({ beforeCoreWipe });
+      expect(order).toEqual([
+        ...ids.map((id) => `reset:${id}`),
+        'sync',
+        'wipe',
+      ]);
+
+      order.length = 0;
+      wipe.mockClear();
+      beforeCoreWipe.mockClear();
+      failing = ids[1];
+      const result = await platform.resetAll({ beforeCoreWipe });
+      expect(result.failed.map((f) => f.pluginId)).toEqual([failing]);
+      expect(beforeCoreWipe).not.toHaveBeenCalled();
+      expect(wipe).not.toHaveBeenCalled();
+    });
+
     it('a load() that fails leaves discovery to start(), which finds everything', async () => {
       await platform.start();
       await installDbExtensions(platform);

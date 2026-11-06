@@ -18,7 +18,11 @@ import { openStore, type CoreStore } from '../../store/store';
 const entry = require.resolve('../../../db/worker-entry.ts');
 const repoRoot = path.resolve(__dirname, '..', '..', '..', '..', '..');
 const PLUGIN = 'gate.plugin';
-const owner = { kind: 'plugin' as const, extensionId: PLUGIN, handle: 'gate-owner' };
+const owner = {
+  kind: 'plugin' as const,
+  extensionId: PLUGIN,
+  handle: 'gate-owner',
+};
 const descriptor = {
   format: 1 as const,
   objects: [
@@ -65,13 +69,18 @@ beforeEach(async () => {
   );
   const execArgv = [
     '--no-experimental-strip-types',
-    '-r', preload,
-    '-r', 'ts-node/register/transpile-only',
-    '-r', 'tsconfig-paths/register',
+    '-r',
+    preload,
+    '-r',
+    'ts-node/register/transpile-only',
+    '-r',
+    'tsconfig-paths/register',
   ];
   const dbPath = path.join(dir, 'kiagent.db');
   const legacy = new Database(path.join(dir, 'private.db'));
-  legacy.exec('CREATE TABLE items (id TEXT PRIMARY KEY, v TEXT); CREATE TABLE mine (id TEXT PRIMARY KEY, v TEXT)');
+  legacy.exec(
+    'CREATE TABLE items (id TEXT PRIMARY KEY, v TEXT); CREATE TABLE mine (id TEXT PRIMARY KEY, v TEXT)',
+  );
   legacy.close();
   db = await openDbInWorker(dbPath, entry, {
     execArgv,
@@ -102,7 +111,12 @@ const follow = () =>
                            history_id='h1', after_seq=7, after_cursor=5, joined=1`,
   );
 const insert = (table: string, id: string) =>
-  db.plugin!({ op: 'exec', owner, sql: `INSERT INTO {{${table}}}(id, v) VALUES (?, 'x')`, params: [id] } as never);
+  db.plugin!({
+    op: 'exec',
+    owner,
+    sql: `INSERT INTO {{${table}}}(id, v) VALUES (?, 'x')`,
+    params: [id],
+  } as never);
 const item = {
   id: 'gate:1',
   producer: 'gate',
@@ -141,17 +155,29 @@ it('the fence closes a plugin connection too, and lifting it opens it', async ()
 });
 
 it('attention publish is refused on a follower, a tick quietly writes nothing, and promote reopens it', async () => {
-  const args = { producer: 'gate', items: [item], availableProducers: ['gate'] };
+  const args = {
+    producer: 'gate',
+    items: [item],
+    availableProducers: ['gate'],
+  };
   await follow();
-  const refused = (await db.proc!('attention.publish', args)) as { ok: boolean; error?: { name?: string } };
+  const refused = (await db.proc!('attention.publish', args)) as {
+    ok: boolean;
+    error?: { name?: string };
+  };
   expect(refused.ok).toBe(false);
   expect(refused.error?.name).toBe('SyncReadOnly');
   expect(await db.all(`SELECT id FROM attention_items`)).toEqual([]);
-  const tick = (await db.proc!('attention.tick', { availableProducers: ['gate'] })) as { ok: boolean };
+  const tick = (await db.proc!('attention.tick', {
+    availableProducers: ['gate'],
+  })) as { ok: boolean };
   expect(tick.ok).toBe(true);
   await sync.lead({ epoch: 2 });
   await sync.open('head-acked');
-  const ok = (await db.proc!('attention.publish', args)) as { ok: boolean; error?: unknown };
+  const ok = (await db.proc!('attention.publish', args)) as {
+    ok: boolean;
+    error?: unknown;
+  };
   expect(ok).toMatchObject({ ok: true });
   expect(await db.all(`SELECT id FROM attention_items`)).toHaveLength(1);
 });
@@ -162,14 +188,19 @@ it('a tracking-leader boot refuses a copied-table write before any proc, and ope
   await db.close();
   // The device was leading with tracking on when it stopped.
   const raw = new Database(dbPath);
-  raw.prepare(`UPDATE sync_state SET tracking = 1, joined = 1, head_pending = 1`).run();
+  raw
+    .prepare(`UPDATE sync_state SET tracking = 1, joined = 1, head_pending = 1`)
+    .run();
   const bootGate = readGateSync(raw);
   raw.close();
   const execArgv = [
     '--no-experimental-strip-types',
-    '-r', path.join(dir, 'preload.js'),
-    '-r', 'ts-node/register/transpile-only',
-    '-r', 'tsconfig-paths/register',
+    '-r',
+    path.join(dir, 'preload.js'),
+    '-r',
+    'ts-node/register/transpile-only',
+    '-r',
+    'tsconfig-paths/register',
   ];
   db = await openDbInWorker(dbPath, entry, {
     execArgv,
@@ -181,7 +212,14 @@ it('a tracking-leader boot refuses a copied-table write before any proc, and ope
     detectLanguages: () => ['eng'],
     profileDir: dir,
   } as never);
-  sync = createSyncService({ db, store, dbPath, workerFile: entry, execArgv, bootGate });
+  sync = createSyncService({
+    db,
+    store,
+    dbPath,
+    workerFile: entry,
+    execArgv,
+    bootGate,
+  });
   await db.plugin!({ op: 'register', pluginId: PLUGIN, descriptor } as never);
   await db.plugin!({ op: 'prepare', pluginId: PLUGIN, descriptor } as never);
   await db.plugin!({ op: 'open', owner, pluginId: PLUGIN });
