@@ -9,7 +9,7 @@ import { buildSnapshot } from '../core/sync/snapshot';
 import { readSyncStatus } from '../core/sync/status';
 import { prepareRestore, prepareSwap } from '../core/sync/swap';
 import { demote, lead, promote } from '../core/sync/promote';
-import { gateFrom, readGateSync } from '../core/sync/role';
+import { bootPhase, gateFrom, readGateSync } from '../core/sync/role';
 import { parentPort, workerData } from 'node:worker_threads';
 import path from 'node:path';
 import type { CommitBatch, ExternalRef, Seq } from '@shared/contracts';
@@ -143,9 +143,10 @@ async function runSyncRole(): Promise<void> {
     // The corpus `commit` is procedural with read-your-own-writes, so it runs
     // as a host procedure on the worker's RAW connection — the SAME
     // createWriteTx the in-process store builds — not as a static batch().
-    // Step 2: a woken master is fenced from the main thread; a restart (a new
-    // worker) clears it, because `sync_state` decides at boot.
-    let fenced = false;
+    // `sync_state` decides at boot, the same read main makes (`bootPhase`): a
+    // tracking leader wakes fenced, a seed or a follower never does. Main
+    // moves it afterwards with `syncFence`.
+    let fenced = bootPhase(readGateSync(db._conn!)) === 'leader-fenced';
     const writeTx = createWriteTx(db._conn!, {
       detectLanguages,
       now: () => new Date().toISOString(),

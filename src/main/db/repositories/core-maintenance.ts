@@ -9,12 +9,8 @@ export async function resetCoreStoreTables(
   now: () => string,
 ): Promise<void> {
   await db.batch([
-    // First, so the wipe below isn't tracked. A later enrolment starts a new
-    // history, and any follower of this device takes a fresh snapshot.
-    {
-      sql: `UPDATE sync_state SET role = 'normal', tracking = 0, after_seq = 0,
-              after_cursor = 0, history_id = NULL, master_device_id = NULL`,
-    },
+    // `sync_state` is reset first by `SyncService.resetState()` (the caller
+    // awaits it), so the wipe below isn't tracked.
     ...[
       'documents_fts',
       'documents_tri',

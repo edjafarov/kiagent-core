@@ -15,6 +15,7 @@ import { createOutboundService } from '../../../outbound/service';
 import { migrate } from '../../store/schema';
 import { openStore, type CoreStore } from '../../store/store';
 import { NO_MASTER_MESSAGE, SyncNoMaster, wrapForwardedChannels } from '../forward-core';
+import { readGateSync } from '../role';
 import { createSyncService, type SyncService } from '../service';
 
 const deps = {
@@ -42,7 +43,7 @@ async function device(follower: boolean): Promise<Dev> {
     store,
     dbPath: path.join(dir, 'a.db'),
     workerFile: '',
-    initialReadOnly: follower,
+    bootGate: readGateSync(db._conn!),
     log: () => undefined,
   });
   const d = { dir, db, store, svc };

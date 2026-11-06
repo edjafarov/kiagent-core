@@ -17,6 +17,7 @@ import {
   type ForwardRequest,
   type SyncService,
 } from '../service';
+import { readGateSync } from '../role';
 
 interface Device {
   dir: string;
@@ -47,15 +48,17 @@ async function device(
   // The worker thread is the only thing missing in-process.
   (db as unknown as { proc: unknown }).proc = leadProc(conn);
   if (follower) conn().prepare(`UPDATE sync_state SET role = 'follower'`).run();
+  // An old master wakes with tracking on.
+  if (extra.fencedAtBoot)
+    conn().prepare(`UPDATE sync_state SET tracking = 1, joined = 1`).run();
   const svc = createSyncService({
-    initialReadOnly: follower,
+    bootGate: readGateSync(conn()),
     db,
     store,
     dbPath: path.join(dir, 'a.db'),
     workerFile: '',
     log: extra.log ?? (() => undefined),
     nowMs: extra.nowMs,
-    fencedAtBoot: extra.fencedAtBoot,
   });
   const d = { dir, db, store, svc, conn };
   devices.push(d);

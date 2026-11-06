@@ -55,7 +55,7 @@ import { createLogs } from './logs';
 import { createDbUserPrefsStore, createPrefs, type CorePrefs } from './prefs';
 import { createScheduler } from './scheduler';
 import type { CoreScheduler } from './scheduler';
-import { gateEngine, gateFrom, readSyncGate } from './sync/role';
+import { bootPhase, canWrite, gateEngine, readSyncGate } from './sync/role';
 import { notMineToRun } from './sync/sources';
 import { createSyncService, type SyncService } from './sync/service';
 import { applyPendingSwap } from './sync/swap';
@@ -361,7 +361,6 @@ export async function bootCore(deps: BootDeps): Promise<CorePlatform> {
   // Read once, before anything starts: only the boot swap changes it. A
   // joining device is gated like a follower, across restarts (spec 7.7).
   const gateAtBoot = await readSyncGate(db);
-  const readOnlyAtBoot = gateFrom(gateAtBoot);
   const store = openStore(db, {
     encrypt: deps.encrypt,
     decrypt: deps.decrypt,
@@ -446,9 +445,9 @@ export async function bootCore(deps: BootDeps): Promise<CorePlatform> {
       if (account && !isResting(account.status)) runAccount(platform, account);
     },
     busy: () => deps.busy?.get().reasons[0] ?? null,
-    initialReadOnly: readOnlyAtBoot,
-    // A tracking master may have been replaced while it was off.
-    fencedAtBoot: gateAtBoot.tracking && !readOnlyAtBoot,
+    // A tracking master may have been replaced while it was off: bootPhase
+    // wakes it fenced, and the writer worker derives the same from the row.
+    bootGate: gateAtBoot,
     // Fence cleared or promoted: the device can write user_prefs now, so a
     // seed that had to wait runs.
     onOpen: async () => {
@@ -484,7 +483,7 @@ export async function bootCore(deps: BootDeps): Promise<CorePlatform> {
     archiveSweep = true;
     registerArchiveSweep({ store, scheduler, logs: sink });
   };
-  if (!readOnlyAtBoot) startArchiveSweep();
+  if (canWrite(bootPhase(gateAtBoot))) startArchiveSweep();
   // #59 §3b: prune `changes` to a bounded tail. Never at boot; first-ever
   // run 10 minutes in; a no-op until the ledger re-key repair is done.
   void registerChangesPrune({

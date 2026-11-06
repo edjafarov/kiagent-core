@@ -36,12 +36,15 @@ import {
   type OfferedSource,
 } from './sources';
 import {
+  bootPhase,
   canWrite,
+  gateFrom,
   phaseOf,
   roleOf,
   SyncEpochBehind,
   SyncHeadPending,
   SyncNotLeader,
+  type SyncGate,
   type SyncPhase,
   type SyncRole,
 } from './role';
@@ -217,6 +220,8 @@ export interface SyncService {
   /** The one exit from the fence. `'head-acked'` clears a promotion's pending
    *  acknowledgement; `'lease'` refuses while one is pending. */
   open(kind: 'head-acked' | 'lease'): Promise<void>;
+  /** Factory reset only (main): clears a half-gated device in place. */
+  resetState(): Promise<void>;
   /** Stops leading: a follower of `masterDeviceId`. The caller relaunches. */
   demote(masterDeviceId: string): Promise<void>;
   /** This device's id, once known. */
@@ -272,11 +277,11 @@ export interface SyncServiceDeps {
   readOnly?: () => boolean;
   /** Milliseconds, for the delivery queue's backoff. */
   nowMs?: () => number;
-  /** What `sync_state` said at boot (follower or joining). */
-  initialReadOnly?: boolean;
-  /** An old master (tracking on) wakes fenced: another device may lead by now.
-   *  Only `open` lifts it. */
-  fencedAtBoot?: boolean;
+  /** What `sync_state` said at boot, read once. The writer worker derives its
+   *  fence from the same row (`bootPhase`), so nothing is posted to it: a
+   *  tracking leader wakes fenced (another device may lead by now) and only
+   *  `open` lifts it. Absent: a seed. */
+  bootGate?: SyncGate;
   /** The fence lifted: start what only a leader runs. Once per `open`. */
   onOpen?: () => void | Promise<void>;
   log?: (level: 'info' | 'warn' | 'error', msg: string) => void;
@@ -293,21 +298,25 @@ export function createSyncService(deps: SyncServiceDeps): SyncService {
   const log = deps.log ?? (() => undefined);
   // Mirrors `sync_state` (role or joining) and the fence, so the answer is
   // synchronous. Every method below that changes the table refreshes it.
-  let gated = deps.initialReadOnly ?? false;
-  // Invariant: `fenced` flips only in `setFence`; every close bumps `fenceGen`,
-  // and only `open` (through `setFence(false)`) lifts it.
-  let fenced = deps.fencedAtBoot ?? false;
-  let row = {
-    role: (gated ? 'follower' : 'normal') as SyncRole,
+  const boot: SyncGate = deps.bootGate ?? {
+    role: 'normal',
     joining: false,
     joined: false,
-    tracking: fenced,
+    tracking: false,
+  };
+  let gated = gateFrom(boot);
+  // Invariant: `fenced` flips only in `setFence`; every close bumps `fenceGen`,
+  // and only `open` (through `setFence(false)`) lifts it.
+  let fenced = bootPhase(boot) === 'leader-fenced';
+  let row = {
+    role: boot.role,
+    joining: boot.joining,
+    joined: boot.joined,
+    tracking: boot.tracking,
     headPending: false,
     epoch: 0,
   };
   let leaseNow: LeaseSnapshot | null = null;
-  if (fenced)
-    void deps.db.proc?.('syncFence', { on: true })?.catch(() => undefined);
   const phase = (): SyncPhase => phaseOf({ ...row, fenced });
   const readOnly = (): boolean =>
     !canWrite(phase()) || (deps.readOnly?.() ?? false);
@@ -1007,6 +1016,20 @@ export function createSyncService(deps: SyncServiceDeps): SyncService {
         opening = null;
       });
       return opening;
+    },
+    resetState: async () => {
+      // Factory reset: the device becomes a plain seed again, so it is not
+      // tracked, not fenced and not a follower, with no restart.
+      await deps.db.run(
+        `UPDATE sync_state SET role = 'normal', tracking = 0, after_seq = 0,
+           after_cursor = 0, history_id = NULL, master_device_id = NULL`,
+      );
+      // The lease described the account this device led; the wipe forgets it.
+      leaseNow = null;
+      fenceGen += 1;
+      setFence(false);
+      await refreshGate();
+      publishRole();
     },
     demote: async (masterDeviceId) => {
       setFence(true);

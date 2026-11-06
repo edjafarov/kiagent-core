@@ -6,7 +6,7 @@ import path from 'path';
 import { openDb, type AppDb } from '../../db/app-db';
 import { migrate } from '../store/schema';
 import { openStore } from '../store/store';
-import { gateFrom, readSyncGate } from '../sync/role';
+import { readGateSync } from '../sync/role';
 import { createSyncService } from '../sync/service';
 import { installCrashRecovery } from '../crash-recovery';
 
@@ -26,8 +26,6 @@ async function boot(fenced: boolean) {
   migrate(db._conn!);
   if (fenced)
     db._conn!.prepare(`UPDATE sync_state SET tracking = 1, joined = 1`).run();
-  const gate = await readSyncGate(db);
-  const readOnlyAtBoot = gateFrom(gate);
   // Writable while the crashed-process rows are seeded; the guard follows the service afterwards.
   let ro: () => boolean = () => false;
   const store = openStore(db, {
@@ -91,8 +89,7 @@ async function boot(fenced: boolean) {
     store,
     dbPath: path.join(dir, 'a.db'),
     workerFile: '',
-    initialReadOnly: readOnlyAtBoot,
-    fencedAtBoot: gate.tracking && !readOnlyAtBoot,
+    bootGate: readGateSync(db._conn!),
     onOpen: async () => {
       for (const h of hooks) await h();
       resolvePromoted();

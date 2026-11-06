@@ -13,6 +13,7 @@ import { openStore } from '../../store/store';
 import { NO_MASTER_MESSAGE, SyncNoMaster, wrapForwardedChannels } from '../forward-core';
 import { installOfflineSettings, restoreOfflineSettings } from '../offline-settings';
 import { leadProc } from './lead-proc';
+import { readGateSync } from '../role';
 import { createSyncService, type SyncService } from '../service';
 
 interface Wired {
@@ -41,7 +42,7 @@ async function open(dir: string, follower: boolean): Promise<{ db: AppDb; svc: S
     detectLanguages: () => ['eng'],
   });
   const svc = createSyncService({
-    initialReadOnly: follower,
+    bootGate: readGateSync(db._conn!),
     db,
     store,
     dbPath: path.join(dir, 'a.db'),

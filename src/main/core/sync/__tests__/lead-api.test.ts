@@ -10,7 +10,12 @@ import type { LeaseSnapshot, SyncRoleWire } from '@shared/contracts';
 import { openDb, type AppDb } from '../../../db/app-db';
 import { migrate } from '../../store/schema';
 import { openStore } from '../../store/store';
-import { SyncEpochBehind, SyncHeadPending, SyncNotLeader } from '../role';
+import {
+  readGateSync,
+  SyncEpochBehind,
+  SyncHeadPending,
+  SyncNotLeader,
+} from '../role';
 import { readSyncStatus } from '../status';
 import { createSyncService, type SyncService } from '../service';
 import { leadProc } from './lead-proc';
@@ -34,17 +39,9 @@ async function device(
   setup(db._conn!);
   const conn = () => db._conn!;
   (db as unknown as { proc: unknown }).proc = leadProc(conn);
-  const row = conn().prepare(`SELECT role, joining, tracking FROM sync_state`).get() as {
-    role: string;
-    joining: number;
-    tracking: number;
-  };
-  const gated = row.role === 'follower' || row.joining === 1;
   const onOpen = jest.fn(async () => undefined);
   const svc = createSyncService({
-    initialReadOnly: gated,
-    // What boot.ts does: a tracking leader wakes fenced.
-    fencedAtBoot: row.tracking === 1 && !gated,
+    bootGate: readGateSync(conn()),
     db,
     store: openStore(db, {
       encrypt: (s: string) => Buffer.from(s, 'utf8'),

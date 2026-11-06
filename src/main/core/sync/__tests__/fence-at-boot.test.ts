@@ -10,7 +10,7 @@ import { openDb, type AppDb } from '../../../db/app-db';
 import { createOutboxScheduler } from '../../../outbound/scheduler';
 import { migrate } from '../../store/schema';
 import { openStore } from '../../store/store';
-import { gateFrom, readSyncGate } from '../role';
+import { bootPhase, canWrite, readGateSync, readSyncGate } from '../role';
 import { createSyncService } from '../service';
 
 const dirs: string[] = [];
@@ -29,7 +29,6 @@ async function boot(tracking: boolean) {
   if (tracking) db._conn!.prepare(`UPDATE sync_state SET tracking = 1, joined = 1`).run();
   // What boot.ts does, in this order.
   const gate = await readSyncGate(db);
-  const readOnlyAtBoot = gateFrom(gate);
   const store = openStore(db, {
     encrypt: (s: string) => Buffer.from(s, 'utf8'),
     decrypt: (b: Buffer) => b.toString('utf8'),
@@ -41,8 +40,7 @@ async function boot(tracking: boolean) {
     store,
     dbPath: path.join(dir, 'a.db'),
     workerFile: '',
-    initialReadOnly: readOnlyAtBoot,
-    fencedAtBoot: gate.tracking && !readOnlyAtBoot,
+    bootGate: readGateSync(db._conn!),
     onOpen,
     log: () => undefined,
   });
@@ -80,5 +78,35 @@ describe('a master that wakes with tracking on', () => {
   it('a master that was never tracking starts open', async () => {
     const { svc } = await boot(false);
     expect(svc.readOnly()).toBe(false);
+  });
+});
+
+describe('bootPhase: one read of sync_state decides the boot fence', () => {
+  const g = (o: Partial<Parameters<typeof bootPhase>[0]>) =>
+    bootPhase({
+      role: 'normal',
+      joining: false,
+      joined: false,
+      tracking: false,
+      ...o,
+    });
+
+  it('a seed is alone and never fenced; a tracking leader wakes fenced', () => {
+    expect(g({})).toBe('alone');
+    expect(canWrite(g({}))).toBe(true);
+    expect(g({ tracking: true, joined: true })).toBe('leader-fenced');
+    expect(canWrite(g({ tracking: true, joined: true }))).toBe(false);
+  });
+
+  it('a follower boots closed but not fenced, and so does a joining device', () => {
+    expect(g({ role: 'follower', tracking: true })).toBe('follower');
+    expect(g({ joining: true, tracking: true })).toBe('joining');
+    expect(canWrite(g({ role: 'follower' }))).toBe(false);
+  });
+
+  it('the service built from bootGate agrees and posts no syncFence at construction', async () => {
+    const { svc } = await boot(true);
+    expect(svc.readOnly()).toBe(true);
+    expect(svc.role().leader).toBe(false);
   });
 });

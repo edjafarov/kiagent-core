@@ -10,6 +10,7 @@ import { syncSurface } from '../../../platform/host-surfaces';
 import { openDb } from '../../../db/app-db';
 import { migrate } from '../../store/schema';
 import { openStore } from '../../store/store';
+import { readGateSync } from '../role';
 import { createSyncService } from '../service';
 
 it('every public sync method is a function on createSyncService', async () => {
@@ -23,7 +24,7 @@ it('every public sync method is a function on createSyncService', async () => {
       detectLanguages: () => ['eng'],
     });
     const svc = createSyncService({
-      initialReadOnly: false,
+      bootGate: readGateSync(db._conn!),
       db,
       store,
       dbPath: path.join(dir, 'a.db'),

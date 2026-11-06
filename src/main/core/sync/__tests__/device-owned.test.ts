@@ -10,7 +10,7 @@ import type { CommitBatch } from '@shared/contracts';
 import { openDb, type AppDb } from '../../../db/app-db';
 import { migrate } from '../../store/schema';
 import { openStore, type CoreStore } from '../../store/store';
-import { gateEngine, SyncReadOnly } from '../role';
+import { gateEngine, readGateSync, SyncReadOnly } from '../role';
 import { leadProc } from './lead-proc';
 import { createSyncService, type ForwardRequest, type SyncService } from '../service';
 import { runCommitBatch, splitBatch } from '../owned';
@@ -47,7 +47,7 @@ async function device(opts: { follower?: boolean; joined?: boolean } = {}): Prom
     store,
     dbPath: path.join(dir, 'a.db'),
     workerFile: '',
-    initialReadOnly: !!opts.follower,
+    bootGate: readGateSync(conn()),
     log: () => undefined,
   });
   const d = { dir, db, store, svc, after, conn };

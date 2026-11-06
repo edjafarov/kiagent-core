@@ -121,6 +121,30 @@ describe('runFactoryReset', () => {
     ]);
   });
 
+  it('sync_state is reset before any wipe, so the wipe is untracked', async () => {
+    const { store, wipe } = fakeStore();
+    const { d, calls } = deps({
+      store,
+      resetSync: async () => {
+        calls.push('resetSync');
+      },
+      platform: {
+        resetAll: async () => {
+          calls.push('platform');
+          await wipe();
+          return { ok: true, failed: [] };
+        },
+      },
+    });
+    await runFactoryReset(d);
+    expect(calls.slice(0, 4)).toEqual([
+      'journal.begin',
+      'pause',
+      'resetSync',
+      'platform',
+    ]);
+  });
+
   it('an extension that cannot be reset stops the reset before the core wipe — nothing else is cleared', async () => {
     const { store } = fakeStore();
     const { d } = deps({

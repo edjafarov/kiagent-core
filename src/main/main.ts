@@ -475,6 +475,7 @@ function factoryResetDeps(
   return {
     store: p.store,
     platform: extensionsPlatform,
+    resetSync: () => p.sync.resetState(),
     journal: createResetJournal(path.join(app.getPath('userData'), 'data')),
     // Stop every real account's sync loop BEFORE the wipe. engine.pause
     // is the one public API that both aborts a running loop and (via its

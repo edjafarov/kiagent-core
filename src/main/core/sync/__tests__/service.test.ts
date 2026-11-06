@@ -126,3 +126,26 @@ it('builds a snapshot and prepares a swap, refusing a wrong hash', async () => {
   expect(await sync.prepareSwap(out, snap.sha256, 'master-1')).toBe('ready');
   expect(fs.existsSync(`${dbPath}.swap.json`)).toBe(true);
 }, 120_000);
+
+it('resetState on a fenced tracking device clears the half gate: writable, a leader, no restart', async () => {
+  await sync.lead({ epoch: 1 });
+  await sync.setLease({
+    isMaster: false,
+    reason: 'fenced',
+    multiDevice: true,
+    approved: true,
+    holder: null,
+    epoch: 0,
+    priorRenewedAt: null,
+  });
+  expect(sync.readOnly()).toBe(true);
+  await expect(store.createAccount({ source: 's', identifier: 'i' })).rejects.toThrow();
+  // Lease says nothing more: the wipe is what lifts the fence and drops tracking.
+  await sync.resetState();
+  expect(sync.readOnly()).toBe(false);
+  expect(sync.role().follower).toBe(false);
+  expect(await db.all(`SELECT role, tracking, history_id FROM sync_state`)).toEqual([
+    { role: 'normal', tracking: 0, history_id: null },
+  ]);
+  await expect(store.createAccount({ source: 's', identifier: 'i' })).resolves.toBeDefined();
+}, 60_000);

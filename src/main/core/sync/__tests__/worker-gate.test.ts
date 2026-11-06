@@ -11,6 +11,7 @@ import Database from 'better-sqlite3';
 import { openDbInWorker } from '@main/db/worker-client';
 import type { AppDb } from '@main/db/app-db';
 
+import { readGateSync } from '../role';
 import { createSyncService, type SyncService } from '../service';
 import { openStore, type CoreStore } from '../../store/store';
 
@@ -154,3 +155,41 @@ it('attention publish is refused on a follower, a tick quietly writes nothing, a
   expect(ok).toMatchObject({ ok: true });
   expect(await db.all(`SELECT id FROM attention_items`)).toHaveLength(1);
 });
+
+it('a tracking-leader boot refuses a copied-table write before any proc, and open(head-acked) lifts it', async () => {
+  const dbPath = path.join(dir, 'kiagent.db');
+  await sync.close();
+  await db.close();
+  // The device was leading with tracking on when it stopped.
+  const raw = new Database(dbPath);
+  raw.prepare(`UPDATE sync_state SET tracking = 1, joined = 1, head_pending = 1`).run();
+  const bootGate = readGateSync(raw);
+  raw.close();
+  const execArgv = [
+    '--no-experimental-strip-types',
+    '-r', path.join(dir, 'preload.js'),
+    '-r', 'ts-node/register/transpile-only',
+    '-r', 'tsconfig-paths/register',
+  ];
+  db = await openDbInWorker(dbPath, entry, {
+    execArgv,
+    pluginSources: { [PLUGIN]: path.join(dir, 'private.db') },
+  });
+  store = openStore(db, {
+    encrypt: (s: string) => Buffer.from(s),
+    decrypt: (b: Buffer) => b.toString(),
+    detectLanguages: () => ['eng'],
+    profileDir: dir,
+  } as never);
+  sync = createSyncService({ db, store, dbPath, workerFile: entry, execArgv, bootGate });
+  await db.plugin!({ op: 'register', pluginId: PLUGIN, descriptor } as never);
+  await db.plugin!({ op: 'prepare', pluginId: PLUGIN, descriptor } as never);
+  await db.plugin!({ op: 'open', owner, pluginId: PLUGIN });
+  // No proc was sent: the worker derived the fence from the same row.
+  expect(sync.readOnly()).toBe(true);
+  await expect(insert('items', 'a')).rejects.toThrow(/read-only/);
+  await expect(insert('mine', 'a')).resolves.toBeUndefined();
+  await sync.open('head-acked');
+  expect(sync.readOnly()).toBe(false);
+  await expect(insert('items', 'a')).resolves.toBeUndefined();
+}, 60_000);

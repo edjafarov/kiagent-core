@@ -64,6 +64,12 @@ export function phaseOf(g: {
   return 'alone';
 }
 
+/** The phase a device wakes in, from one `sync_state` read. A tracking leader
+ *  wakes fenced (another device may lead by now); a seed (tracking 0) and a
+ *  follower are never fenced. The writer worker and main both ask this. */
+export const bootPhase = (g: SyncGate): SyncPhase =>
+  phaseOf({ ...g, fenced: g.tracking && !gateFrom(g) });
+
 export const canWrite = (p: SyncPhase): boolean =>
   p === 'alone' || p === 'leader';
 

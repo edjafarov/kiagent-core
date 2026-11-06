@@ -12,6 +12,7 @@ import type { Account, LeaseSnapshot } from '@shared/contracts';
 import { promoteCore, resumeAccounts, type CorePlatform } from '../../boot';
 import { openStore, type CoreStore } from '../../store/store';
 import { notMineToRun } from '../sources';
+import { readSyncGate } from '../role';
 import { createSyncService, type SyncService } from '../service';
 
 const entry = require.resolve('../../../db/worker-entry.ts');
@@ -39,6 +40,7 @@ const open = async () => {
     dbPath,
     workerFile: entry,
     execArgv,
+    bootGate: await readSyncGate(db),
     onOpen: async () => void (promoted += 1),
   });
   await sync.setDeviceId('me-device');
@@ -146,13 +148,16 @@ describe('the writer', () => {
     await expect(write()).resolves.toBeTruthy();
   });
 
-  it('a restart clears the fence: sync_state decides at boot', async () => {
+  it('a restart wakes a tracking leader fenced, in the worker and in main, and open lifts it', async () => {
     await sync.lead({ epoch: 1 });
     await sync.setLease(lease({ reason: 'fenced', isMaster: false }));
     await expect(write()).rejects.toThrow(/read-only/);
     await sync.close();
     await db.close();
     await open();
+    expect(sync.readOnly()).toBe(true);
+    await expect(write()).rejects.toThrow(/read-only/);
+    await sync.open('lease');
     await expect(write()).resolves.toBeTruthy();
     expect(sync.readOnly()).toBe(false);
   });
