@@ -4,6 +4,7 @@ import os from 'os';
 import path from 'path';
 
 import type { Cap, Query } from '@shared/contracts';
+import { LONE_ROLE } from '@shared/contracts';
 
 import { runExtensionHost } from '../extension-host-entry';
 import { createHostRouter } from '../host-router';
@@ -48,7 +49,14 @@ describe('host.prefs surface', () => {
       extensionId,
       dataDir: dir,
       query: {} as Query,
-      inference: { complete: noop, see: noop, read: noop, hear: noop, lane: async () => 'open' as const, describe: async () => null },
+      inference: {
+        complete: noop,
+        see: noop,
+        read: noop,
+        hear: noop,
+        lane: async () => 'open' as const,
+        describe: async () => null,
+      },
       notify: () => {},
       bus: createEventBus(),
       deliverEvent: (...a: unknown[]) => void delivered.push(a),
@@ -61,6 +69,7 @@ describe('host.prefs surface', () => {
       granted: new Set<Cap>(['prefs']),
       surfaces: built.surfaces,
       logSink,
+      role: () => LONE_ROLE,
     });
   }
 
@@ -76,33 +85,62 @@ describe('host.prefs surface', () => {
     await surfaceFor('ext.id').dispatch('prefs', 'set', ['a', 1]);
     const other = surfaceFor('other.id');
     expect(await other.dispatch('prefs', 'get', ['a'])).toBeUndefined();
-    await expect(other.dispatch('prefs', 'get', ['ext.id.a'])).rejects.toThrow(/name/);
+    await expect(other.dispatch('prefs', 'get', ['ext.id.a'])).rejects.toThrow(
+      /name/,
+    );
     // 'ext' + name 'id.a' would alias 'ext.id' + 'a': dotted names are refused.
     const ext = surfaceFor('ext');
-    await expect(ext.dispatch('prefs', 'get', ['id.a'])).rejects.toThrow(/name/);
-    await expect(ext.dispatch('prefs', 'set', ['id.a', 2])).rejects.toThrow(/name/);
+    await expect(ext.dispatch('prefs', 'get', ['id.a'])).rejects.toThrow(
+      /name/,
+    );
+    await expect(ext.dispatch('prefs', 'set', ['id.a', 2])).rejects.toThrow(
+      /name/,
+    );
   });
 
   it('an empty or non-string name, or a non-JSON value, is refused', async () => {
     const r = surfaceFor('ext.id');
     await expect(r.dispatch('prefs', 'set', ['', 1])).rejects.toThrow(/name/);
     await expect(r.dispatch('prefs', 'set', [3, 1])).rejects.toThrow(/name/);
-    await expect(r.dispatch('prefs', 'set', ['a', () => 1])).rejects.toThrow(/JSON/);
+    await expect(r.dispatch('prefs', 'set', ['a', () => 1])).rejects.toThrow(
+      /JSON/,
+    );
     expect(store.rows).toEqual({});
   });
 
   it('without the prefs capability the namespace is denied', async () => {
     const built = buildSurfaces({
-      extensionId: 'ext.id', dataDir: dir, query: {} as Query,
-      inference: { complete: noop, see: noop, read: noop, hear: noop, lane: async () => 'open' as const, describe: async () => null },
-      notify: () => {}, bus: createEventBus(), deliverEvent: () => {}, attention: {} as never, prefs,
+      extensionId: 'ext.id',
+      dataDir: dir,
+      query: {} as Query,
+      inference: {
+        complete: noop,
+        see: noop,
+        read: noop,
+        hear: noop,
+        lane: async () => 'open' as const,
+        describe: async () => null,
+      },
+      notify: () => {},
+      bus: createEventBus(),
+      deliverEvent: () => {},
+      attention: {} as never,
+      prefs,
     } as never);
     opened.push(() => built.close());
-    const r = createHostRouter({ extensionId: 'ext.id', granted: new Set<Cap>(), surfaces: built.surfaces, logSink });
-    await expect(r.dispatch('prefs', 'get', ['a'])).rejects.toThrow(/CAP_DENIED/);
+    const r = createHostRouter({
+      extensionId: 'ext.id',
+      granted: new Set<Cap>(),
+      surfaces: built.surfaces,
+      logSink,
+      role: () => LONE_ROLE,
+    });
+    await expect(r.dispatch('prefs', 'get', ['a'])).rejects.toThrow(
+      /CAP_DENIED/,
+    );
   });
 
-  it("a watching extension is told after refreshUser about its own keys only", async () => {
+  it('a watching extension is told after refreshUser about its own keys only', async () => {
     const delivered: unknown[][] = [];
     const r = surfaceFor('ext.id', delivered);
     surfaceFor('other.id'); // a second extension, not watching
@@ -111,7 +149,9 @@ describe('host.prefs surface', () => {
     store.rows['other.id.a'] = 8;
     store.rows['ext.id.sub.deep'] = 9; // belongs to extension 'ext.id.sub'
     await prefs.refreshUser();
-    expect(delivered.map((d) => [d[0], d[1]])).toEqual([['platform.prefs.change', { name: 'a', value: 7 }]]);
+    expect(delivered.map((d) => [d[0], d[1]])).toEqual([
+      ['platform.prefs.change', { name: 'a', value: 7 }],
+    ]);
     await r.dispatch('prefs', 'unwatch', []);
     store.rows['ext.id.a'] = 10;
     await prefs.refreshUser();
@@ -121,9 +161,22 @@ describe('host.prefs surface', () => {
   it('closing the surface stops delivery', async () => {
     const delivered: unknown[][] = [];
     const built = buildSurfaces({
-      extensionId: 'ext.id', dataDir: dir, query: {} as Query,
-      inference: { complete: noop, see: noop, read: noop, hear: noop, lane: async () => 'open' as const, describe: async () => null },
-      notify: () => {}, bus: createEventBus(), deliverEvent: (...a: unknown[]) => void delivered.push(a), attention: {} as never, prefs,
+      extensionId: 'ext.id',
+      dataDir: dir,
+      query: {} as Query,
+      inference: {
+        complete: noop,
+        see: noop,
+        read: noop,
+        hear: noop,
+        lane: async () => 'open' as const,
+        describe: async () => null,
+      },
+      notify: () => {},
+      bus: createEventBus(),
+      deliverEvent: (...a: unknown[]) => void delivered.push(a),
+      attention: {} as never,
+      prefs,
     } as never);
     await (built.surfaces.prefs.watch as () => unknown)();
     await built.close();
@@ -146,7 +199,13 @@ describe('host.prefs in the extension process', () => {
     let off: (() => void) | undefined;
     let got: unknown;
     const mod = {
-      async activate(host: { prefs: { get(n: string): Promise<unknown>; set(n: string, v: unknown): Promise<void>; onChange(cb: (n: string, v: unknown) => void): () => void } }) {
+      async activate(host: {
+        prefs: {
+          get(n: string): Promise<unknown>;
+          set(n: string, v: unknown): Promise<void>;
+          onChange(cb: (n: string, v: unknown) => void): () => void;
+        };
+      }) {
         got = await host.prefs.get('a');
         await host.prefs.set('a', 2);
         off = host.prefs.onChange((n, v) => seen.push([n, v]));
@@ -156,10 +215,20 @@ describe('host.prefs in the extension process', () => {
     runExtensionHost(child, { requireModule: () => mod, exit: jest.fn() });
     const activated = new Promise<void>((res) => {
       const o = mainEp.onNotify((m) => {
-        if (m.kind === 'activated') { o(); res(); }
+        if (m.kind === 'activated') {
+          o();
+          res();
+        }
       });
     });
-    mainEp.post({ kind: 'bootstrap', v: 1, extensionId: 'test.p', entryAbsPath: '/x.js', dataDir: '/d', caps: ['prefs'] as Cap[] });
+    mainEp.post({
+      kind: 'bootstrap',
+      v: 1,
+      extensionId: 'test.p',
+      entryAbsPath: '/x.js',
+      dataDir: '/d',
+      caps: ['prefs'] as Cap[],
+    });
     await activated;
     expect(got).toBe(41);
     expect(calls).toEqual([
@@ -167,10 +236,23 @@ describe('host.prefs in the extension process', () => {
       ['prefs', 'set', ['a', 2]],
       ['prefs', 'watch', []],
     ]);
-    mainEp.post({ kind: 'event', name: 'platform.prefs.change', payload: { name: 'a', value: 3 }, meta: { from: 'platform', at: 1 } });
-    mainEp.post({ kind: 'event', name: 'platform.prefs.change', payload: { name: 'b', value: undefined }, meta: { from: 'platform', at: 2 } });
+    mainEp.post({
+      kind: 'event',
+      name: 'platform.prefs.change',
+      payload: { name: 'a', value: 3 },
+      meta: { from: 'platform', at: 1 },
+    });
+    mainEp.post({
+      kind: 'event',
+      name: 'platform.prefs.change',
+      payload: { name: 'b', value: undefined },
+      meta: { from: 'platform', at: 2 },
+    });
     await new Promise((r) => setTimeout(r, 20));
-    expect(seen).toEqual([['a', 3], ['b', undefined]]);
+    expect(seen).toEqual([
+      ['a', 3],
+      ['b', undefined],
+    ]);
     off!();
     await new Promise((r) => setTimeout(r, 20));
     expect(calls[calls.length - 1]).toEqual(['prefs', 'unwatch', []]);

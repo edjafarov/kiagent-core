@@ -1667,6 +1667,16 @@ export interface SyncRoleWire {
   reason: LeaseReason | 'fenced-boot' | 'follower-copy';
 }
 
+/** What a host without a sync service reports: this device alone, leading. */
+export const LONE_ROLE: SyncRoleWire = {
+  leader: true,
+  follower: false,
+  multiDevice: false,
+  epoch: 0,
+  priorRenewedAt: null,
+  reason: 'solo',
+};
+
 export interface SyncStatusWire {
   /** Device-owned accounts another device owns: they run, and send, there. */
   elsewhere: { source: string; identifier: string; ownerDeviceId: string }[];
@@ -2124,7 +2134,9 @@ export type SyncSurface = CapSurfaces['sync']['sync'];
 
 /** THE list of public sync methods: the host builder, the RPC allowlist and
  *  the tests all iterate it. Main-only members of the sync service (`close`,
- *  `onApplied`, `setRunners`, ...) are deliberately not here. */
+ *  `onApplied`, `onRole`, `setRunners`, ...) are deliberately not here.
+ *  `setForwarder` takes a function, so it only works for the in-process host:
+ *  a forked host cannot pass one over the RPC wire. */
 export const SYNC_SURFACE_METHODS = [
   'status',
   'buildDelta',
@@ -2172,6 +2184,9 @@ export const _syncSurfaceCovered: _SyncMissing extends never ? true : never =
 export interface BaseHost {
   self: { id: ExtensionId; dataDir: string };
   log(level: LogLevel, msg: string): void;
+  /** The one leader fact. Not a capability: every host has it. The
+   *  platform event `sync.role` fires on every change. */
+  role: { get(): Promise<SyncRoleWire> };
 }
 
 type UnionToIntersection<U> = (

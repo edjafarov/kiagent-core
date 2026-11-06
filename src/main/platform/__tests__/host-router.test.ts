@@ -37,6 +37,15 @@ const surfaces = {
   },
 };
 
+const ROLE = {
+  leader: false,
+  follower: true,
+  multiDevice: true,
+  epoch: 7,
+  priorRenewedAt: 123,
+  reason: 'follower-copy',
+} as const;
+
 function router(granted: Cap[]) {
   logs.length = 0;
   return createHostRouter({
@@ -44,10 +53,17 @@ function router(granted: Cap[]) {
     granted: new Set(granted),
     surfaces: surfaces as never,
     logSink,
+    role: () => ROLE,
   });
 }
 
 describe('createHostRouter', () => {
+  it('base.role returns the current role for a forked child', async () => {
+    // No capability is granted: the role is on every host.
+    const r = router([]);
+    await expect(r.dispatch('base', 'role', [])).resolves.toEqual(ROLE);
+  });
+
   it('dispatches granted namespaces to the surface', async () => {
     await expect(
       router(['query']).dispatch('query', 'count', [{}]),
@@ -138,6 +154,7 @@ describe('createHostRouter', () => {
       granted: new Set(['attention']),
       surfaces: built.surfaces,
       logSink,
+      role: () => ROLE,
     });
 
     await expect(
@@ -251,6 +268,7 @@ describe('createHostRouter', () => {
       granted: new Set(['attention']),
       surfaces: built.surfaces,
       logSink,
+      role: () => ROLE,
     });
     const { main, child } = createInMemoryHostPair();
     const mainEndpoint = createRpcEndpoint(main);
@@ -407,6 +425,7 @@ describe('createHostRouter', () => {
       granted: new Set(['events']),
       surfaces: eventSurfaces,
       logSink,
+      role: () => ROLE,
     });
 
     // The attack: a THIRD array element — the typed surface's `emit` only
@@ -480,6 +499,7 @@ describe('createHostRouter', () => {
       granted: new Set(['db']),
       surfaces: { db } as never,
       logSink,
+      role: () => ROLE,
     });
     const { signal } = new AbortController();
     await routerWithDb.dispatch('db', 'exec', ['SELECT 1'], { signal });
@@ -497,6 +517,7 @@ describe('createHostRouter', () => {
     const { signal } = new AbortController();
     const r = createHostRouter({
       extensionId: 'test.attention',
+      role: () => ROLE,
       granted: new Set(['attention']),
       surfaces: {
         attention: {
@@ -523,6 +544,7 @@ describe('createHostRouter', () => {
       granted: new Set(['db']),
       surfaces: { db: { query } } as never,
       logSink,
+      role: () => ROLE,
     });
     const { signal } = new AbortController();
 
@@ -553,6 +575,7 @@ describe('createHostRouter', () => {
       granted: new Set(['db']),
       surfaces: { db } as never,
       logSink,
+      role: () => ROLE,
     });
     const { signal } = new AbortController();
 
@@ -603,6 +626,7 @@ describe('createHostRouter', () => {
         },
       } as never,
       logSink,
+      role: () => ROLE,
     });
     await expect(
       r.dispatch('db', 'begin', [], { transactionId: 'held-token', signal }),
@@ -628,6 +652,7 @@ describe('createHostRouter', () => {
       granted: new Set(['db']),
       surfaces: { db: { begin } } as never,
       logSink,
+      role: () => ROLE,
     });
 
     await expect(r.dispatch('db', 'begin', [])).rejects.toMatchObject({
@@ -644,6 +669,7 @@ describe('createHostRouter', () => {
       granted: new Set(['db']),
       surfaces: { db: { exec } } as never,
       logSink,
+      role: () => ROLE,
     });
 
     await expect(

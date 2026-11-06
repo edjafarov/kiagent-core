@@ -4,7 +4,7 @@
  * map 1:1 to host namespaces, so the permission table is this lookup —
  * no per-method map like the legacy 38-method HOST_SURFACE needed.
  */
-import type { Cap, LogLevel } from '@shared/contracts';
+import type { Cap, LogLevel, SyncRoleWire } from '@shared/contracts';
 import type { LogSink } from '@main/core/engine/engine';
 
 import type { Surfaces } from './host-surfaces';
@@ -32,6 +32,7 @@ export function createHostRouter(opts: {
   granted: ReadonlySet<Cap>;
   surfaces: Surfaces;
   logSink: LogSink;
+  role: () => SyncRoleWire;
 }): {
   dispatch(
     ns: string,
@@ -70,6 +71,7 @@ export function createHostRouter(opts: {
           opts.logSink.log(scope, args[0] as LogLevel, String(args[1]));
           return undefined;
         }
+        if (method === 'role') return opts.role();
         throw new Error(`unknown method base.${method}`);
       }
       // Namespace resolution: safe lookup only (no prototype chain walk).

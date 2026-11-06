@@ -5,15 +5,6 @@
  * MCP registration, and projects ExtensionSnapshot[] into AppState via
  * onChange. All IPC handlers call methods here.
  */
-import { forwardCore, NO_MASTER_MESSAGE } from '../core/sync/forward-core';
-import {
-  createExtensionSync,
-  type ExtensionSetStore,
-  type ExtensionsSet,
-  type LocalExtension,
-  type ReconcileResult,
-} from './extension-set';
-import type { SyncService } from '../core/sync/service';
 import path from 'path';
 import fs from 'fs';
 import os from 'os';
@@ -43,6 +34,7 @@ import type {
   Source,
   WritableCalendar,
 } from '@shared/contracts';
+import { LONE_ROLE } from '@shared/contracts';
 import type { ExtensionPreview, ExtInvokeEnvelope } from '@shared/ipc';
 import type { Contributions } from '@shared/extension-rpc';
 import { sourceErrorCode, wireErrorCode } from '@shared/source-errors';
@@ -66,6 +58,15 @@ import {
   createInstaller,
   type InstallerDeps,
 } from '@main/marketplace/installer';
+import type { SyncService } from '../core/sync/service';
+import {
+  createExtensionSync,
+  type ExtensionSetStore,
+  type ExtensionsSet,
+  type LocalExtension,
+  type ReconcileResult,
+} from './extension-set';
+import { forwardCore, NO_MASTER_MESSAGE } from '../core/sync/forward-core';
 
 import {
   consentedFileRoots,
@@ -590,7 +591,11 @@ export function createExtensionPlatform(
   const bus = createEventBus(deps.logSink);
   // Step 3: an applied delta names the copied tables it touched, so an
   // extension that shows them can refresh.
-  deps.sync?.onApplied?.((tables) => bus.emit('platform', 'sync.applied', { tables }));
+  deps.sync?.onApplied?.((tables) =>
+    bus.emit('platform', 'sync.applied', { tables }),
+  );
+  // The one leader fact, published to every extension on each change.
+  deps.sync?.onRole?.((r) => bus.emit('platform', 'sync.role', r));
   // B1: ONE registry shared across every extension's incarnations, same
   // lifetime as `bus` — see ui-registry.ts's header for why identity is
   // keyed on DbOwner.handle rather than the coarser incarnation timestamp.
@@ -1128,6 +1133,7 @@ export function createExtensionPlatform(
             return pair.main;
           }
         : () => deps.transportFactory(e.manifest.id),
+      role: () => deps.sync?.role() ?? LONE_ROLE,
       makeSurfaces: async (deliverEvent, context, deliverFileChange) => {
         const owner =
           context?.owner ??
@@ -2040,10 +2046,19 @@ export function createExtensionPlatform(
       const rule = e.manifest.sync;
       if (rule && deps.sync?.readOnly()) {
         if (rule.forward?.includes(name)) {
-          const sent = await deps.sync.forward({ kind: 'ui', extensionId, name, payload });
+          const sent = await deps.sync.forward({
+            kind: 'ui',
+            extensionId,
+            name,
+            payload,
+          });
           if (sent.ok) return { ok: true, value: sent.value };
           return sent.code === 'no-master'
-            ? { ok: false, code: 'EXT_SYNC_NO_MASTER', message: NO_MASTER_MESSAGE }
+            ? {
+                ok: false,
+                code: 'EXT_SYNC_NO_MASTER',
+                message: NO_MASTER_MESSAGE,
+              }
             : { ok: false, code: 'EXT_HANDLER_FAILED', message: sent.message };
         }
         if (rule.deliver?.includes(name)) {
@@ -2074,7 +2089,13 @@ export function createExtensionPlatform(
     },
   } satisfies Omit<
     ExtensionPlatform,
-    'installFromRef' | 'reconcileExtensions' | 'seedExtensionSet' | 'failedExtensions' | 'hasPendingExtensionRecords' | 'offerExtensions' | 'unionExtensions'
+    | 'installFromRef'
+    | 'reconcileExtensions'
+    | 'seedExtensionSet'
+    | 'failedExtensions'
+    | 'hasPendingExtensionRecords'
+    | 'offerExtensions'
+    | 'unionExtensions'
   >;
   // The members below wrap the ones above, so they are added after.
   const full = api as ExtensionPlatform;
@@ -2083,10 +2104,15 @@ export function createExtensionPlatform(
   const rawSetEnabled = api.setEnabled.bind(api);
   const rawUninstall = api.uninstall.bind(api);
   const rawInstallCommit = api.installCommit.bind(api);
-  const rawInstallFromRef: ExtensionPlatform['installFromRef'] = async (ref) => {
+  const rawInstallFromRef: ExtensionPlatform['installFromRef'] = async (
+    ref,
+  ) => {
     const p = await api.installPreview(ref);
     if (!('token' in p) || !p.token)
-      return { ok: false, error: 'error' in p && p.error ? p.error : 'preview failed' };
+      return {
+        ok: false,
+        error: 'error' in p && p.error ? p.error : 'preview failed',
+      };
     // installCommit records the manifest's consent itself, so no prompt.
     return rawInstallCommit(p.token);
   };
@@ -2097,7 +2123,10 @@ export function createExtensionPlatform(
       id: e.manifest.id,
       origin: e.origin,
       enabled: e.enabled,
-      ref: e.origin === 'marketplace' ? records.get(e.manifest.id)?.ref : undefined,
+      ref:
+        e.origin === 'marketplace'
+          ? records.get(e.manifest.id)?.ref
+          : undefined,
       explicit: e.manifest.id in state,
     }));
   };
@@ -2146,7 +2175,9 @@ export function createExtensionPlatform(
     if (staged?.origin === 'marketplace' && deps.sync?.readOnly()) {
       installer.discard(token);
       try {
-        return (await forwardCore(deps.sync, 'extension:install', { ref: staged.ref })) as {
+        return (await forwardCore(deps.sync, 'extension:install', {
+          ref: staged.ref,
+        })) as {
           ok: boolean;
           id?: string;
           error?: string;
@@ -2157,13 +2188,19 @@ export function createExtensionPlatform(
     }
     return setSync.act(
       () => rawInstallCommit(token),
-      (r) => (r.id ? { kind: 'installed', id: r.id, ref: recordedRef(r.id) } : undefined),
+      (r) =>
+        r.id
+          ? { kind: 'installed', id: r.id, ref: recordedRef(r.id) }
+          : undefined,
     );
   };
   full.installFromRef = async (ref) => {
     return setSync.act(
       () => rawInstallFromRef(ref, { grantConsent: true }),
-      (r) => (r.id ? { kind: 'installed', id: r.id, ref: recordedRef(r.id) } : undefined),
+      (r) =>
+        r.id
+          ? { kind: 'installed', id: r.id, ref: recordedRef(r.id) }
+          : undefined,
     );
   };
   // Before discovery the platform knows of no extension: a seed would write an
@@ -2175,9 +2212,16 @@ export function createExtensionPlatform(
         ? setSync.reconcile(set)
         : setSync.runFromStore();
   full.seedExtensionSet = async () => {
-    if (loaded) await setSync.seed().catch((error) =>
-      deps.logSink.log('extensions', 'warn', `could not seed the extension set: ${String(error)}`),
-    );
+    if (loaded)
+      await setSync
+        .seed()
+        .catch((error) =>
+          deps.logSink.log(
+            'extensions',
+            'warn',
+            `could not seed the extension set: ${String(error)}`,
+          ),
+        );
   };
   full.hasPendingExtensionRecords = () => setSync.hasPending();
   full.offerExtensions = () => setSync.offer();

@@ -66,6 +66,7 @@ const FIXTURE_CALWRITER_NOCAP = path.join(
   'ext-calwriter-nocap',
 );
 const FIXTURE_EVENTS_A = path.join(__dirname, 'fixtures', 'ext-events-a');
+const FIXTURE_ROLE = path.join(__dirname, 'fixtures', 'ext-role');
 const FIXTURE_EVENTS_B = path.join(__dirname, 'fixtures', 'ext-events-b');
 const FIXTURE_QUERY = path.join(__dirname, 'fixtures', 'ext-query');
 
@@ -285,6 +286,68 @@ describe('createExtensionPlatform', () => {
     await platform.stop();
     await store.close();
     fs.rmSync(tmp, { recursive: true, force: true });
+  });
+
+  describe('the leader role', () => {
+    const LEADER = {
+      leader: true,
+      follower: false,
+      multiDevice: true,
+      epoch: 3,
+      priorRenewedAt: null,
+      reason: 'lease',
+    };
+    async function install(p: ExtensionPlatform): Promise<void> {
+      await p.start();
+      const preview = await p.installPreview(FIXTURE_ROLE);
+      if (!('token' in preview))
+        throw new Error(`preview failed: ${JSON.stringify(preview)}`);
+      await expect(p.installCommit(preview.token)).resolves.toEqual({
+        ok: true,
+        id: 'test.role',
+      });
+    }
+
+    it('sync.role is emitted from the platform on every role change', async () => {
+      let push: (r: typeof LEADER) => void = () => {};
+      const follower = { ...LEADER, leader: false, follower: true, epoch: 4 };
+      await platform.stop();
+      platform = makePlatform({
+        sync: {
+          role: () => follower,
+          onRole: (cb: (r: typeof LEADER) => void) => {
+            push = cb;
+          },
+        } as never,
+      });
+      await install(platform);
+      push(LEADER);
+      push(follower);
+      await new Promise((r) => {
+        setTimeout(r, 20);
+      });
+      const probe = (await tools.get('role_probe')!.call({})) as {
+        role: unknown;
+        seen: unknown[];
+      };
+      expect(probe.seen).toEqual([LEADER, follower]);
+      expect(probe.role).toEqual(follower);
+    });
+
+    it('a host without sync reports a lone leader', async () => {
+      await install(platform);
+      const probe = (await tools.get('role_probe')!.call({})) as {
+        role: unknown;
+      };
+      expect(probe.role).toEqual({
+        leader: true,
+        follower: false,
+        multiDevice: false,
+        epoch: 0,
+        priorRenewedAt: null,
+        reason: 'solo',
+      });
+    });
   });
 
   describe('host.query', () => {
@@ -3127,7 +3190,11 @@ describe('createExtensionPlatform', () => {
         engine: '^2.18.0',
         entry: 'index.js',
         caps: [],
-        contributes: { sources: ['prepsrc'], senders: [], prepareExport: ['prepsrc'] },
+        contributes: {
+          sources: ['prepsrc'],
+          senders: [],
+          prepareExport: ['prepsrc'],
+        },
       });
       let advertiser: (id: string) => boolean = () => false;
       platform = makePlatform({

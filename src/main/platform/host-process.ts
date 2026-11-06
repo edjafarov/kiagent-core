@@ -39,7 +39,9 @@ import type {
   SendResult,
   SenderContext,
   Source,
+  SyncRoleWire,
 } from '@shared/contracts';
+import { LONE_ROLE } from '@shared/contracts';
 import type { Contributions, MainToChild } from '@shared/extension-rpc';
 import type { FileChange } from '@shared/plugin-files';
 import type { LogSink } from '@main/core/engine/engine';
@@ -127,6 +129,8 @@ export interface HostDeps {
         close(): void | Promise<void>;
       }>;
   logSink: LogSink;
+  /** The current leader fact for `host.role.get()`; absent = lone leader. */
+  role?: () => SyncRoleWire;
   onStatus(status: ExtensionStatus, error?: string): void;
   registerContributions(
     c: Contributions,
@@ -553,6 +557,7 @@ export function createExtensionHost(deps: HostDeps): {
         granted: new Set(deps.caps),
         surfaces: surfacesHandle!.surfaces,
         logSink: deps.logSink,
+        role: deps.role ?? (() => LONE_ROLE),
       });
       endpoint.onCall((ns, method, args, context) => {
         // #137 runtime pins: a host that subscribes to events, publishes

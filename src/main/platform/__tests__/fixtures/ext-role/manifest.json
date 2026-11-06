@@ -1,0 +1,13 @@
+{
+  "id": "test.role",
+  "name": "Role Test Extension",
+  "version": "1.0.0",
+  "engine": "^2.0.0",
+  "entry": "index.js",
+  "caps": ["events"],
+  "contributes": {
+    "sources": [],
+    "tools": ["role_probe"],
+    "senders": []
+  }
+}

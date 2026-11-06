@@ -138,6 +138,7 @@ function buildRemoteHost(
     log: (level: unknown, msg: unknown) => {
       void callHost(endpoint, 'base', 'log', [level, msg]).catch(() => {});
     },
+    role: { get: () => callHost(endpoint, 'base', 'role', []) },
   };
   if (boot.caps.includes('db'))
     host.db = createPluginDbProxy(endpoint, boot.extensionId);
