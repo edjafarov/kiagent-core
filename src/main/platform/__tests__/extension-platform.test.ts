@@ -311,26 +311,44 @@ describe('createExtensionPlatform', () => {
     it('sync.role is emitted from the platform on every role change', async () => {
       let push: (r: typeof LEADER) => void = () => {};
       const follower = { ...LEADER, leader: false, follower: true, epoch: 4 };
+      // The getter answers what the last push set, as the real service does.
+      let current: typeof LEADER = follower;
       await platform.stop();
       platform = makePlatform({
         sync: {
-          role: () => follower,
+          role: () => current,
           onRole: (cb: (r: typeof LEADER) => void) => {
-            push = cb;
+            push = (r) => {
+              current = r;
+              cb(r);
+            };
           },
         } as never,
       });
       await install(platform);
+      // Settle between pushes: the handler asks the getter when it runs, so a
+      // second push before it ran would change the answer it sees.
       push(LEADER);
+      await new Promise((r) => {
+        setTimeout(r, 20);
+      });
       push(follower);
       await new Promise((r) => {
         setTimeout(r, 20);
       });
       const probe = (await tools.get('role_probe')!.call({})) as {
         role: unknown;
-        seen: unknown[];
+        seen: { payload: unknown; meta: { from: string }; role: unknown }[];
       };
-      expect(probe.seen).toEqual([LEADER, follower]);
+      expect(probe.seen.map((s) => s.payload)).toEqual([LEADER, follower]);
+      expect(probe.seen.map((s) => s.meta.from)).toEqual([
+        'platform',
+        'platform',
+      ]);
+      // The getter already reflected the emitted value when the event fired.
+      expect(probe.seen.map((s) => s.role)).toEqual(
+        probe.seen.map((s) => s.payload),
+      );
       expect(probe.role).toEqual(follower);
     });
 
