@@ -457,6 +457,16 @@ export function createSyncService(deps: SyncServiceDeps): SyncService {
     });
     return (await (await worker).proc!(name, args)) as T;
   };
+
+  // One drain at a time: a pull, the timer, a fence lift and a promotion all
+  // join the drain in flight instead of sending its rows a second time.
+  const drainOutbound = (): Promise<{ sent: number; waiting: number }> => {
+    draining ??= drainOnce().finally(() => {
+      draining = null;
+    });
+    return draining;
+  };
+
   return {
     status: () => onWorker('status'),
     enableTracking: async () => {
@@ -557,13 +567,7 @@ export function createSyncService(deps: SyncServiceDeps): SyncService {
       spentLogged.delete(rowId);
       fireQueue({ kind: 'discarded', rowId, coalesceKey: row.coalesce_key });
     },
-    drainOutbound: () => {
-      // One drain at a time, so a pull and the timer never send a row twice.
-      draining ??= drainOnce().finally(() => {
-        draining = null;
-      });
-      return draining;
-    },
+    drainOutbound,
     retained: async (table) =>
       (await deps.db.all(`SELECT pk FROM sync_retained WHERE tbl = ? ORDER BY pk`, [table])).map(
         (r) => (r as { pk: string }).pk,
@@ -754,7 +758,7 @@ export function createSyncService(deps: SyncServiceDeps): SyncService {
         // Accounts and workers that found the gate closed at boot start now.
         bootFence = false;
         void Promise.resolve(deps.onPromoted?.())
-          .then(() => drainOnce())
+          .then(() => drainOutbound())
           .catch((err) => log('warn', `sync: could not open after the fence: ${String(err)}`));
       }
       // The writer lives in a worker: the message is queued ahead of any write
@@ -772,7 +776,7 @@ export function createSyncService(deps: SyncServiceDeps): SyncService {
       }
       await deps.onPromoted?.();
       // What waited for a leader runs here now.
-      await drainOnce().catch((err) => log('warn', `sync: the queue did not drain: ${String(err)}`));
+      await drainOutbound().catch((err) => log('warn', `sync: the queue did not drain: ${String(err)}`));
     },
     demote: async (masterDeviceId) => {
       await deps.db.proc!('syncDemote', { masterDeviceId });

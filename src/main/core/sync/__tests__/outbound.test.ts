@@ -29,7 +29,7 @@ const devices: Device[] = [];
 
 async function device(
   follower = false,
-  extra: { nowMs?: () => number; log?: (l: 'info' | 'warn' | 'error', m: string) => void } = {},
+  extra: { nowMs?: () => number; fencedAtBoot?: boolean; log?: (l: 'info' | 'warn' | 'error', m: string) => void } = {},
 ): Promise<Device> {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sync-outbound-'));
   const db = await openDb(path.join(dir, 'a.db'));
@@ -58,6 +58,7 @@ async function device(
     workerFile: '',
     log: extra.log ?? (() => undefined),
     nowMs: extra.nowMs,
+    fencedAtBoot: extra.fencedAtBoot,
   });
   const d = { dir, db, store, svc, conn };
   devices.push(d);
@@ -188,6 +189,55 @@ describe('forwarding', () => {
 });
 
 describe('the delivery queue', () => {
+  /** A forwarder that holds its first call until `release()` is called. */
+  function gatedForwarder(sent: number[]) {
+    let release!: () => void;
+    const gate = new Promise<void>((r) => { release = r; });
+    let first = true;
+    const forward = async (r: ForwardRequest) => {
+      if (first) { first = false; await gate; }
+      sent.push((r.payload as { n: number }).n);
+      return { ok: true as const, value: null };
+    };
+    return { forward, release };
+  }
+  const settle = () => new Promise((r) => setImmediate(r));
+
+  it('the fence lifting while a drain is in flight sends each row once', async () => {
+    const d = await device(false, { fencedAtBoot: true });
+    await d.svc.enqueue(ui('import', { n: 1 }));
+    await d.svc.enqueue(ui('import', { n: 2 }));
+    const sent: number[] = [];
+    const g = gatedForwarder(sent);
+    d.svc.setForwarder(g.forward);
+    d.svc.setRunners({ ui: async (_e, _n, p) => { await g.forward({ kind: 'ui', name: 'x', payload: p } as ForwardRequest); return null; }, core: jest.fn(), commit: jest.fn() });
+    const inFlight = d.svc.drainOutbound();
+    d.svc.setFenced(false); // boot fence set: runs onPromoted, then a drain
+    await settle();
+    g.release();
+    await inFlight;
+    await settle(); await settle();
+    expect(sent).toEqual([1, 2]);
+    expect(rows(d)).toEqual([]);
+  });
+
+  it('a promotion while a drain is in flight sends each row once', async () => {
+    const d = await device(true);
+    await d.svc.enqueue(ui('import', { n: 1 }));
+    await d.svc.enqueue(ui('import', { n: 2 }));
+    const sent: number[] = [];
+    const g = gatedForwarder(sent);
+    d.svc.setForwarder(g.forward);
+    d.svc.setRunners({ ui: async (_e, _n, p) => { await g.forward({ kind: 'ui', name: 'x', payload: p } as ForwardRequest); return null; }, core: jest.fn(), commit: jest.fn() });
+    const inFlight = d.svc.drainOutbound();
+    const promoted = d.svc.promote(2);
+    await settle();
+    g.release();
+    await Promise.all([inFlight, promoted]);
+    expect(sent).toEqual([1, 2]);
+    expect(rows(d)).toEqual([]);
+  });
+
   it('enqueue writes a local row; status counts it', async () => {
     const d = await device();
     await d.svc.enqueue(ui('import', { meeting: 'm1' }));
