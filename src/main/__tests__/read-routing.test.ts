@@ -22,14 +22,17 @@ describe('read routing (spec §3.3)', () => {
   });
 
   it('the extension slice, engine, evidence, outbound and factory reset stay on the writer', () => {
-    for (const rel of [
-      'platform/extension-platform.ts',
-      'core/engine/message-evidence.ts',
-      'outbound/service.ts',
-      'factory-reset.ts',
-    ]) {
+    for (const rel of ['core/engine/message-evidence.ts', 'outbound/service.ts', 'factory-reset.ts']) {
       expect(read(rel)).not.toMatch(/\breadsFor\b|\.reads\b/);
     }
+    // d39a2d0b: the extension platform hands an extension's interactive reads
+    // (`deps.reads`) to the read worker and keeps every bulk page on the
+    // writer — the ONE place it names `reads`, and the two pages it pins back.
+    const platform = read('platform/extension-platform.ts');
+    expect(platform).not.toMatch(/\breadsFor\b/);
+    expect(platform.match(/\.reads\b/g)).toEqual(['.reads', '.reads']);
+    expect(platform).toMatch(/documentPage: deps\.store\.read\.documentPage/);
+    expect(platform).toMatch(/seedPage: deps\.store\.read\.seedPage/);
     // #59 §3a: the ONE engine read off the writer is a new consumer's seed
     // paging (spec: on the read worker, never behind ingest). Everything
     // else in the engine stays on the writer.
@@ -38,9 +41,8 @@ describe('read routing (spec §3.3)', () => {
     expect(engine.match(/\.reads\b/g)).toEqual(['.reads']);
     expect(engine).toMatch(/const reads = deps\.reads \?\? store\.read;/);
     expect(engine.match(/\breads\.\w+/g)).toEqual(['reads.seedPage']);
-    expect(read('platform/extension-platform.ts')).toMatch(
-      /withAccountTypes\(deps\.store\.read/,
-    );
+    // The fallback when no read worker is wired stays the writer's reads.
+    expect(platform).toMatch(/withAccountTypes\(\s*deps\.reads\s*\?[\s\S]{0,200}?:\s*deps\.store\.read\b/);
   });
 });
 
