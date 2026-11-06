@@ -3,7 +3,7 @@
  *  device changes role while running. */
 import type BetterSqlite3 from 'better-sqlite3';
 
-import type { Handle } from '@shared/contracts';
+import type { Handle, LeaseSnapshot, SyncRoleWire } from '@shared/contracts';
 
 import type { AppDb } from '../../db/app-db';
 import { isDeviceOwned } from './sources';
@@ -43,8 +43,89 @@ export interface SyncGate {
 export const gateFrom = (g: Pick<SyncGate, 'role' | 'joining'>): boolean =>
   g.role === 'follower' || g.joining;
 
+export type SyncPhase =
+  | 'alone'
+  | 'joining'
+  | 'leader'
+  | 'leader-fenced'
+  | 'follower';
+
+/** The phase of this device from its sync_state row and the write fence. */
+export function phaseOf(g: {
+  role: SyncRole;
+  joining: boolean;
+  joined: boolean;
+  tracking: boolean;
+  fenced: boolean;
+}): SyncPhase {
+  if (g.role === 'follower') return 'follower';
+  if (g.joining) return 'joining';
+  if (g.tracking) return g.fenced ? 'leader-fenced' : 'leader';
+  return 'alone';
+}
+
+export const canWrite = (p: SyncPhase): boolean =>
+  p === 'alone' || p === 'leader';
+
+/** The one leader fact, from the phase and the lease snapshot (spec K2). */
+export function roleOf(i: {
+  phase: SyncPhase;
+  lease: LeaseSnapshot | null;
+}): Pick<SyncRoleWire, 'leader' | 'follower' | 'reason'> {
+  const { phase, lease } = i;
+  switch (phase) {
+    case 'follower':
+    case 'joining':
+      return {
+        leader: false,
+        follower: true,
+        reason: lease?.reason ?? 'follower-copy',
+      };
+    case 'leader-fenced':
+      if (!lease)
+        return { leader: false, follower: false, reason: 'fenced-boot' };
+      return {
+        leader: false,
+        follower: lease.isMaster ? false : lease.multiDevice,
+        reason: lease.reason,
+      };
+    case 'leader':
+      return { leader: true, follower: false, reason: lease?.reason ?? 'solo' };
+    default: // 'alone'
+      if (!lease) return { leader: true, follower: false, reason: 'solo' };
+      return lease.isMaster
+        ? { leader: true, follower: false, reason: lease.reason }
+        : { leader: false, follower: lease.multiDevice, reason: lease.reason };
+  }
+}
+
+export class SyncEpochBehind extends Error {
+  constructor(
+    message = 'a grant is never older than what this copy applied from',
+  ) {
+    super(message);
+    this.name = 'SyncEpochBehind';
+  }
+}
+
+export class SyncNotLeader extends Error {
+  constructor(message = 'open() on a follower or a joining device') {
+    super(message);
+    this.name = 'SyncNotLeader';
+  }
+}
+
+export class SyncHeadPending extends Error {
+  constructor(message = "open('lease') while head_pending = 1") {
+    super(message);
+    this.name = 'SyncHeadPending';
+  }
+}
+
 const toGate = (
-  r: { role?: SyncRole; joining?: number; joined?: number; tracking?: number } | undefined,
+  r:
+    | { role?: SyncRole; joining?: number; joined?: number; tracking?: number }
+    | undefined,
 ): SyncGate => ({
   role: r?.role ?? 'normal',
   joining: r?.joining === 1,
@@ -54,20 +135,34 @@ const toGate = (
 
 export function readGateSync(conn: BetterSqlite3.Database): SyncGate {
   return toGate(
-    conn.prepare(`SELECT role, joining, joined, tracking FROM sync_state`).get() as
+    conn
+      .prepare(`SELECT role, joining, joined, tracking FROM sync_state`)
+      .get() as
       | { role: SyncRole; joining: number; joined: number; tracking: number }
       | undefined,
   );
 }
 
 export async function readSyncGate(db: AppDb): Promise<SyncGate> {
-  const rows = await db.all(`SELECT role, joining, joined, tracking FROM sync_state`);
-  return toGate(rows[0] as { role: SyncRole; joining: number; joined: number; tracking: number } | undefined);
+  const rows = await db.all(
+    `SELECT role, joining, joined, tracking FROM sync_state`,
+  );
+  return toGate(
+    rows[0] as
+      | { role: SyncRole; joining: number; joined: number; tracking: number }
+      | undefined,
+  );
 }
 
 const idleHandle = (): Handle => ({
   status: 'paused',
-  stats: async () => ({ pending: 0, done: 0, skipped: 0, failed: 0, deferred: 0 }),
+  stats: async () => ({
+    pending: 0,
+    done: 0,
+    skipped: 0,
+    failed: 0,
+    deferred: 0,
+  }),
   stop: async () => undefined,
 });
 
@@ -112,7 +207,9 @@ export function gateEngine(
   e.run = (...a) => {
     const id = (a[0] as { id: string } | undefined)?.id ?? '';
     if (owned.ownedByOther?.(id)) return idleHandle();
-    return readOnly() && !owned.ownsAccount(id) ? idleHandle() : real.run.apply(engine, a);
+    return readOnly() && !owned.ownsAccount(id)
+      ? idleHandle()
+      : real.run.apply(engine, a);
   };
   e.attach = (...a) => {
     if (!readOnly()) return real.attach.apply(engine, a);
@@ -128,7 +225,10 @@ export function gateEngine(
         // `connect` names a source; every other verb names an account.
         const mine =
           m === 'connect'
-            ? owned.ownsSource((a[0] as { descriptor?: { id?: string } } | undefined)?.descriptor?.id ?? '')
+            ? owned.ownsSource(
+                (a[0] as { descriptor?: { id?: string } } | undefined)
+                  ?.descriptor?.id ?? '',
+              )
             : typeof a[0] === 'string' && owned.ownsAccount(a[0]);
         if (!mine) throw new SyncReadOnly(m);
       }
@@ -150,13 +250,17 @@ export function gateEngine(
 /** What `attach` returned while the device was read-only. */
 class HeldHandle {
   inner: Handle | null = null;
+
   stopped = false;
+
   get status(): Handle['status'] {
     return this.inner ? this.inner.status : 'paused';
   }
+
   stats(): ReturnType<Handle['stats']> {
     return this.inner ? this.inner.stats() : idleHandle().stats();
   }
+
   async stop(): Promise<void> {
     this.stopped = true;
     await this.inner?.stop();
@@ -190,7 +294,10 @@ function ownedSender<S extends { send(...a: never[]): Promise<unknown> }>(
   owner: SendOwnership,
 ): S {
   const gated = Object.create(real) as S;
-  (gated as { send: unknown }).send = async (intent: { accountId: string }, ctx?: unknown) => {
+  (gated as { send: unknown }).send = async (
+    intent: { accountId: string },
+    ctx?: unknown,
+  ) => {
     const id = intent?.accountId;
     if (!owner.ownsAccount(id)) {
       const ownerId = await owner.ownerOf(id);
@@ -198,11 +305,17 @@ function ownedSender<S extends { send(...a: never[]): Promise<unknown> }>(
       // The leader sends for an account it paired or that has no owner yet;
       // a follower sends only for what ownsAccount said above.
       if (!mine || readOnly()) {
-        const name = ownerId ? (owner.deviceName?.(ownerId) ?? ownerId.slice(0, 8)) : 'the device that paired it';
+        const name = ownerId
+          ? (owner.deviceName?.(ownerId) ?? ownerId.slice(0, 8))
+          : 'the device that paired it';
         throw new Error(sendFromMessage(name));
       }
     }
-    return (real.send as (...a: unknown[]) => Promise<unknown>).call(real, intent, ctx);
+    return (real.send as (...a: unknown[]) => Promise<unknown>).call(
+      real,
+      intent,
+      ctx,
+    );
   };
   return gated;
 }
