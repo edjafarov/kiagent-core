@@ -14,7 +14,8 @@ const dirs: string[] = [];
 const dbs: AppDb[] = [];
 afterEach(async () => {
   for (const d of dbs.splice(0)) await d.close();
-  for (const d of dirs.splice(0)) fs.rmSync(d, { recursive: true, force: true });
+  for (const d of dirs.splice(0))
+    fs.rmSync(d, { recursive: true, force: true });
 });
 
 async function boot(fenced: boolean) {
@@ -23,7 +24,8 @@ async function boot(fenced: boolean) {
   const db = await openDb(path.join(dir, 'a.db'));
   dbs.push(db);
   migrate(db._conn!);
-  if (fenced) db._conn!.prepare(`UPDATE sync_state SET tracking = 1, joined = 1`).run();
+  if (fenced)
+    db._conn!.prepare(`UPDATE sync_state SET tracking = 1, joined = 1`).run();
   const gate = await readSyncGate(db);
   const readOnlyAtBoot = gateFrom(gate);
   // Writable while the crashed-process rows are seeded; the guard follows the service afterwards.
@@ -35,7 +37,10 @@ async function boot(fenced: boolean) {
     readOnly: () => ro(),
   } as never);
 
-  const account = await store.createAccount({ source: 'imap', identifier: 'me@example.com@imap.example.com' });
+  const account = await store.createAccount({
+    source: 'imap',
+    identifier: 'me@example.com@imap.example.com',
+  });
   const outbox = await store.outbox.create({
     accountId: account.id,
     kind: 'new',
@@ -49,7 +54,10 @@ async function boot(fenced: boolean) {
     expiresAt: '2099-01-01T00:00:00.000Z',
   } as never);
   await store.outbox.transition(outbox.id, ['draft'], 'sending');
-  const cal = await store.createAccount({ source: 'google-calendar', identifier: 'me@example.com' });
+  const cal = await store.createAccount({
+    source: 'google-calendar',
+    identifier: 'me@example.com',
+  });
   const draft = await store.eventDrafts.insert({
     accountId: cal.id,
     payload: {
@@ -75,7 +83,9 @@ async function boot(fenced: boolean) {
 
   const hooks: Array<() => void | Promise<void>> = [];
   let resolvePromoted: () => void = () => undefined;
-  const promotedP = new Promise<void>((r) => (resolvePromoted = r));
+  const promotedP = new Promise<void>((r) => {
+    resolvePromoted = r;
+  });
   const svc = createSyncService({
     db,
     store,
@@ -91,7 +101,9 @@ async function boot(fenced: boolean) {
   });
   ro = () => svc.readOnly();
 
-  const cal$ = jest.fn(() => store.eventDrafts.recoverOrphanedCreating().then(() => undefined));
+  const cal$ = jest.fn(() =>
+    store.eventDrafts.recoverOrphanedCreating().then(() => undefined),
+  );
   const out$ = jest.fn(() => store.outbox.recoverOrphanedSending());
   const logSink = { log: jest.fn() };
   return {
@@ -104,14 +116,22 @@ async function boot(fenced: boolean) {
     outboxId: outbox.id,
     draftId: draft.id,
     promoted: () => promotedP,
-    platform: { readOnly: () => svc.readOnly(), afterPromote: (h: () => void | Promise<void>) => void hooks.push(h) },
+    platform: {
+      readOnly: () => svc.readOnly(),
+      afterPromote: (h: () => void | Promise<void>) => void hooks.push(h),
+    },
   };
 }
 
 describe('installCrashRecovery', () => {
   it('a fenced boot leaves the rows until the fence lifts, then recovers them once', async () => {
     const b = await boot(true);
-    await installCrashRecovery({ platform: b.platform, recoverCalendar: b.cal, recoverOutbox: b.out, logSink: b.logSink });
+    await installCrashRecovery({
+      platform: b.platform,
+      recoverCalendar: b.cal,
+      recoverOutbox: b.out,
+      logSink: b.logSink,
+    });
     expect(b.cal).not.toHaveBeenCalled();
     expect(b.out).not.toHaveBeenCalled();
     expect((await b.store.outbox.get(b.outboxId))?.status).toBe('sending');
@@ -120,17 +140,26 @@ describe('installCrashRecovery', () => {
     await b.promoted();
     expect(b.cal).toHaveBeenCalledTimes(1);
     expect(b.out).toHaveBeenCalledTimes(1);
-    expect((await b.store.outbox.get(b.outboxId))?.status).toBe('delivery_unknown');
+    expect((await b.store.outbox.get(b.outboxId))?.status).toBe(
+      'delivery_unknown',
+    );
     expect((await b.store.eventDrafts.get(b.draftId))?.status).toBe('unknown');
   });
 
   it('a writable boot runs the sweeps once, from the boot call', async () => {
     const b = await boot(false);
-    await installCrashRecovery({ platform: b.platform, recoverCalendar: b.cal, recoverOutbox: b.out, logSink: b.logSink });
+    await installCrashRecovery({
+      platform: b.platform,
+      recoverCalendar: b.cal,
+      recoverOutbox: b.out,
+      logSink: b.logSink,
+    });
     expect(b.cal).toHaveBeenCalledTimes(1);
     expect(b.out).toHaveBeenCalledTimes(1);
     expect(b.hooks).toHaveLength(1);
-    expect((await b.store.outbox.get(b.outboxId))?.status).toBe('delivery_unknown');
+    expect((await b.store.outbox.get(b.outboxId))?.status).toBe(
+      'delivery_unknown',
+    );
   });
 
   it('a failing calendar sweep is logged and does not stop the outbox sweep', async () => {
@@ -138,8 +167,18 @@ describe('installCrashRecovery', () => {
     const cal = jest.fn(async () => {
       throw new Error('boom');
     });
-    await installCrashRecovery({ platform: b.platform, recoverCalendar: cal, recoverOutbox: b.out, logSink: b.logSink });
+    await installCrashRecovery({
+      platform: b.platform,
+      recoverCalendar: cal,
+      recoverOutbox: b.out,
+      logSink: b.logSink,
+    });
     expect(b.out).toHaveBeenCalledTimes(1);
-    expect(b.logSink.log).toHaveBeenCalledWith('calendar-out', 'error', 'boot-time recover failed', { error: 'boom' });
+    expect(b.logSink.log).toHaveBeenCalledWith(
+      'calendar-out',
+      'error',
+      'boot-time recover failed',
+      { error: 'boom' },
+    );
   });
 });

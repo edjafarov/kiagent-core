@@ -3,14 +3,18 @@
  *  worker, so neither the window nor ingest waits for them. */
 import fs from 'node:fs';
 
-import type { CommitBatch, OfferedSettingsWire, Source } from '@shared/contracts';
+import type { OfferedSettingsWire } from '@shared/contracts';
 import type { AppDb } from '../../db/app-db';
 import { openDbInWorker } from '../../db/worker-client';
 import type { CoreStore } from '../store/store';
 import type { ImportSourcesResult } from '../store/write-tx';
 import type { DeltaResult, SyncCursor } from './delta';
-import { splitBatch, type OwnedAccount } from './owned';
-import { MAX_HANDLER_ATTEMPTS, QUEUED_SETTINGS_SQL, queuedSettingsOf, type QueuedSetting } from './settings-queue';
+import {
+  MAX_HANDLER_ATTEMPTS,
+  QUEUED_SETTINGS_SQL,
+  queuedSettingsOf,
+  type QueuedSetting,
+} from './settings-queue';
 import type { SyncRole } from './role';
 import {
   DEVICE_OWNED_SOURCES,
@@ -127,13 +131,20 @@ export interface SyncService {
     capBytes: number,
     fromEpoch?: number,
   ): Promise<DeltaResult>;
-  buildSnapshot(out: string): Promise<{ bytes: number; target: SyncCursor; sha256: string }>;
+  buildSnapshot(
+    out: string,
+  ): Promise<{ bytes: number; target: SyncCursor; sha256: string }>;
   /** `pullStartedAt`: when the pull that fetched the stage began, so a queued
    *  setting the leader acknowledged later is not released by an older delta. */
   applyDelta(
     stagePath: string,
     opts?: { pullStartedAt?: number },
-  ): Promise<{ applied: number; target: SyncCursor; tables: string[]; prefKeys: string[] }>;
+  ): Promise<{
+    applied: number;
+    target: SyncCursor;
+    tables: string[];
+    prefKeys: string[];
+  }>;
   /** Tells `cb` which copied tables each applied delta touched, so extensions
    *  can refresh (platform bus event `sync.applied`). Core-internal. */
   onApplied(cb: (tables: string[], meta: AppliedMeta) => void): void;
@@ -258,12 +269,21 @@ export interface SyncService {
 
 export interface SettingsOffer {
   export(): Promise<OfferedSettingsWire>;
-  import(s: OfferedSettingsWire): Promise<{ prefs: string[]; extensions: string[] }>;
+  import(
+    s: OfferedSettingsWire,
+  ): Promise<{ prefs: string[]; extensions: string[] }>;
 }
 
 export interface SyncServiceDeps {
   db: AppDb;
-  store: Pick<CoreStore, 'applySyncDelta' | 'importSyncSources' | 'importSyncSecrets' | 'read' | 'vault'>;
+  store: Pick<
+    CoreStore,
+    | 'applySyncDelta'
+    | 'importSyncSources'
+    | 'importSyncSecrets'
+    | 'read'
+    | 'vault'
+  >;
   dbPath: string;
   workerFile: string;
   execArgv?: string[];
@@ -311,8 +331,10 @@ export function createSyncService(deps: SyncServiceDeps): SyncService {
   let gated = deps.initialReadOnly ?? false;
   let fenced = deps.fencedAtBoot ?? false;
   let bootFence = fenced;
-  if (fenced) void deps.db.proc?.('syncFence', { on: true })?.catch(() => undefined);
-  const readOnly = (): boolean => gated || fenced || (deps.readOnly?.() ?? false);
+  if (fenced)
+    void deps.db.proc?.('syncFence', { on: true })?.catch(() => undefined);
+  const readOnly = (): boolean =>
+    gated || fenced || (deps.readOnly?.() ?? false);
   const refreshGate = async (): Promise<void> => {
     const rows = await deps.db.all(`SELECT role, joining FROM sync_state`);
     const r = rows[0] as { role?: string; joining?: number } | undefined;
@@ -326,24 +348,35 @@ export function createSyncService(deps: SyncServiceDeps): SyncService {
   let names = new Map<string, string>();
   let masterId: string | null = null;
   const refreshOwned = async (): Promise<void> => {
-    const me = deviceId;
+    const self = deviceId;
     masterId =
-      ((await deps.db.all(`SELECT master_device_id AS m FROM sync_state`))[0] as { m: string | null } | undefined)
-        ?.m ?? null;
+      (
+        (
+          await deps.db.all(`SELECT master_device_id AS m FROM sync_state`)
+        )[0] as { m: string | null } | undefined
+      )?.m ?? null;
     const foreign = await deps.db.all(
       `SELECT id FROM accounts WHERE owner_device_id IS NOT NULL AND owner_device_id <> ?`,
-      [me ?? ''],
+      [self ?? ''],
     );
     foreignIds = new Set((foreign as { id: string }[]).map((r) => r.id));
-    const rows = await deps.db.all(ownedByThisDeviceSql(false), [...DEVICE_OWNED_SOURCES]);
+    const rows = await deps.db.all(ownedByThisDeviceSql(false), [
+      ...DEVICE_OWNED_SOURCES,
+    ]);
     ownedIds = new Set((rows as { id: string }[]).map((r) => r.id));
     ownerOpen = (await deps.db.all(OWNER_OPEN_SQL)).length > 0;
   };
-  const appliedListeners: ((tables: string[], meta: AppliedMeta) => void)[] = [];
+  const appliedListeners: ((tables: string[], meta: AppliedMeta) => void)[] =
+    [];
   let forwarder: Forwarder | null = null;
   let runners: ForwardRunners | null = null;
   const dispatch = async (req: ForwardRequest): Promise<ForwardResult> => {
-    if (!runners) return { ok: false, code: 'handler', message: 'no handlers are bound on this device' };
+    if (!runners)
+      return {
+        ok: false,
+        code: 'handler',
+        message: 'no handlers are bound on this device',
+      };
     try {
       const value =
         req.kind === 'ui'
@@ -353,29 +386,47 @@ export function createSyncService(deps: SyncServiceDeps): SyncService {
             : await runners.commit(req.payload);
       return { ok: true, value };
     } catch (err) {
-      return { ok: false, code: 'handler', message: err instanceof Error ? err.message : String(err) };
+      return {
+        ok: false,
+        code: 'handler',
+        message: err instanceof Error ? err.message : String(err),
+      };
     }
   };
   const forward = async (req: ForwardRequest): Promise<ForwardResult> => {
-    if (!forwarder) return { ok: false, code: 'no-master', message: 'no leader is reachable' };
+    if (!forwarder)
+      return {
+        ok: false,
+        code: 'no-master',
+        message: 'no leader is reachable',
+      };
     try {
       return await forwarder(req);
     } catch {
-      return { ok: false, code: 'no-master', message: 'no leader is reachable' };
+      return {
+        ok: false,
+        code: 'no-master',
+        message: 'no leader is reachable',
+      };
     }
   };
   let draining: Promise<{ sent: number; waiting: number }> | null = null;
   const nowMs = deps.nowMs ?? Date.now;
   /** A refusing handler is retried this many times, with a growing wait, and
    *  then left in the queue for good: kept, never sent again, never blocking. */
-  const backoffMs = (attempts: number): number => Math.min(30_000 * 2 ** (attempts - 1), 60 * 60_000);
+  const backoffMs = (attempts: number): number =>
+    Math.min(30_000 * 2 ** (attempts - 1), 60 * 60_000);
   const retryAt = new Map<number, number>();
   const spentLogged = new Set<number>();
   const sourceName = (req: ForwardRequest): string => {
     if (req.kind === 'ui') return req.extensionId ?? req.name;
     if (req.kind === 'commit') {
-      const p = req.payload as { account?: { source?: string; identifier?: string } } | undefined;
-      return p?.account?.source ? `${p.account.source} (${p.account.identifier ?? '?'})` : req.name;
+      const p = req.payload as
+        | { account?: { source?: string; identifier?: string } }
+        | undefined;
+      return p?.account?.source
+        ? `${p.account.source} (${p.account.identifier ?? '?'})`
+        : req.name;
     }
     return req.name;
   };
@@ -392,7 +443,13 @@ export function createSyncService(deps: SyncServiceDeps): SyncService {
   const drainOnce = async (): Promise<{ sent: number; waiting: number }> => {
     let sent = 0;
     const waitingNow = async (): Promise<number> =>
-      Number(((await deps.db.all(`SELECT count(*) AS n FROM sync_outbound`))[0] as { n: number }).n);
+      Number(
+        (
+          (await deps.db.all(`SELECT count(*) AS n FROM sync_outbound`))[0] as {
+            n: number;
+          }
+        ).n,
+      );
     // Rows in id order; a spent row is skipped, so it never blocks the rest.
     // A refused or backing-off row without a key holds back the later rows
     // without one (order kept) but never a settings row; the same on a keyed
@@ -400,18 +457,32 @@ export function createSyncService(deps: SyncServiceDeps): SyncService {
     let blockedUnkeyed = false;
     let after = 0;
     for (;;) {
-      const next = (await deps.db.all(
-        `SELECT id, payload, attempts, coalesce_key FROM sync_outbound WHERE id > ? ORDER BY id LIMIT 1`,
-        [after],
-      ))[0] as { id: number; payload: Buffer; attempts: number; coalesce_key: string | null } | undefined;
+      const next = (
+        await deps.db.all(
+          `SELECT id, payload, attempts, coalesce_key FROM sync_outbound WHERE id > ? ORDER BY id LIMIT 1`,
+          [after],
+        )
+      )[0] as
+        | {
+            id: number;
+            payload: Buffer;
+            attempts: number;
+            coalesce_key: string | null;
+          }
+        | undefined;
       if (!next) break;
       after = next.id;
       const isKeyed = next.coalesce_key !== null;
-      const req = JSON.parse(Buffer.from(next.payload).toString('utf8')) as ForwardRequest;
+      const req = JSON.parse(
+        Buffer.from(next.payload).toString('utf8'),
+      ) as ForwardRequest;
       if (next.attempts >= MAX_HANDLER_ATTEMPTS) {
         if (!spentLogged.has(next.id)) {
           spentLogged.add(next.id);
-          log('error', `sync: giving up on a queued ${req.name} from ${sourceName(req)} after ${next.attempts} refusals; it stays in the queue`);
+          log(
+            'error',
+            `sync: giving up on a queued ${req.name} from ${sourceName(req)} after ${next.attempts} refusals; it stays in the queue`,
+          );
         }
         continue;
       }
@@ -427,21 +498,34 @@ export function createSyncService(deps: SyncServiceDeps): SyncService {
         await deps.db.run(`DELETE FROM sync_outbound WHERE id = ?`, [next.id]);
         retryAt.delete(next.id);
         sent += 1;
-        fireQueue({ kind: 'delivered', rowId: next.id, coalesceKey: next.coalesce_key });
+        fireQueue({
+          kind: 'delivered',
+          rowId: next.id,
+          coalesceKey: next.coalesce_key,
+        });
       } else if (r.code === 'handler') {
         // The leader's handler refused. Keep the row: a later version of the
         // handler or the data may accept it. Back off, and after the last try
         // stop waiting on it.
         const attempts = next.attempts + 1;
-        await deps.db.run(`UPDATE sync_outbound SET attempts = ? WHERE id = ?`, [attempts, next.id]);
+        await deps.db.run(
+          `UPDATE sync_outbound SET attempts = ? WHERE id = ?`,
+          [attempts, next.id],
+        );
         retryAt.set(next.id, nowMs() + backoffMs(attempts));
-        log('warn', `sync: a queued ${req.name} from ${sourceName(req)} was refused (${attempts}/${MAX_HANDLER_ATTEMPTS}): ${r.message}`);
+        log(
+          'warn',
+          `sync: a queued ${req.name} from ${sourceName(req)} was refused (${attempts}/${MAX_HANDLER_ATTEMPTS}): ${r.message}`,
+        );
         if (attempts < MAX_HANDLER_ATTEMPTS) {
           if (!isKeyed) blockedUnkeyed = true;
           continue;
         }
         spentLogged.add(next.id);
-        log('error', `sync: giving up on a queued ${req.name} from ${sourceName(req)}; it stays in the queue`);
+        log(
+          'error',
+          `sync: giving up on a queued ${req.name} from ${sourceName(req)}; it stays in the queue`,
+        );
       } else {
         // No leader reachable: nothing was tried, so nothing is counted.
         break;
@@ -455,7 +539,9 @@ export function createSyncService(deps: SyncServiceDeps): SyncService {
       role: 'sync',
       execArgv: deps.execArgv,
     });
-    return (await (await worker).proc!(name, args)) as T;
+    return (await (
+      await worker
+    ).proc!(name, args)) as T;
   };
 
   // One drain at a time: a pull, the timer, a fence lift and a promotion all
@@ -476,13 +562,22 @@ export function createSyncService(deps: SyncServiceDeps): SyncService {
       await deps.db.proc!('syncTracking', { on: false });
     },
     buildDelta: (after, out, capBytes, fromEpoch) =>
-      onWorker('buildDelta', { after, out, capBytes, fromEpoch: fromEpoch ?? Number.MAX_SAFE_INTEGER }),
+      onWorker('buildDelta', {
+        after,
+        out,
+        capBytes,
+        fromEpoch: fromEpoch ?? Number.MAX_SAFE_INTEGER,
+      }),
     buildSnapshot: (out) => onWorker('buildSnapshot', { out }),
     applyDelta: async (stagePath, opts) => {
       const r = await deps.store.applySyncDelta(stagePath);
-      const meta: AppliedMeta = { prefKeys: r.prefKeys ?? [], pullStartedAt: opts?.pullStartedAt };
+      const meta: AppliedMeta = {
+        prefKeys: r.prefKeys ?? [],
+        pullStartedAt: opts?.pullStartedAt,
+      };
       if (r.tables.includes('accounts')) await refreshOwned();
-      if (r.tables.length) for (const cb of appliedListeners) cb(r.tables, meta);
+      if (r.tables.length)
+        for (const cb of appliedListeners) cb(r.tables, meta);
       return { ...r, prefKeys: meta.prefKeys };
     },
     onApplied: (cb) => {
@@ -501,22 +596,29 @@ export function createSyncService(deps: SyncServiceDeps): SyncService {
     exportSettings: async () =>
       (await settingsOffer?.export()) ?? { prefs: {}, extensions: {} },
     importSettings: async (offerId, settings) => {
-      if (readOnly()) throw new Error('this device is not the seed and takes no settings');
-      if (!settingsOffer) throw new Error('settings are not ready on this device yet');
+      if (readOnly())
+        throw new Error('this device is not the seed and takes no settings');
+      if (!settingsOffer)
+        throw new Error('settings are not ready on this device yet');
       // Its own marker beside the sources': both ride one offer id.
       const marker = `settings:${offerId}`;
-      const seen = await deps.db.all(`SELECT 1 FROM sync_offers WHERE offer_id = ?`, [marker]);
+      const seen = await deps.db.all(
+        `SELECT 1 FROM sync_offers WHERE offer_id = ?`,
+        [marker],
+      );
       if (seen.length > 0) return { prefs: [], extensions: [] };
       const isObj = (v: unknown): v is Record<string, unknown> =>
         !!v && typeof v === 'object' && !Array.isArray(v);
       const r = await settingsOffer.import({
         prefs: isObj(settings?.prefs) ? settings.prefs : {},
-        extensions: isObj(settings?.extensions) ? (settings.extensions as OfferedSettingsWire['extensions']) : {},
+        extensions: isObj(settings?.extensions)
+          ? (settings.extensions as OfferedSettingsWire['extensions'])
+          : {},
       });
-      await deps.db.run(`INSERT OR IGNORE INTO sync_offers(offer_id, at) VALUES(?, ?)`, [
-        marker,
-        new Date().toISOString(),
-      ]);
+      await deps.db.run(
+        `INSERT OR IGNORE INTO sync_offers(offer_id, at) VALUES(?, ?)`,
+        [marker, new Date().toISOString()],
+      );
       log(
         'info',
         `sync: offer ${offerId.slice(0, 8)}: ${r.prefs.length} settings and ${r.extensions.length} connectors added to the set`,
@@ -528,7 +630,11 @@ export function createSyncService(deps: SyncServiceDeps): SyncService {
     },
     runForwarded: async (req) => {
       if (readOnly()) {
-        return { ok: false, code: 'no-master', message: 'this device is not the leader' };
+        return {
+          ok: false,
+          code: 'no-master',
+          message: 'this device is not the leader',
+        };
       }
       return dispatch(req);
     },
@@ -545,7 +651,10 @@ export function createSyncService(deps: SyncServiceDeps): SyncService {
       // The replace is one transaction: a failing insert leaves the older row.
       const results = opts
         ? await deps.db.batch([
-            { sql: `DELETE FROM sync_outbound WHERE coalesce_key = ?`, params: [opts.coalesceKey] },
+            {
+              sql: `DELETE FROM sync_outbound WHERE coalesce_key = ?`,
+              params: [opts.coalesceKey],
+            },
             { sql: insert, params },
           ])
         : await deps.db.batch([{ sql: insert, params }]);
@@ -555,12 +664,18 @@ export function createSyncService(deps: SyncServiceDeps): SyncService {
       queueListeners.push(cb);
     },
     queuedSettings: async () =>
-      queuedSettingsOf((await deps.db.all(QUEUED_SETTINGS_SQL)) as Parameters<typeof queuedSettingsOf>[0]),
+      queuedSettingsOf(
+        (await deps.db.all(QUEUED_SETTINGS_SQL)) as Parameters<
+          typeof queuedSettingsOf
+        >[0],
+      ),
     discardQueued: async (rowId) => {
-      const row = (await deps.db.all(
-        `SELECT coalesce_key FROM sync_outbound WHERE id = ? AND coalesce_key IS NOT NULL`,
-        [rowId],
-      ))[0] as { coalesce_key: string } | undefined;
+      const row = (
+        await deps.db.all(
+          `SELECT coalesce_key FROM sync_outbound WHERE id = ? AND coalesce_key IS NOT NULL`,
+          [rowId],
+        )
+      )[0] as { coalesce_key: string } | undefined;
       if (!row) return;
       await deps.db.run(`DELETE FROM sync_outbound WHERE id = ?`, [rowId]);
       retryAt.delete(rowId);
@@ -569,34 +684,54 @@ export function createSyncService(deps: SyncServiceDeps): SyncService {
     },
     drainOutbound,
     retained: async (table) =>
-      (await deps.db.all(`SELECT pk FROM sync_retained WHERE tbl = ? ORDER BY pk`, [table])).map(
-        (r) => (r as { pk: string }).pk,
-      ),
+      (
+        await deps.db.all(
+          `SELECT pk FROM sync_retained WHERE tbl = ? ORDER BY pk`,
+          [table],
+        )
+      ).map((r) => (r as { pk: string }).pk),
     setDeviceId: async (id) => {
       deviceId = id;
       await deps.db.run(`UPDATE sync_state SET device_id = ?`, [id]);
-      const st = (await deps.db.all(`SELECT role, joined, joining, adopted_at FROM sync_state`))[0] as
-        | { role: string; joined: number; joining: number; adopted_at: string | null }
+      const st = (
+        await deps.db.all(
+          `SELECT role, joined, joining, adopted_at FROM sync_state`,
+        )
+      )[0] as
+        | {
+            role: string;
+            joined: number;
+            joining: number;
+            adopted_at: string | null;
+          }
         | undefined;
       // Once, on a device that has never joined: its device-owned accounts get
       // this device's suffix and owner, so `UNIQUE(source, identifier)` holds
       // across devices. A joined device's rows arrived suffixed and owned.
-      if (st && !st.adopted_at && st.role === 'normal' && st.joined !== 1 && st.joining !== 1) {
+      if (
+        st &&
+        !st.adopted_at &&
+        st.role === 'normal' &&
+        st.joined !== 1 &&
+        st.joining !== 1
+      ) {
         const marks = DEVICE_OWNED_SOURCES.map(() => '?').join(', ');
         await deps.db.run(
           `UPDATE accounts SET identifier = identifier || '#' || ?, owner_device_id = ?
             WHERE source IN (${marks}) AND owner_device_id IS NULL`,
           [deviceSuffix(id), id, ...DEVICE_OWNED_SOURCES],
         );
-        await deps.db.run(`UPDATE sync_state SET adopted_at = ?`, [new Date().toISOString()]);
+        await deps.db.run(`UPDATE sync_state SET adopted_at = ?`, [
+          new Date().toISOString(),
+        ]);
       }
       await refreshOwned();
     },
     loadOwned: async () => {
       if (!deviceId) {
-        const row = (await deps.db.all(`SELECT device_id FROM sync_state`))[0] as
-          | { device_id: string | null }
-          | undefined;
+        const row = (
+          await deps.db.all(`SELECT device_id FROM sync_state`)
+        )[0] as { device_id: string | null } | undefined;
         if (row?.device_id) deviceId = row.device_id;
       }
       await refreshOwned();
@@ -605,10 +740,13 @@ export function createSyncService(deps: SyncServiceDeps): SyncService {
     ownsSource: (source) => !fenced && ownerOpen && isDeviceOwned(source),
     ownedByOther: (accountId) => foreignIds.has(accountId),
     setDeviceNames: async (list) => {
-      names = new Map(list.filter((d) => d.label).map((d) => [d.deviceId, d.label]));
+      names = new Map(
+        list.filter((d) => d.label).map((d) => [d.deviceId, d.label]),
+      );
     },
     deviceName: (id) => names.get(id) ?? id.slice(0, 8),
-    masterName: () => (masterId ? (names.get(masterId) ?? masterId.slice(0, 8)) : null),
+    masterName: () =>
+      masterId ? (names.get(masterId) ?? masterId.slice(0, 8)) : null,
     beginJoin: async () => {
       await deps.db.run(`UPDATE sync_state SET joining = 1`);
       await refreshGate();
@@ -673,9 +811,12 @@ export function createSyncService(deps: SyncServiceDeps): SyncService {
     },
     canAcceptSources: () => !readOnly() && deps.keystoreAvailable?.() === true,
     importSources: async (offerId, list, from) => {
-      if (readOnly()) throw new Error('this device is not the seed and takes no sources');
+      if (readOnly())
+        throw new Error('this device is not the seed and takes no sources');
       if (deps.keystoreAvailable?.() !== true || !deps.encryptStrict) {
-        throw new Error('no keystore on this device: its logins can not be stored safely');
+        throw new Error(
+          'no keystore on this device: its logins can not be stored safely',
+        );
       }
       const installed = deps.isInstalled ?? (() => true);
       // Everything is encrypted before the writer sees any of it: a failure
@@ -686,7 +827,9 @@ export function createSyncService(deps: SyncServiceDeps): SyncService {
         config: o.config,
         cadence: o.cadence,
         blob:
-          o.credentials === null || o.credentials === undefined || isDeviceOwned(o.source)
+          o.credentials === null ||
+          o.credentials === undefined ||
+          isDeviceOwned(o.source)
             ? null
             : deps.encryptStrict!(JSON.stringify(o.credentials)),
         ownerDeviceId: o.owner_device_id,
@@ -708,8 +851,9 @@ export function createSyncService(deps: SyncServiceDeps): SyncService {
       return r;
     },
     exportSecrets: async (after) => {
-      const decrypt = deps.decrypt;
-      if (!decrypt) throw new Error('no decrypt on this device: logins can not be read');
+      const { decrypt } = deps;
+      if (!decrypt)
+        throw new Error('no decrypt on this device: logins can not be read');
       const rows = await deps.db.all(
         // A device-owned account's login never leaves its owner (r16 ruling 5).
         `SELECT account_id, epoch, n, blob FROM vault
@@ -719,25 +863,46 @@ export function createSyncService(deps: SyncServiceDeps): SyncService {
         [after.epoch, after.epoch, after.n, ...DEVICE_OWNED_SOURCES],
       );
       const out: Secret[] = [];
-      for (const r of rows as { account_id: string; epoch: number; n: number; blob: Buffer }[]) {
+      for (const r of rows as {
+        account_id: string;
+        epoch: number;
+        n: number;
+        blob: Buffer;
+      }[]) {
         if (r.blob.length === 0) {
-          out.push({ accountId: r.account_id, epoch: r.epoch, n: r.n, value: null });
+          out.push({
+            accountId: r.account_id,
+            epoch: r.epoch,
+            n: r.n,
+            value: null,
+          });
           continue;
         }
         try {
-          out.push({ accountId: r.account_id, epoch: r.epoch, n: r.n, value: decrypt(r.blob) });
+          out.push({
+            accountId: r.account_id,
+            epoch: r.epoch,
+            n: r.n,
+            value: decrypt(r.blob),
+          });
         } catch {
           // Named by account id only; the value is never in the message.
-          log('warn', `sync: a login for account ${r.account_id} could not be read here and is not sent`);
+          log(
+            'warn',
+            `sync: a login for account ${r.account_id} could not be read here and is not sent`,
+          );
         }
       }
       return out;
     },
     importSecrets: async (list) => {
       await refreshGate();
-      if (!gated) throw new Error('only a follower takes logins from the leader');
+      if (!gated)
+        throw new Error('only a follower takes logins from the leader');
       if (deps.keystoreAvailable?.() !== true || !deps.encryptStrict) {
-        throw new Error('no keystore on this device: its logins can not be stored safely');
+        throw new Error(
+          'no keystore on this device: its logins can not be stored safely',
+        );
       }
       // Everything is encrypted before the writer sees any of it.
       const entries = list.map((s) => ({
@@ -747,7 +912,10 @@ export function createSyncService(deps: SyncServiceDeps): SyncService {
         blob: s.value === null ? Buffer.alloc(0) : deps.encryptStrict!(s.value),
       }));
       const r = await deps.store.importSyncSecrets(entries);
-      log('info', `sync: ${r.applied} of ${list.length} logins from the leader were newer`);
+      log(
+        'info',
+        `sync: ${r.applied} of ${list.length} logins from the leader were newer`,
+      );
       return r;
     },
     isBusy: () => deps.busy?.() ?? null,
@@ -759,14 +927,19 @@ export function createSyncService(deps: SyncServiceDeps): SyncService {
         bootFence = false;
         void Promise.resolve(deps.onPromoted?.())
           .then(() => drainOutbound())
-          .catch((err) => log('warn', `sync: could not open after the fence: ${String(err)}`));
+          .catch((err) =>
+            log('warn', `sync: could not open after the fence: ${String(err)}`),
+          );
       }
       // The writer lives in a worker: the message is queued ahead of any write
       // sent after this call.
       void deps.db.proc?.('syncFence', { on })?.catch(() => undefined);
     },
     promote: async (epoch, opts) => {
-      await deps.db.proc!('syncPromote', { epoch, relayImported: opts?.relayImported !== false });
+      await deps.db.proc!('syncPromote', {
+        epoch,
+        relayImported: opts?.relayImported !== false,
+      });
       await refreshGate();
       if (fenced) {
         // Promoted but not yet allowed to lead (registration has not recorded
@@ -776,7 +949,9 @@ export function createSyncService(deps: SyncServiceDeps): SyncService {
       }
       await deps.onPromoted?.();
       // What waited for a leader runs here now.
-      await drainOutbound().catch((err) => log('warn', `sync: the queue did not drain: ${String(err)}`));
+      await drainOutbound().catch((err) =>
+        log('warn', `sync: the queue did not drain: ${String(err)}`),
+      );
     },
     demote: async (masterDeviceId) => {
       await deps.db.proc!('syncDemote', { masterDeviceId });

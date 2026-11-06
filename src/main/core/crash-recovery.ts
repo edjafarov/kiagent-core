@@ -10,7 +10,8 @@ export interface CrashRecoveryDeps {
   logSink: Pick<LogSink, 'log'>;
 }
 
-const message = (err: unknown): string => (err instanceof Error ? err.message : String(err));
+const message = (err: unknown): string =>
+  err instanceof Error ? err.message : String(err);
 
 /**
  * Registers the sweeps with afterPromote and runs them now when the device can write.
@@ -23,7 +24,9 @@ const message = (err: unknown): string => (err instanceof Error ? err.message : 
  */
 // slice-2: the registration stays on afterPromote; the one-leader-fact spec changes only
 // where the role is read.
-export async function installCrashRecovery(d: CrashRecoveryDeps): Promise<void> {
+export async function installCrashRecovery(
+  d: CrashRecoveryDeps,
+): Promise<void> {
   // No once-guard: the hooks run before platform.promote() resumes the accounts (boot.ts),
   // so a row still 'sending'/'creating' at a promotion was left by a run that can no longer
   // finish it (a fenced completion, or the old leader); marking it unknown is the honest outcome.
@@ -32,7 +35,9 @@ export async function installCrashRecovery(d: CrashRecoveryDeps): Promise<void> 
       // A 'creating' event draft also means a process died mid-create.
       await d.recoverCalendar();
     } catch (err) {
-      d.logSink.log('calendar-out', 'error', 'boot-time recover failed', { error: message(err) });
+      d.logSink.log('calendar-out', 'error', 'boot-time recover failed', {
+        error: message(err),
+      });
     }
     try {
       await d.recoverOutbox();

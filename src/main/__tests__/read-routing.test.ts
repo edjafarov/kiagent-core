@@ -22,7 +22,11 @@ describe('read routing (spec §3.3)', () => {
   });
 
   it('the extension slice, engine, evidence, outbound and factory reset stay on the writer', () => {
-    for (const rel of ['core/engine/message-evidence.ts', 'outbound/service.ts', 'factory-reset.ts']) {
+    for (const rel of [
+      'core/engine/message-evidence.ts',
+      'outbound/service.ts',
+      'factory-reset.ts',
+    ]) {
       expect(read(rel)).not.toMatch(/\breadsFor\b|\.reads\b/);
     }
     // d39a2d0b: the extension platform hands an extension's interactive reads
@@ -42,7 +46,9 @@ describe('read routing (spec §3.3)', () => {
     expect(engine).toMatch(/const reads = deps\.reads \?\? store\.read;/);
     expect(engine.match(/\breads\.\w+/g)).toEqual(['reads.seedPage']);
     // The fallback when no read worker is wired stays the writer's reads.
-    expect(platform).toMatch(/withAccountTypes\(\s*deps\.reads\s*\?[\s\S]{0,200}?:\s*deps\.store\.read\b/);
+    expect(platform).toMatch(
+      /withAccountTypes\(\s*deps\.reads\s*\?[\s\S]{0,200}?:\s*deps\.store\.read\b/,
+    );
   });
 });
 

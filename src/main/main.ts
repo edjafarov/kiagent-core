@@ -78,8 +78,14 @@ import { createBusyRegistry } from './core/busy';
 import { wireOutboxPush } from './outbox-push';
 import { wireSyncAppliedPush } from './sync-applied-push';
 import { guardDraftTools } from './outbound/follower-tools';
-import { SYNC_REFUSED_PUSH, wrapForwardedChannels } from './core/sync/forward-core';
-import { installOfflineSettings, restoreOfflineSettings } from './core/sync/offline-settings';
+import {
+  SYNC_REFUSED_PUSH,
+  wrapForwardedChannels,
+} from './core/sync/forward-core';
+import {
+  installOfflineSettings,
+  restoreOfflineSettings,
+} from './core/sync/offline-settings';
 import { runCommitBatch, type CommitInput } from './core/sync/owned';
 import { followerLookup } from './core/sync/role';
 import { wireAttentionPush } from './attention/push';
@@ -519,12 +525,19 @@ function startAccount(p: CorePlatform, account: Account): void {
 
 const EXTENSION_RETRY_MS = 60 * 60 * 1000;
 
-async function syncExtensions(extensions: ExtensionPlatform, p: CorePlatform): Promise<void> {
+async function syncExtensions(
+  extensions: ExtensionPlatform,
+  p: CorePlatform,
+): Promise<void> {
   try {
     await extensions.seedExtensionSet();
     await extensions.reconcileExtensions();
   } catch (err) {
-    p.logSink.log('extensions', 'warn', `extension reconcile failed: ${String(err)}`);
+    p.logSink.log(
+      'extensions',
+      'warn',
+      `extension reconcile failed: ${String(err)}`,
+    );
   }
 }
 
@@ -903,34 +916,54 @@ function registerIpc(
       extensions
         .reconcileExtensions()
         .catch((err) =>
-          p.logSink.log('extensions', 'warn', `extension reconcile failed: ${String(err)}`),
+          p.logSink.log(
+            'extensions',
+            'warn',
+            `extension reconcile failed: ${String(err)}`,
+          ),
         ),
   });
   const forwardedLocal = wrapForwardedChannels(
     handlers as unknown as Record<string, (req: unknown) => unknown>,
     p.sync,
-    (message) => broadcast('ext:push', { ...SYNC_REFUSED_PUSH, payload: { message } }),
+    (message) =>
+      broadcast('ext:push', { ...SYNC_REFUSED_PUSH, payload: { message } }),
     offlineHandlers,
   );
   // What was queued before the last quit shows again.
   void restoreOfflineSettings(p.prefs, p.sync).catch((err) =>
-    p.logSink.log('sync', 'warn', `queued settings were not restored: ${String(err)}`),
+    p.logSink.log(
+      'sync',
+      'warn',
+      `queued settings were not restored: ${String(err)}`,
+    ),
   );
   // A device that just became able to write seeds the extension set once.
   p.afterPromote(() => syncExtensions(extensions, p));
   // A connector that could not install here is tried again every hour.
   setInterval(() => {
-    if (extensions.failedExtensions().length > 0 || extensions.hasPendingExtensionRecords()) void syncExtensions(extensions, p);
+    if (
+      extensions.failedExtensions().length > 0 ||
+      extensions.hasPendingExtensionRecords()
+    )
+      void syncExtensions(extensions, p);
   }, EXTENSION_RETRY_MS).unref();
   // What the leader changed in user_prefs arrives by the feed.
   p.sync.onApplied((tables, meta) => {
     if (tables.includes('user_prefs')) {
       // The extension set is one of the rows that may have changed.
       void p.prefs
-        .refreshUser({ prefKeys: meta.prefKeys, pullStartedAt: meta.pullStartedAt })
+        .refreshUser({
+          prefKeys: meta.prefKeys,
+          pullStartedAt: meta.pullStartedAt,
+        })
         .then(() => extensions.reconcileExtensions())
         .catch((err) =>
-          p.logSink.log('extensions', 'warn', `extension reconcile failed: ${String(err)}`),
+          p.logSink.log(
+            'extensions',
+            'warn',
+            `extension reconcile failed: ${String(err)}`,
+          ),
         );
     }
   });
@@ -950,7 +983,11 @@ function registerIpc(
         void extensions
           .reconcileExtensions()
           .catch((err) =>
-            p.logSink.log('extensions', 'warn', `extension reconcile failed: ${String(err)}`),
+            p.logSink.log(
+              'extensions',
+              'warn',
+              `extension reconcile failed: ${String(err)}`,
+            ),
           );
       }
       return { prefs, extensions: added };
@@ -966,8 +1003,12 @@ function registerIpc(
       // Not an IPC channel: only a follower's `host.prefs.set` sends it, and
       // the leader's own listeners hear it as another device's change.
       if (name === 'prefs:set-ext') {
-        const { key, value } = (req ?? {}) as { key?: unknown; value?: unknown };
-        if (typeof key !== 'string') throw new Error('prefs:set-ext needs a key');
+        const { key, value } = (req ?? {}) as {
+          key?: unknown;
+          value?: unknown;
+        };
+        if (typeof key !== 'string')
+          throw new Error('prefs:set-ext needs a key');
         await p.prefs.setExt(key, value, { notify: true });
         return undefined;
       }
@@ -976,7 +1017,10 @@ function registerIpc(
       return local(req);
     },
     commit: async (input) => {
-      const r = await runCommitBatch({ db: p.db, store: p.store }, input as CommitInput);
+      const r = await runCommitBatch(
+        { db: p.db, store: p.store },
+        input as CommitInput,
+      );
       // A follower's account just landed: it belongs to that device, so this
       // one must know before any tick or boot path asks to run it.
       await p.sync.loadOwned();
@@ -1195,7 +1239,8 @@ app
       p.readOnly,
       {
         ownsAccount: (id) => p.sync.ownsAccount(id),
-        ownerOf: async (id) => (await p.store.account(id))?.ownerDeviceId ?? null,
+        ownerOf: async (id) =>
+          (await p.store.account(id))?.ownerDeviceId ?? null,
         deviceId: () => p.sync.deviceId(),
         deviceName: (id) => p.sync.deviceName(id),
       },
@@ -1509,7 +1554,9 @@ app
         get: () => p.prefs.getCore(EXTENSIONS_KEY) as ExtensionsSet | undefined,
         canWrite: () => !p.sync.readOnly(),
         update: (fn) =>
-          p.prefs.updateCore(EXTENSIONS_KEY, (cur) => fn(cur as ExtensionsSet | undefined)),
+          p.prefs.updateCore(EXTENSIONS_KEY, (cur) =>
+            fn(cur as ExtensionsSet | undefined),
+          ),
       },
       extDir: path.join(app.getPath('userData'), 'extensions'),
       bundledDir: bundledExtensionsDir,
