@@ -15,13 +15,18 @@ const message = (err: unknown): string => (err instanceof Error ? err.message : 
 /**
  * Registers the sweeps with afterPromote and runs them now when the device can write.
  *
- * `onPromoted` runs the hooks only on a fence lift (sync/service.ts setFenced) and on a
- * promotion (promote), never on a plain writable boot, so a writable boot sweeps once
- * from this call and a fenced or follower boot once from the hook.
+ * `onPromoted` runs the hooks on a fence lift (sync/service.ts setFenced) and on every
+ * promotion (promote), never on a plain writable boot: a writable boot sweeps once from
+ * this call, a fenced or follower boot once from the hook, and a later re-promotion
+ * sweeps again. The sweeps are conservative, not a proof of quiescence: they move rows
+ * whose outcome this process cannot know ('sending', 'creating') to an unknown state.
  */
-// slice-2: the lead API owns this registration (one-leader-fact spec).
+// slice-2: the registration stays on afterPromote; the one-leader-fact spec changes only
+// where the role is read.
 export async function installCrashRecovery(d: CrashRecoveryDeps): Promise<void> {
-  // No once-guard: onPromoted runs these hooks before platform.promote() resumes the accounts (boot.ts), so nothing of this process is in flight when a later promotion re-runs the sweeps; a 'sending'/'creating' row then is an orphan again.
+  // No once-guard: the hooks run before platform.promote() resumes the accounts (boot.ts),
+  // so a row still 'sending'/'creating' at a promotion was left by a run that can no longer
+  // finish it (a fenced completion, or the old leader); marking it unknown is the honest outcome.
   const run = async (): Promise<void> => {
     try {
       // A 'creating' event draft also means a process died mid-create.
