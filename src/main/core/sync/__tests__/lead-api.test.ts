@@ -89,6 +89,16 @@ const runnerCount = (d: Device): (() => number) => {
   });
   return () => n;
 };
+/** Records every proc call; a fence post reads `syncFence:on|off`. */
+const procLog = (d: Device): string[] => {
+  const real = (d.db as unknown as { proc: (n: string, a: unknown) => Promise<unknown> }).proc;
+  const log: string[] = [];
+  (d.db as unknown as { proc: unknown }).proc = async (n: string, a: unknown) => {
+    log.push(n === 'syncFence' ? `syncFence:${(a as { on: boolean }).on ? 'on' : 'off'}` : n);
+    return real(n, a);
+  };
+  return log;
+};
 const state = (d: Device) =>
   d.conn().prepare(`SELECT * FROM sync_state`).get() as Record<string, unknown>;
 const epochs = (d: Device) => d.conn().prepare(`SELECT * FROM sync_epochs`).all();
@@ -132,6 +142,45 @@ describe('lead', () => {
     await expect(d.svc.lead({ epoch: 1 })).rejects.toThrow(SyncEpochBehind);
     expect(state(d)).toMatchObject({ role: 'follower', head_pending: 0 });
     expect(d.svc.readOnly()).toBe(true);
+  });
+
+  it('on the seed posts no fence at all and stays writable throughout', async () => {
+    const d = await device();
+    const log = procLog(d);
+    await d.svc.lead({ epoch: 1 });
+    expect(log).toEqual(['syncLead']);
+    expect(d.svc.readOnly()).toBe(false);
+  });
+
+  it('on a tracking leader (no-op) posts no fence', async () => {
+    const d = await device(leader);
+    await d.svc.open('lease');
+    const log = procLog(d);
+    await d.svc.lead({ epoch: 5 });
+    expect(log).toEqual(['syncLead']);
+    expect(d.svc.readOnly()).toBe(false);
+  });
+
+  it('on a follower the fence post comes first, and a refused grant posts nothing', async () => {
+    const d = await device(follower);
+    const log = procLog(d);
+    await expect(d.svc.lead({ epoch: 1 })).rejects.toThrow(SyncEpochBehind);
+    expect(log).toEqual([]);
+    await d.svc.lead({ epoch: 2 });
+    // the promoted reply re-asserts the fence once more
+    expect(log).toEqual(['syncFence:on', 'syncLead', 'syncFence:on']);
+  });
+
+  it('on a follower whose proc throws restores the pre-call fence', async () => {
+    const d = await device(follower);
+    const real = (d.db as unknown as { proc: (n: string, a: unknown) => Promise<unknown> }).proc;
+    (d.db as unknown as { proc: unknown }).proc = async (n: string, a: unknown) => {
+      if (n === 'syncLead') throw new Error('boom');
+      return real(n, a);
+    };
+    const log = procLog(d);
+    await expect(d.svc.lead({ epoch: 2 })).rejects.toThrow('boom');
+    expect(log).toEqual(['syncFence:on', 'syncLead', 'syncFence:off']);
   });
 
   it('on the seed enables tracking, writes sync_epochs, does not fence and leaves head_pending 0', async () => {
@@ -207,6 +256,14 @@ describe('setLease', () => {
     expect(d.svc.readOnly()).toBe(true);
     await p;
     expect(d.svc.readOnly()).toBe(true);
+  });
+
+  it('never fences a seed (normal, tracking 0), whatever the lease says: no fence post', async () => {
+    const d = await device();
+    const log = procLog(d);
+    await d.svc.setLease(lease({ isMaster: false, reason: 'fenced' }));
+    expect(d.svc.readOnly()).toBe(false);
+    expect(log.filter((n) => n.startsWith('syncFence'))).toEqual([]);
   });
 
   it('a master lease leaves a leader open', async () => {

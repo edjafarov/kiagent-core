@@ -39,6 +39,7 @@ import {
   canWrite,
   phaseOf,
   roleOf,
+  SyncEpochBehind,
   SyncHeadPending,
   SyncNotLeader,
   type SyncPhase,
@@ -941,9 +942,12 @@ export function createSyncService(deps: SyncServiceDeps): SyncService {
     readOnly,
     setLease: async (snap) => {
       leaseNow = snap;
+      // Only a leader that tracks is ever fenced: a seed (tracking 0) stays
+      // writable whatever the lease says.
       const closes = (): boolean =>
-        snap.reason === 'fenced' ||
-        (!snap.isMaster && row.role === 'normal' && row.tracking);
+        row.role === 'normal' &&
+        row.tracking &&
+        (snap.reason === 'fenced' || !snap.isMaster);
       // Close from what is cached before any await: nothing may write between
       // the lease arriving and the fence. The fresh row can only add a close.
       if (closes()) setFence(true);
@@ -957,6 +961,8 @@ export function createSyncService(deps: SyncServiceDeps): SyncService {
       const wasFenced = fenced;
       // A follower becomes a leader here: nothing may write until it opens.
       const fromFollower = row.role === 'follower';
+      // A grant that is not newer fails before anything is fenced or posted.
+      if (fromFollower && o.epoch <= row.epoch) throw new SyncEpochBehind();
       if (fromFollower) setFence(true);
       let done: unknown;
       try {
