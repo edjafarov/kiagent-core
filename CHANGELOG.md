@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.119.1](https://github.com/edjafarov/kiagent-core/compare/v0.119.0...v0.119.1) (2026-11-06)
+
+### Bug Fixes
+
+* **sync:** a leader that boots fenced or as a follower recovers its outbox and event drafts once it may write ([c5a0bed](https://github.com/edjafarov/kiagent-core/commit/c5a0bed3a97731bac4371609bd93530f134d0229))
+* **sync:** the fence lift and the promotion join the drain in flight instead of starting a second one ([69f61b5](https://github.com/edjafarov/kiagent-core/commit/69f61b549c6546b881b396c8ae0dbaa31bddfcfe))
+
 ## [0.119.0](https://github.com/edjafarov/kiagent-core/compare/v0.118.2...v0.119.0) (2026-11-04)
 
 ### Added
