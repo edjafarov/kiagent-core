@@ -113,6 +113,7 @@ describe('installCrashRecovery', () => {
     const b = await boot(true);
     await installCrashRecovery({ platform: b.platform, recoverCalendar: b.cal, recoverOutbox: b.out, logSink: b.logSink });
     expect(b.cal).not.toHaveBeenCalled();
+    expect(b.out).not.toHaveBeenCalled();
     expect((await b.store.outbox.get(b.outboxId))?.status).toBe('sending');
     expect((await b.store.eventDrafts.get(b.draftId))?.status).toBe('creating');
     b.svc.setFenced(false);

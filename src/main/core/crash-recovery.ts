@@ -21,6 +21,7 @@ const message = (err: unknown): string => (err instanceof Error ? err.message : 
  */
 // slice-2: the lead API owns this registration (one-leader-fact spec).
 export async function installCrashRecovery(d: CrashRecoveryDeps): Promise<void> {
+  // No once-guard: onPromoted runs these hooks before platform.promote() resumes the accounts (boot.ts), so nothing of this process is in flight when a later promotion re-runs the sweeps; a 'sending'/'creating' row then is an orphan again.
   const run = async (): Promise<void> => {
     try {
       // A 'creating' event draft also means a process died mid-create.
