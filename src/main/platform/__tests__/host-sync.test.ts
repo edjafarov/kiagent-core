@@ -17,6 +17,15 @@ import { parseManifest } from '../manifest';
 import { nodeForkTransport } from '../transport';
 
 jest.setTimeout(240_000);
+const LEASE = {
+  isMaster: true,
+  reason: 'holder',
+  multiDevice: true,
+  approved: true,
+  holder: 'dev',
+  epoch: 2,
+  priorRenewedAt: null,
+};
 const REPO_ROOT = path.resolve(__dirname, '../../../..');
 const CHILD_ENTRY = path.resolve(__dirname, '../extension-host-entry.ts');
 const FIXTURE = path.join(__dirname, 'fixtures', 'ext-sync');
@@ -65,8 +74,6 @@ describe('through a real forked extension host', () => {
       attention: {} as never,
       sync: {
         status: note('status', { role: 'normal' }),
-        enableTracking: note('enableTracking', undefined),
-        disableTracking: note('disableTracking', undefined),
         buildDelta: note('buildDelta', { status: 'too-large' }),
         buildSnapshot: note('buildSnapshot', { bytes: 1 }),
         applyDelta: note('applyDelta', { applied: 2 }),
@@ -98,9 +105,10 @@ describe('through a real forked extension host', () => {
           { accountId: 'a', epoch: 1, n: 3, value: null },
         ]),
         importSecrets: note('importSecrets', { applied: 1 }),
-        promote: note('promote', undefined),
+        setLease: note('setLease', undefined),
+        lead: note('lead', undefined),
+        open: note('open', undefined),
         demote: note('demote', undefined),
-        setFenced: note('setFenced', undefined),
         readOnly: note('readOnly', true),
         deleteArchive: note('deleteArchive', undefined),
         queuedSettings: note('queuedSettings', [
@@ -198,9 +206,10 @@ describe('through a real forked extension host', () => {
     // onQueueChange and enqueue are core-internal: no extension can reach them.
     expect(seen.discardQueued).toEqual([7]);
     expect(seen.applyDelta).toEqual(['stage', { pullStartedAt: 5 }]);
-    expect(seen.promote).toEqual([2]);
+    expect(seen.setLease).toEqual([LEASE]);
+    expect(seen.lead).toEqual([{ epoch: 2 }]);
+    expect(seen.open).toEqual(['head-acked']);
     expect(seen.demote).toEqual(['m1']);
-    expect(seen.setFenced).toEqual([true]);
     expect(seen.exportSecrets).toEqual([{ epoch: 1, n: 2 }]);
     expect(seen.importSources).toEqual(['offer', [], 'from']);
     expect(seen.importSettings).toEqual([

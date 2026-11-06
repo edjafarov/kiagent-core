@@ -1,12 +1,20 @@
 const fs = require('fs');
 
+const LEASE = {
+  isMaster: true,
+  reason: 'holder',
+  multiDevice: true,
+  approved: true,
+  holder: 'dev',
+  epoch: 2,
+  priorRenewedAt: null,
+};
+
 module.exports = {
   async activate(host) {
     const c = { seq: 1, cursor: 2 };
     const calls = {
       status: await host.sync.status(),
-      enableTracking: await host.sync.enableTracking(),
-      disableTracking: await host.sync.disableTracking(),
       buildDelta: await host.sync.buildDelta(c, 'out', 5, 3),
       buildSnapshot: await host.sync.buildSnapshot('snap'),
       applyDelta: await host.sync.applyDelta('stage', { pullStartedAt: 5 }),
@@ -26,9 +34,10 @@ module.exports = {
       isBusy: await host.sync.isBusy(),
       exportSecrets: await host.sync.exportSecrets({ epoch: 1, n: 2 }),
       importSecrets: await host.sync.importSecrets([{ accountId: 'a', epoch: 1, n: 3, value: null }]),
-      promote: await host.sync.promote(2),
+      setLease: await host.sync.setLease(LEASE),
+      lead: await host.sync.lead({ epoch: 2 }),
+      open: await host.sync.open('head-acked'),
       demote: await host.sync.demote('m1'),
-      setFenced: await host.sync.setFenced(true),
       readOnly: await host.sync.readOnly(),
       queuedSettings: await host.sync.queuedSettings(),
       discardQueued: await host.sync.discardQueued(7),

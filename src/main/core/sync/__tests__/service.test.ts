@@ -64,20 +64,18 @@ const seed = async () => {
   });
 };
 
-it('reports status and turns tracking on and off', async () => {
+it('reports status and turns tracking on when it leads', async () => {
   let s = await sync.status();
   expect(s).toMatchObject({ role: 'normal', tracking: false, historyId: null, masterDeviceId: null });
   expect(s.schemaVersion).toBeGreaterThanOrEqual(13);
-  await sync.enableTracking();
+  await sync.lead({ epoch: 1 });
   s = await sync.status();
   expect(s.tracking).toBe(true);
   expect(s.historyId).toEqual(expect.any(String));
-  await sync.disableTracking();
-  expect((await sync.status()).tracking).toBe(false);
 }, 60_000);
 
 it('builds a delta on the sync worker while the writer is free, and head advances', async () => {
-  await sync.enableTracking();
+  await sync.lead({ epoch: 1 });
   await seed();
   const out = path.join(dir, 'd.stage');
   const r = await sync.buildDelta({ seq: 0, cursor: 0 }, out, 1024 * 1024);
@@ -89,7 +87,7 @@ it('builds a delta on the sync worker while the writer is free, and head advance
 }, 60_000);
 
 it('applyDelta on a follower moves its position and wakes its feed', async () => {
-  await sync.enableTracking();
+  await sync.lead({ epoch: 1 });
   await seed();
   const out = path.join(dir, 'd.stage');
   const built = await sync.buildDelta({ seq: 0, cursor: 0 }, out, 1024 * 1024);
@@ -119,7 +117,7 @@ it('applyDelta on a follower moves its position and wakes its feed', async () =>
 }, 60_000);
 
 it('builds a snapshot and prepares a swap, refusing a wrong hash', async () => {
-  await sync.enableTracking();
+  await sync.lead({ epoch: 1 });
   await seed();
   const out = path.join(dir, 'snap.db');
   const snap = await sync.buildSnapshot(out);

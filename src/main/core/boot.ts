@@ -451,7 +451,7 @@ export async function bootCore(deps: BootDeps): Promise<CorePlatform> {
     fencedAtBoot: gateAtBoot.tracking && !readOnlyAtBoot,
     // Fence cleared or promoted: the device can write user_prefs now, so a
     // seed that had to wait runs.
-    onPromoted: async () => {
+    onOpen: async () => {
       await prefs.seedUser().catch((err) =>
         sink.log('sync', 'warn', `could not seed user preferences: ${String(err)}`),
       );

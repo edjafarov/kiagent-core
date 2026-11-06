@@ -56,7 +56,7 @@ export interface WriteTxDeps {
   /** Cheap language detection for search stemming (ISO-639-3). */
   detectLanguages(text: string): string[];
   now(): string;
-  /** An in-memory hold on every write, set by `SyncService.setFenced` while a
+  /** An in-memory hold on every write, set by `SyncService` (`lead`, `setLease`, `demote`) while a
    *  woken master has not yet heard from registration. Never persisted. */
   fenced?(): boolean;
 }

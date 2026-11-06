@@ -1402,6 +1402,15 @@ const MIGRATIONS: Migration[] = [
       `CREATE UNIQUE INDEX IF NOT EXISTS sync_outbound_coalesce ON sync_outbound(coalesce_key) WHERE coalesce_key IS NOT NULL`,
     );
   },
+  // v23: a promotion's pending acknowledgement. 1 from `lead()` on a follower
+  // until `open('head-acked')`, so a restart in between stays fenced. Local,
+  // not synced.
+  (db) => {
+    const have = db
+      .prepare(`SELECT 1 FROM pragma_table_info('sync_state') WHERE name = 'head_pending'`)
+      .get();
+    if (!have) db.exec(`ALTER TABLE sync_state ADD COLUMN head_pending INTEGER NOT NULL DEFAULT 0`);
+  },
 ];
 
 /**

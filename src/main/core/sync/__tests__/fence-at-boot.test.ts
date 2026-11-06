@@ -35,7 +35,7 @@ async function boot(tracking: boolean) {
     decrypt: (b: Buffer) => b.toString('utf8'),
     detectLanguages: () => ['eng'],
   } as never);
-  const onPromoted = jest.fn(async () => undefined);
+  const onOpen = jest.fn(async () => undefined);
   const svc = createSyncService({
     db,
     store,
@@ -43,10 +43,10 @@ async function boot(tracking: boolean) {
     workerFile: '',
     initialReadOnly: readOnlyAtBoot,
     fencedAtBoot: gate.tracking && !readOnlyAtBoot,
-    onPromoted,
+    onOpen,
     log: () => undefined,
   });
-  return { svc, onPromoted, gate };
+  return { svc, onOpen, gate };
 }
 
 describe('a master that wakes with tracking on', () => {
@@ -56,7 +56,7 @@ describe('a master that wakes with tracking on', () => {
   });
 
   it('is fenced until the first isMaster reply, and the scheduler sends nothing meanwhile', async () => {
-    const { svc, onPromoted } = await boot(true);
+    const { svc, onOpen } = await boot(true);
     expect(svc.readOnly()).toBe(true);
     const sendScheduled = jest.fn(async () => 'sent' as const);
     const sched = createOutboxScheduler({
@@ -67,15 +67,14 @@ describe('a master that wakes with tracking on', () => {
     });
     await sched.tick();
     expect(sendScheduled).not.toHaveBeenCalled();
-    svc.setFenced(false);
+    await svc.open('lease');
     expect(svc.readOnly()).toBe(false);
     await sched.tick();
     expect(sendScheduled).toHaveBeenCalledWith('d1', expect.anything());
     // What the fence held back (accounts, workers) starts once, at the first reply.
-    expect(onPromoted).toHaveBeenCalledTimes(1);
-    svc.setFenced(true);
-    svc.setFenced(false);
-    expect(onPromoted).toHaveBeenCalledTimes(1);
+    expect(onOpen).toHaveBeenCalledTimes(1);
+    await svc.open('lease');
+    expect(onOpen).toHaveBeenCalledTimes(1);
   });
 
   it('a master that was never tracking starts open', async () => {

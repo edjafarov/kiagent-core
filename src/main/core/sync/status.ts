@@ -20,6 +20,7 @@ export function readSyncStatus(conn: BetterSqlite3.Database): DeviceSyncStatus {
     after_cursor: number;
     epoch: number;
     device_id: string | null;
+    head_pending: number;
   };
   const head = conn
     .prepare(
@@ -63,7 +64,7 @@ export function readSyncStatus(conn: BetterSqlite3.Database): DeviceSyncStatus {
   }));
   return {
     elsewhere,
-    headPending: false,
+    headPending: s.head_pending === 1,
     outbound: { waiting: waiting.n },
     queuedSettings: queuedSettingsOf(
       conn.prepare(QUEUED_SETTINGS_SQL).all() as Parameters<

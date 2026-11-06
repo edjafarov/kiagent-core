@@ -8,7 +8,7 @@ import path from 'path';
 import { openDb, type AppDb } from '../../../db/app-db';
 import { migrate } from '../../store/schema';
 import { openStore, type CoreStore } from '../../store/store';
-import { promote } from '../promote';
+import { leadProc } from './lead-proc';
 import { LOCAL_CORE_TABLES } from '../tables';
 import { userPrefRequest } from '../settings-queue';
 import { readSyncStatus } from '../status';
@@ -45,14 +45,7 @@ async function device(
   });
   const conn = () => db._conn!;
   // The worker thread is the only thing missing in-process.
-  (
-    db as unknown as {
-      proc: (n: string, a: { epoch: number }) => Promise<null>;
-    }
-  ).proc = async (name, a) => {
-    if (name === 'syncPromote') promote(conn(), a.epoch);
-    return null;
-  };
+  (db as unknown as { proc: unknown }).proc = leadProc(conn);
   if (follower) conn().prepare(`UPDATE sync_state SET role = 'follower'`).run();
   const svc = createSyncService({
     initialReadOnly: follower,
@@ -232,7 +225,7 @@ describe('the delivery queue', () => {
       commit: jest.fn(),
     });
     const inFlight = d.svc.drainOutbound();
-    d.svc.setFenced(false); // boot fence set: runs onPromoted, then a drain
+    void d.svc.open('lease'); // boot fence set: runs onOpen, then a drain
     await settle();
     g.release();
     await inFlight;
@@ -262,7 +255,7 @@ describe('the delivery queue', () => {
       commit: jest.fn(),
     });
     const inFlight = d.svc.drainOutbound();
-    const promoted = d.svc.promote(2);
+    const promoted = d.svc.lead({ epoch: 2 }).then(() => d.svc.open('head-acked'));
     await settle();
     g.release();
     await Promise.all([inFlight, promoted]);
@@ -405,7 +398,8 @@ describe('the delivery queue', () => {
       name: 'core.commitBatch',
       payload: { n: 2 },
     });
-    await d.svc.promote(2);
+    await d.svc.lead({ epoch: 2 });
+    await d.svc.open('head-acked');
     expect(order).toEqual([1, 2]);
     expect(rows(d)).toEqual([]);
   });

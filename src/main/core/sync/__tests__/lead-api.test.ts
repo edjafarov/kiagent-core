@@ -1,0 +1,240 @@
+/** @jest-environment node */
+/** Slice 2 Task 11: the lead API. `lead` promotes or seeds and leaves a
+ *  promotion fenced; `open` is the one exit; a pending ack survives a restart. */
+import fs from 'fs';
+import os from 'os';
+import path from 'path';
+
+import type { LeaseSnapshot, SyncRoleWire } from '@shared/contracts';
+
+import { openDb, type AppDb } from '../../../db/app-db';
+import { migrate } from '../../store/schema';
+import { openStore } from '../../store/store';
+import { SyncEpochBehind, SyncHeadPending, SyncNotLeader } from '../role';
+import { readSyncStatus } from '../status';
+import { createSyncService, type SyncService } from '../service';
+import { leadProc } from './lead-proc';
+
+interface Device {
+  dir: string;
+  db: AppDb;
+  svc: SyncService;
+  onOpen: jest.Mock;
+  conn: () => import('better-sqlite3').Database;
+}
+const devices: Device[] = [];
+
+async function device(
+  setup: (c: import('better-sqlite3').Database) => void = () => undefined,
+  existingDir?: string,
+): Promise<Device> {
+  const dir = existingDir ?? fs.mkdtempSync(path.join(os.tmpdir(), 'lead-api-'));
+  const db = await openDb(path.join(dir, 'a.db'));
+  migrate(db._conn!);
+  setup(db._conn!);
+  const conn = () => db._conn!;
+  (db as unknown as { proc: unknown }).proc = leadProc(conn);
+  const row = conn().prepare(`SELECT role, joining, tracking FROM sync_state`).get() as {
+    role: string;
+    joining: number;
+    tracking: number;
+  };
+  const gated = row.role === 'follower' || row.joining === 1;
+  const onOpen = jest.fn(async () => undefined);
+  const svc = createSyncService({
+    initialReadOnly: gated,
+    // What boot.ts does: a tracking leader wakes fenced.
+    fencedAtBoot: row.tracking === 1 && !gated,
+    db,
+    store: openStore(db, {
+      encrypt: (s: string) => Buffer.from(s, 'utf8'),
+      decrypt: (b: Buffer) => b.toString('utf8'),
+      detectLanguages: () => ['eng'],
+    }),
+    dbPath: path.join(dir, 'a.db'),
+    workerFile: '',
+    onOpen,
+    log: () => undefined,
+  });
+  const d = { dir, db, svc, onOpen, conn };
+  devices.push(d);
+  return d;
+}
+const follower = (c: import('better-sqlite3').Database) =>
+  c
+    .prepare(
+      `UPDATE sync_state SET role='follower', master_device_id='m1', tracking=0,
+                             history_id='h1', after_seq=7, after_cursor=5, joined=1, epoch=1`,
+    )
+    .run();
+const leader = (c: import('better-sqlite3').Database) =>
+  c.prepare(`UPDATE sync_state SET tracking=1, joined=1, epoch=1`).run();
+const lease = (o: Partial<LeaseSnapshot> = {}): LeaseSnapshot => ({
+  isMaster: true,
+  reason: 'holder',
+  multiDevice: true,
+  approved: true,
+  holder: 'me',
+  epoch: 2,
+  priorRenewedAt: null,
+  ...o,
+});
+const state = (d: Device) =>
+  d.conn().prepare(`SELECT * FROM sync_state`).get() as Record<string, unknown>;
+const epochs = (d: Device) => d.conn().prepare(`SELECT * FROM sync_epochs`).all();
+
+afterEach(async () => {
+  for (const d of devices.splice(0)) {
+    await d.db.close();
+    fs.rmSync(d.dir, { recursive: true, force: true });
+  }
+});
+
+describe('lead', () => {
+  it('on a follower writes the grant row, sets head_pending and leaves the device fenced', async () => {
+    const d = await device(follower);
+    await d.svc.setLease(lease({ reason: 'holder', isMaster: true }));
+    await d.svc.lead({ epoch: 2 });
+    expect(epochs(d)).toEqual([{ epoch: 2, grant_seq: 7, grant_cursor: 5 }]);
+    expect(state(d)).toMatchObject({ role: 'normal', tracking: 1, epoch: 2, head_pending: 1 });
+    expect(d.svc.readOnly()).toBe(true);
+    expect(d.svc.role()).toMatchObject({ leader: false, follower: false, reason: 'holder' });
+    expect(readSyncStatus(d.conn()).headPending).toBe(true);
+  });
+
+  it('on a follower with epoch <= sync_state.epoch throws SyncEpochBehind', async () => {
+    const d = await device(follower);
+    await expect(d.svc.lead({ epoch: 1 })).rejects.toThrow(SyncEpochBehind);
+    expect(state(d)).toMatchObject({ role: 'follower', head_pending: 0 });
+    expect(d.svc.readOnly()).toBe(true);
+  });
+
+  it('on the seed enables tracking, writes sync_epochs, does not fence and leaves head_pending 0', async () => {
+    const d = await device();
+    await d.svc.lead({ epoch: 1 });
+    expect(state(d)).toMatchObject({ role: 'normal', tracking: 1, head_pending: 0 });
+    expect(epochs(d)).toEqual([{ epoch: 1, grant_seq: 0, grant_cursor: 0 }]);
+    expect(d.svc.readOnly()).toBe(false);
+  });
+
+  it('on a tracking leader is a no-op whatever the epoch', async () => {
+    const d = await device(leader);
+    await d.svc.lead({ epoch: 9 });
+    await d.svc.lead({ epoch: 0 });
+    expect(state(d)).toMatchObject({ epoch: 1, head_pending: 0 });
+    expect(epochs(d)).toEqual([]);
+  });
+});
+
+describe('open', () => {
+  it("'lease' throws SyncNotLeader on a follower, SyncHeadPending while pending, and is a no-op when not fenced", async () => {
+    const f = await device(follower);
+    await expect(f.svc.open('lease')).rejects.toThrow(SyncNotLeader);
+    const p = await device(follower);
+    await p.svc.lead({ epoch: 2 });
+    await expect(p.svc.open('lease')).rejects.toThrow(SyncHeadPending);
+    expect(p.svc.readOnly()).toBe(true);
+    const free = await device();
+    await free.svc.open('lease');
+    expect(free.onOpen).not.toHaveBeenCalled();
+  });
+
+  it("'head-acked' clears head_pending, lifts the fence, runs onOpen and drains once; a second open is a no-op", async () => {
+    const d = await device(follower);
+    await d.svc.lead({ epoch: 2 });
+    const drain = jest.spyOn(d.svc, 'drainOutbound');
+    await Promise.all([d.svc.open('head-acked'), d.svc.open('head-acked')]);
+    await d.svc.open('head-acked');
+    await d.svc.open('lease');
+    expect(state(d)).toMatchObject({ head_pending: 0 });
+    expect(d.svc.readOnly()).toBe(false);
+    expect(d.onOpen).toHaveBeenCalledTimes(1);
+    expect(d.svc.role().leader).toBe(true);
+    drain.mockRestore();
+  });
+});
+
+describe('setLease', () => {
+  const closers: [string, Partial<LeaseSnapshot>][] = [
+    ['fenced', { reason: 'fenced', isMaster: false }],
+    ['another holder', { isMaster: false, reason: 'follower', holder: 'other' }],
+    ['a self-granted handover', { isMaster: false, reason: 'follower', holder: 'me' }],
+    ['a null holder', { isMaster: false, reason: 'unjoined', holder: null }],
+    ['an unknown holder', { isMaster: false, reason: 'stale-root', holder: '???' }],
+  ];
+  it.each(closers)('%s closes a tracking leader at once', async (_n, o) => {
+    const d = await device(leader);
+    await d.svc.open('lease'); // the boot fence: open
+    expect(d.svc.readOnly()).toBe(false);
+    await d.svc.setLease(lease(o));
+    expect(d.svc.readOnly()).toBe(true);
+    expect(d.svc.role().leader).toBe(false);
+  });
+
+  it('a master lease leaves a leader open', async () => {
+    const d = await device(leader);
+    await d.svc.open('lease');
+    await d.svc.setLease(lease());
+    expect(d.svc.readOnly()).toBe(false);
+  });
+
+  it('emits onRole once per change, not per call', async () => {
+    const d = await device(leader);
+    const seen: SyncRoleWire[] = [];
+    d.svc.onRole((r) => seen.push(r));
+    await d.svc.setLease(lease());
+    await d.svc.setLease(lease());
+    expect(seen).toHaveLength(1);
+    await d.svc.setLease(lease({ isMaster: false, reason: 'fenced' }));
+    await d.svc.setLease(lease({ isMaster: false, reason: 'fenced' }));
+    expect(seen).toHaveLength(2);
+    expect(d.svc.lease()).toMatchObject({ reason: 'fenced' });
+  });
+});
+
+it("a lease loss during open('head-acked') leaves the device fenced and never runs onOpen", async () => {
+  const d = await device(follower);
+  await d.svc.lead({ epoch: 2 });
+  const real = (d.db as unknown as { proc: (n: string, a: unknown) => Promise<unknown> }).proc;
+  let release: () => void = () => undefined;
+  const gate = new Promise<void>((r) => (release = r));
+  (d.db as unknown as { proc: unknown }).proc = async (n: string, a: unknown) => {
+    if (n === 'syncOpen') await gate;
+    return real(n, a);
+  };
+  const first = d.svc.open('head-acked');
+  const second = d.svc.open('head-acked');
+  await new Promise((r) => setImmediate(r));
+  await d.svc.setLease(
+    lease({ isMaster: false, reason: 'holder', holder: 'other', epoch: 2 }),
+  );
+  release();
+  await Promise.all([first, second]);
+  expect(d.svc.readOnly()).toBe(true);
+  expect(d.onOpen).not.toHaveBeenCalled();
+  expect(d.svc.role().leader).toBe(false);
+});
+
+it('demote sets head_pending to 0 and fences', async () => {
+  const d = await device(follower);
+  await d.svc.lead({ epoch: 2 });
+  expect(state(d)).toMatchObject({ head_pending: 1 });
+  await d.svc.demote('m2');
+  expect(state(d)).toMatchObject({ role: 'follower', head_pending: 0, master_device_id: 'm2' });
+  expect(d.svc.readOnly()).toBe(true);
+});
+
+it('after a restart with head_pending = 1 the device is leader-fenced and only open(head-acked) exits', async () => {
+  const a = await device(follower);
+  await a.svc.lead({ epoch: 2 });
+  await a.db.close();
+  devices.splice(devices.indexOf(a), 1);
+  const b = await device(undefined, a.dir);
+  expect(b.svc.readOnly()).toBe(true);
+  await expect(b.svc.open('lease')).rejects.toThrow(SyncHeadPending);
+  expect(b.svc.readOnly()).toBe(true);
+  expect(b.svc.role()).toMatchObject({ leader: false });
+  await b.svc.open('head-acked');
+  expect(b.svc.readOnly()).toBe(false);
+  expect(b.onOpen).toHaveBeenCalledTimes(1);
+});

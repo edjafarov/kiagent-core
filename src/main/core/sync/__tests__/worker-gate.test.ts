@@ -124,9 +124,18 @@ it('a plugin connection opened while leading is refused its synced table once th
 });
 
 it('the fence closes a plugin connection too, and lifting it opens it', async () => {
-  await sync.setFenced(true);
+  await sync.lead({ epoch: 1 });
+  await sync.setLease({
+    isMaster: false,
+    reason: 'fenced',
+    multiDevice: true,
+    approved: true,
+    holder: null,
+    epoch: 0,
+    priorRenewedAt: null,
+  });
   await expect(insert('items', 'a')).rejects.toThrow(/read-only/);
-  await sync.setFenced(false);
+  await sync.open('lease');
   await expect(insert('items', 'a')).resolves.toBeUndefined();
 });
 
@@ -139,7 +148,8 @@ it('attention publish is refused on a follower, a tick quietly writes nothing, a
   expect(await db.all(`SELECT id FROM attention_items`)).toEqual([]);
   const tick = (await db.proc!('attention.tick', { availableProducers: ['gate'] })) as { ok: boolean };
   expect(tick.ok).toBe(true);
-  await sync.promote(2);
+  await sync.lead({ epoch: 2 });
+  await sync.open('head-acked');
   const ok = (await db.proc!('attention.publish', args)) as { ok: boolean; error?: unknown };
   expect(ok).toMatchObject({ ok: true });
   expect(await db.all(`SELECT id FROM attention_items`)).toHaveLength(1);

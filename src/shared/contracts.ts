@@ -2004,8 +2004,6 @@ export interface CapSurfaces {
   sync: {
     sync: {
       status(): Promise<SyncStatusWire>;
-      enableTracking(): Promise<void>;
-      disableTracking(): Promise<void>;
       buildDelta(
         after: SyncCursorWire,
         out: string,
@@ -2078,14 +2076,17 @@ export interface CapSurfaces {
       /** Stores logins from the leader; follower only. */
       importSecrets(list: SecretWire[]): Promise<{ applied: number }>;
       isBusy(): Promise<string | null>;
-      /** Leads from the next call on, no restart (alpha-cent spec 7.8). */
-      /** `relayImported: false` skips re-sending rows applied as a follower: no
+      /** The lease snapshot registration last reported (spec K2). */
+      setLease(s: LeaseSnapshot): Promise<void>;
+      /** Starts leading, no restart (alpha-cent spec 7.8): promotes a follower
+       *  (left fenced, head pending) or seeds a lone device.
+       *  `relayImported: false` skips re-sending rows applied as a follower: no
        *  other joined device could lack them. Default true. */
-      promote(epoch: number, opts?: { relayImported?: boolean }): Promise<void>;
+      lead(opts: { epoch: number; relayImported?: boolean }): Promise<void>;
+      /** The one exit from the fence. */
+      open(kind: 'head-acked' | 'lease'): Promise<void>;
       /** Stops leading; the caller relaunches. */
       demote(masterDeviceId: string): Promise<void>;
-      /** A master that woke has not heard from registration: close the gates. */
-      setFenced(on: boolean): Promise<void>;
       /** Follower, joining or fenced. */
       readOnly(): Promise<boolean>;
       deleteArchive(): Promise<void>;
@@ -2126,8 +2127,6 @@ export type SyncSurface = CapSurfaces['sync']['sync'];
  *  `onApplied`, `setRunners`, ...) are deliberately not here. */
 export const SYNC_SURFACE_METHODS = [
   'status',
-  'enableTracking',
-  'disableTracking',
   'buildDelta',
   'buildSnapshot',
   'applyDelta',
@@ -2148,9 +2147,10 @@ export const SYNC_SURFACE_METHODS = [
   'exportSecrets',
   'importSecrets',
   'isBusy',
-  'promote',
+  'setLease',
+  'lead',
+  'open',
   'demote',
-  'setFenced',
   'readOnly',
   'deleteArchive',
   'setForwarder',

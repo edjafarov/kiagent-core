@@ -12,7 +12,7 @@ import { migrate } from '../../store/schema';
 import { openStore } from '../../store/store';
 import { NO_MASTER_MESSAGE, SyncNoMaster, wrapForwardedChannels } from '../forward-core';
 import { installOfflineSettings, restoreOfflineSettings } from '../offline-settings';
-import { promote } from '../promote';
+import { leadProc } from './lead-proc';
 import { createSyncService, type SyncService } from '../service';
 
 interface Wired {
@@ -34,10 +34,7 @@ async function open(dir: string, follower: boolean): Promise<{ db: AppDb; svc: S
   const db = await openDb(path.join(dir, 'a.db'));
   migrate(db._conn!);
   if (follower) db._conn!.prepare(`UPDATE sync_state SET role = 'follower'`).run();
-  (db as unknown as { proc: (n: string, a: { epoch: number }) => Promise<null> }).proc = async (name, a) => {
-    if (name === 'syncPromote') promote(db._conn!, a.epoch);
-    return null;
-  };
+  (db as unknown as { proc: unknown }).proc = leadProc(() => db._conn!);
   const store = openStore(db, {
     encrypt: (s: string) => Buffer.from(s, 'utf8'),
     decrypt: (b: Buffer) => b.toString('utf8'),
@@ -244,7 +241,8 @@ it('after promotion the queued rows run as the leader, the overlay empties', asy
     core: async (name, req) => w.local.get(name)!(req),
     commit: jest.fn(),
   });
-  await w.svc.promote(2);
+  await w.svc.lead({ epoch: 2 });
+  await w.svc.open('head-acked');
   expect(rows(w)).toEqual([]);
   // written to the table by the leader's own handler
   expect(w.db._conn!.prepare(`SELECT value_json FROM user_prefs WHERE key = 'core.theme'`).get()).toEqual({
@@ -267,7 +265,8 @@ it('a promoted leader\'s own theme write replaces a queued row the leader\'s han
     },
     commit: jest.fn(),
   });
-  await w.svc.promote(2);
+  await w.svc.lead({ epoch: 2 });
+  await w.svc.open('head-acked');
   // The drain left the refused row waiting; the leader's own write supersedes it.
   expect(rows(w)).toHaveLength(1);
   await w.prefs.patch({ theme: 'light' });

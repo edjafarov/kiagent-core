@@ -93,7 +93,7 @@ async function boot(fenced: boolean) {
     workerFile: '',
     initialReadOnly: readOnlyAtBoot,
     fencedAtBoot: gate.tracking && !readOnlyAtBoot,
-    onPromoted: async () => {
+    onOpen: async () => {
       for (const h of hooks) await h();
       resolvePromoted();
     },
@@ -136,7 +136,7 @@ describe('installCrashRecovery', () => {
     expect(b.out).not.toHaveBeenCalled();
     expect((await b.store.outbox.get(b.outboxId))?.status).toBe('sending');
     expect((await b.store.eventDrafts.get(b.draftId))?.status).toBe('creating');
-    b.svc.setFenced(false);
+    await b.svc.open('lease');
     await b.promoted();
     expect(b.cal).toHaveBeenCalledTimes(1);
     expect(b.out).toHaveBeenCalledTimes(1);

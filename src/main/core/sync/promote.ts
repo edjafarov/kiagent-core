@@ -3,6 +3,7 @@
  *  demotion is followed by one. */
 import type BetterSqlite3 from 'better-sqlite3';
 
+import { SyncEpochBehind } from './role';
 import { enableTracking } from './tracking';
 
 /** Numbers are never reused: a new master counts from `epoch x 10^10`. */
@@ -17,6 +18,9 @@ export interface PromoteOptions {
    *  the only other device is the leader these rows came from. The set is
    *  cleared either way. Default true: when unsure, relay. */
   relayImported?: boolean;
+  /** The new head is not yet acknowledged by the lease holder: the device
+   *  stays fenced, across a restart, until `open('head-acked')`. */
+  headPending?: boolean;
 }
 
 export function promote(
@@ -39,9 +43,9 @@ export function promote(
     conn
       .prepare(
         `UPDATE sync_state SET role = 'normal', master_device_id = NULL, joining = 0, epoch = ?,
-                              pre_demote_epoch = NULL`,
+                              pre_demote_epoch = NULL, head_pending = ?`,
       )
-      .run(epoch);
+      .run(epoch, opts.headPending ? 1 : 0);
     if (done) return;
     // sqlite_sequence has no unique key, so INSERT OR REPLACE would add a second
     // row beside the existing one, and SQLite reads the first. Update what is
@@ -90,6 +94,35 @@ export function promote(
   })();
 }
 
+/** The one way a device starts leading. A follower is promoted into `epoch`
+ *  (and stays pending an acknowledgement of its head); a lone device is seeded
+ *  as the first leader; a device already leading is left alone. */
+export function lead(
+  conn: BetterSqlite3.Database,
+  epoch: number,
+  opts: { relayImported?: boolean } = {},
+): 'promoted' | 'seeded' | 'noop' {
+  const s = conn
+    .prepare(`SELECT role, tracking, epoch FROM sync_state`)
+    .get() as { role: string; tracking: number; epoch: number };
+  if (s.role === 'follower') {
+    if (epoch <= s.epoch) throw new SyncEpochBehind();
+    promote(conn, epoch, { ...opts, headPending: true });
+    return 'promoted';
+  }
+  if (s.tracking === 1) return 'noop';
+  conn.transaction(() => {
+    enableTracking(conn);
+    conn
+      .prepare(
+        `INSERT OR IGNORE INTO sync_epochs(epoch, grant_seq, grant_cursor)
+         SELECT ?, after_seq, after_cursor FROM sync_state`,
+      )
+      .run(epoch);
+  })();
+  return 'seeded';
+}
+
 export function demote(conn: BetterSqlite3.Database, masterDeviceId: string): void {
   conn.transaction(() => {
     const head = conn
@@ -101,7 +134,7 @@ export function demote(conn: BetterSqlite3.Database, masterDeviceId: string): vo
     conn
       .prepare(
         `UPDATE sync_state SET role = 'follower', tracking = 0, master_device_id = ?,
-                               after_seq = ?, after_cursor = ?,
+                               after_seq = ?, after_cursor = ?, head_pending = 0,
                                pre_demote_epoch = CASE WHEN role = 'normal' THEN epoch ELSE pre_demote_epoch END`,
       )
       .run(masterDeviceId, head.seq, head.cursor);

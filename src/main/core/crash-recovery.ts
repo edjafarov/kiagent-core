@@ -16,7 +16,7 @@ const message = (err: unknown): string =>
 /**
  * Registers the sweeps with afterPromote and runs them now when the device can write.
  *
- * `onPromoted` runs the hooks on a fence lift (sync/service.ts setFenced) and on every
+ * `onOpen` runs the hooks on a fence lift (sync/service.ts open) and on every
  * promotion (promote), never on a plain writable boot: a writable boot sweeps once from
  * this call, a fenced or follower boot once from the hook, and a later re-promotion
  * sweeps again. The sweeps are conservative, not a proof of quiescence: they move rows

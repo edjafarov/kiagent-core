@@ -7,7 +7,7 @@ import path from 'node:path';
 
 import { openDbInWorker } from '@main/db/worker-client';
 import type { AppDb } from '@main/db/app-db';
-import type { Account } from '@shared/contracts';
+import type { Account, LeaseSnapshot } from '@shared/contracts';
 
 import { promoteCore, resumeAccounts, type CorePlatform } from '../../boot';
 import { openStore, type CoreStore } from '../../store/store';
@@ -39,7 +39,7 @@ const open = async () => {
     dbPath,
     workerFile: entry,
     execArgv,
-    onPromoted: async () => void (promoted += 1),
+    onOpen: async () => void (promoted += 1),
   });
   await sync.setDeviceId('me-device');
 };
@@ -73,6 +73,21 @@ afterEach(async () => {
 
 let n = 0;
 const write = () => store.createAccount({ source: 's', identifier: `i${(n += 1)}` });
+const lease = (o: Partial<LeaseSnapshot> = {}): LeaseSnapshot => ({
+  isMaster: true,
+  reason: 'solo',
+  multiDevice: false,
+  approved: true,
+  holder: 'me-device',
+  epoch: 0,
+  priorRenewedAt: null,
+  ...o,
+});
+/** A promotion as registration drives it: lead, then the head is acknowledged. */
+const promote = async (epoch: number) => {
+  await sync.lead({ epoch });
+  await sync.open('head-acked');
+};
 const state = async () =>
   (await db.all(`SELECT * FROM sync_state`))[0] as Record<string, number | string | null>;
 const follow = () =>
@@ -85,7 +100,7 @@ const seqOf = async (name: string) =>
 
 describe('the writer', () => {
   it('refuses after demote without a restart', async () => {
-    await sync.enableTracking();
+    await sync.lead({ epoch: 1 });
     await write();
     await sync.demote('m1');
     await expect(write()).rejects.toThrow(/read-only/);
@@ -95,47 +110,45 @@ describe('the writer', () => {
   it('accepts after promote without a restart', async () => {
     await follow();
     await expect(write()).rejects.toThrow(/read-only/);
-    await sync.promote(2);
+    await promote(2);
     await expect(write()).resolves.toBeTruthy();
     expect(sync.readOnly()).toBe(false);
     expect(promoted).toBe(1);
   });
 
-  it('a promotion made while fenced stays closed, and starts the workers only when the fence lifts', async () => {
+  it('a promotion stays closed until the head is acknowledged, and starts the workers only then', async () => {
     await follow();
-    sync.setFenced(true);
-    await sync.promote(2);
+    await sync.lead({ epoch: 2 });
     expect(sync.readOnly()).toBe(true);
     await expect(write()).rejects.toThrow(/read-only/);
     expect(promoted).toBe(0);
-    sync.setFenced(false);
+    await sync.open('head-acked');
     await expect(write()).resolves.toBeTruthy();
     await new Promise((r) => setTimeout(r, 50));
     expect(promoted).toBe(1);
   });
 
-  it('a call queued during promote runs with the new role', async () => {
+  it('a write after the promotion opens runs with the new role', async () => {
     await follow();
-    const p = sync.promote(2);
-    const w = write();
-    await p;
-    await expect(w).resolves.toBeTruthy();
+    await promote(2);
+    await expect(write()).resolves.toBeTruthy();
   });
 
-  it('setFenced closes the writer without touching sync_state, and opening it again reopens', async () => {
-    await sync.enableTracking();
+  it('a lease that is not ours closes the writer without touching sync_state, and open reopens it', async () => {
+    await sync.lead({ epoch: 1 });
     const before = await state();
-    sync.setFenced(true);
+    await sync.setLease(lease({ isMaster: false, reason: 'follower' }));
     expect(sync.readOnly()).toBe(true);
     await expect(write()).rejects.toThrow(/read-only/);
     expect(await state()).toEqual(before);
-    sync.setFenced(false);
+    await sync.open('lease');
     expect(sync.readOnly()).toBe(false);
     await expect(write()).resolves.toBeTruthy();
   });
 
   it('a restart clears the fence: sync_state decides at boot', async () => {
-    sync.setFenced(true);
+    await sync.lead({ epoch: 1 });
+    await sync.setLease(lease({ reason: 'fenced', isMaster: false }));
     await expect(write()).rejects.toThrow(/read-only/);
     await sync.close();
     await db.close();
@@ -155,7 +168,7 @@ describe('the writer', () => {
 describe('promote', () => {
   it('raises both counters to the epoch range, and the next rows land above it', async () => {
     await follow();
-    await sync.promote(3);
+    await promote(3);
     expect(await seqOf('changes')).toBeGreaterThanOrEqual(3 * GAP);
     expect(await seqOf('sync_rows')).toBeGreaterThanOrEqual(3 * GAP);
     await write();
@@ -167,7 +180,7 @@ describe('promote', () => {
     await write();
     await write();
     await follow();
-    await sync.promote(3);
+    await promote(3);
     for (const name of ['changes', 'sync_rows']) {
       const rows = await db.all(`SELECT seq FROM sqlite_sequence WHERE name = ?`, [name]);
       expect(rows).toHaveLength(1);
@@ -181,13 +194,13 @@ describe('promote', () => {
   it('never lowers a counter that is already higher', async () => {
     await follow();
     await db.run(`INSERT OR REPLACE INTO sqlite_sequence(name, seq) VALUES ('changes', ?)`, [9 * GAP]);
-    await sync.promote(2);
+    await promote(2);
     expect(await seqOf('changes')).toBe(9 * GAP);
   });
 
   it('writes sync_epochs with the old position and records the epoch', async () => {
     await follow();
-    await sync.promote(3);
+    await promote(3);
     const rows = await db.all(`SELECT * FROM sync_epochs`);
     expect(rows).toEqual([{ epoch: 3, grant_seq: 7, grant_cursor: 5 }]);
     expect((await state()).epoch).toBe(3);
@@ -195,7 +208,7 @@ describe('promote', () => {
 
   it('the sync_epochs row is the first tracked row, so it travels', async () => {
     await follow();
-    await sync.promote(3);
+    await promote(3);
     const first = await db.all(`SELECT tbl, pk, cursor FROM sync_rows ORDER BY cursor LIMIT 1`);
     expect(first).toMatchObject([{ tbl: 'sync_epochs', pk: '[3]' }]);
     expect(Number((first[0] as { cursor: number }).cursor)).toBeGreaterThan(3 * GAP);
@@ -203,21 +216,21 @@ describe('promote', () => {
 
   it('keeps history_id, turns tracking on and clears the master', async () => {
     await follow();
-    await sync.promote(2);
+    await promote(2);
     expect(await state()).toMatchObject({ role: 'normal', tracking: 1, history_id: 'h1', master_device_id: null });
   });
 
   it('status reports the epoch and the grant of the device\'s own epoch', async () => {
     await follow();
     expect(await sync.status()).toMatchObject({ epoch: 0, grant: null });
-    await sync.promote(3);
+    await promote(3);
     expect(await sync.status()).toMatchObject({ epoch: 3, grant: { seq: 7, cursor: 5 } });
   });
 
   it('promoting twice with the same epoch changes nothing the second time', async () => {
     await follow();
-    await sync.promote(2);
-    await sync.promote(2);
+    await promote(2);
+    await promote(2);
     expect(await db.all(`SELECT * FROM sync_epochs`)).toHaveLength(1);
   });
 
@@ -227,13 +240,13 @@ describe('promote', () => {
     await db.run(
       `INSERT INTO work_ledger(consumer, seq, attempts, outcome, updated_at) VALUES ('worker:ocr:v1', 4, 1, 'done', 'n')`,
     );
-    await sync.promote(2);
+    await promote(2);
     expect(await db.all(`SELECT * FROM consumers`)).toEqual([]);
     expect(await db.all(`SELECT * FROM work_ledger`)).toEqual([]);
   });
 
   it('demote sets after to the head and stops tracking', async () => {
-    await sync.enableTracking();
+    await sync.lead({ epoch: 1 });
     await write();
     const head = (await db.all(
       `SELECT (SELECT coalesce(max(seq), 0) FROM documents) AS s, (SELECT coalesce(max(cursor), 0) FROM sync_rows) AS c`,

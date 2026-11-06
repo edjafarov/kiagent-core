@@ -11,6 +11,7 @@ import { openDb, type AppDb } from '../../../db/app-db';
 import { migrate } from '../../store/schema';
 import { openStore, type CoreStore } from '../../store/store';
 import { gateEngine, SyncReadOnly } from '../role';
+import { leadProc } from './lead-proc';
 import { createSyncService, type ForwardRequest, type SyncService } from '../service';
 import { runCommitBatch, splitBatch } from '../owned';
 
@@ -330,10 +331,7 @@ describe('delivery to the leader', () => {
 
   it('a batch queued as a follower is delivered to itself after promote', async () => {
     const d = await device({ follower: true });
-    (d.db as unknown as { proc: (n: string, a: { epoch: number }) => Promise<null> }).proc = async (name, a) => {
-      if (name === 'syncPromote') (await import('../promote')).promote(d.conn(), a.epoch);
-      return null;
-    };
+    (d.db as unknown as { proc: unknown }).proc = leadProc(d.conn);
     await d.svc.setDeviceId(DEVICE);
     addAccount(d, 'own', 'local-folder', `this-machine#${SUFFIX}`, DEVICE);
     await d.store.commit({ account: 'own' as never, documents: [doc('a')], cursor: { n: 1 } });
@@ -346,7 +344,8 @@ describe('delivery to the leader', () => {
         await runCommitBatch(d, p as never);
       },
     });
-    await d.svc.promote(2);
+    await d.svc.lead({ epoch: 2 });
+    await d.svc.open('head-acked');
     expect(seen).toHaveLength(1);
     expect(d.conn().prepare(`SELECT count(*) n FROM documents WHERE account_id = 'own'`).get()).toEqual({ n: 1 });
     expect(d.conn().prepare(`SELECT count(*) n FROM sync_outbound`).get()).toEqual({ n: 0 });

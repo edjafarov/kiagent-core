@@ -7,7 +7,9 @@ import type {
   ForwardRequestWire,
   ForwardResultWire,
   OfferedSettingsWire,
+  LeaseSnapshot,
   SecretWire,
+  SyncRoleWire,
   SyncStatusWire,
 } from '@shared/contracts';
 import type { AppDb } from '../../db/app-db';
@@ -33,6 +35,15 @@ import {
   type ExportSources,
   type OfferedSource,
 } from './sources';
+import {
+  canWrite,
+  phaseOf,
+  roleOf,
+  SyncHeadPending,
+  SyncNotLeader,
+  type SyncPhase,
+  type SyncRole,
+} from './role';
 import { archiveFiles, swapOutcomePath } from './status';
 import { dropPendingSwap } from './swap';
 
@@ -68,8 +79,6 @@ export type DeviceSyncStatus = SyncStatusWire;
 
 export interface SyncService {
   status(): Promise<DeviceSyncStatus>;
-  enableTracking(): Promise<void>;
-  disableTracking(): Promise<void>;
   /** `fromEpoch`: the epoch the asker last applied from; absent, none is
    *  rewound. */
   buildDelta(
@@ -198,17 +207,25 @@ export interface SyncService {
   /** Follower, joining or fenced, answered from memory. Every gate on the main
    *  side (engine, sender lookup, scheduled sends) asks this on each call. */
   readOnly(): boolean;
-  /** Closes (or reopens) the writer and the sender lookup without touching
-   *  `sync_state`: a master that woke up has not heard from registration yet.
-   *  In memory only; a restart clears it. */
-  setFenced(on: boolean): void;
-  /** Leads from the next call on, with no restart (spec 7.8): one writer
-   *  transaction, then the boot-only branches. */
-  promote(epoch: number, opts?: { relayImported?: boolean }): Promise<void>;
+  /** The lease snapshot registration last reported. A device that leads but is
+   *  not the master closes at once (and stays closed until `open`). */
+  setLease(s: LeaseSnapshot): Promise<void>;
+  /** Starts leading: promotes a follower into `epoch` (left fenced, its head
+   *  pending) or seeds a lone device. Never opens the fence. */
+  lead(opts: { epoch: number; relayImported?: boolean }): Promise<void>;
+  /** The one exit from the fence. `'head-acked'` clears a promotion's pending
+   *  acknowledgement; `'lease'` refuses while one is pending. */
+  open(kind: 'head-acked' | 'lease'): Promise<void>;
   /** Stops leading: a follower of `masterDeviceId`. The caller relaunches. */
   demote(masterDeviceId: string): Promise<void>;
   /** This device's id, once known. */
   deviceId(): string | null;
+  /** The one leader fact, from memory. */
+  role(): SyncRoleWire;
+  /** Tells `cb` when the role changes. Core-internal. */
+  onRole(cb: (r: SyncRoleWire) => void): void;
+  /** The last lease snapshot, or null before the first. */
+  lease(): LeaseSnapshot | null;
   /** Deletes the old database a join set aside. Restoring it is then gone. */
   deleteArchive(): Promise<void>;
   close(): Promise<void>;
@@ -257,10 +274,10 @@ export interface SyncServiceDeps {
   /** What `sync_state` said at boot (follower or joining). */
   initialReadOnly?: boolean;
   /** An old master (tracking on) wakes fenced: another device may lead by now.
-   *  The first isMaster reply opens it and runs `onPromoted` once. */
+   *  Only `open` lifts it. */
   fencedAtBoot?: boolean;
-  /** After a promotion's transaction: start what only a leader runs. */
-  onPromoted?: () => void | Promise<void>;
+  /** The fence lifted: start what only a leader runs. Once per `open`. */
+  onOpen?: () => void | Promise<void>;
   log?: (level: 'info' | 'warn' | 'error', msg: string) => void;
 }
 
@@ -277,15 +294,69 @@ export function createSyncService(deps: SyncServiceDeps): SyncService {
   // synchronous. Every method below that changes the table refreshes it.
   let gated = deps.initialReadOnly ?? false;
   let fenced = deps.fencedAtBoot ?? false;
-  let bootFence = fenced;
+  let row = {
+    role: (gated ? 'follower' : 'normal') as SyncRole,
+    joining: false,
+    joined: false,
+    tracking: fenced,
+    headPending: false,
+    epoch: 0,
+  };
+  let leaseNow: LeaseSnapshot | null = null;
   if (fenced)
     void deps.db.proc?.('syncFence', { on: true })?.catch(() => undefined);
+  const phase = (): SyncPhase => phaseOf({ ...row, fenced });
   const readOnly = (): boolean =>
-    gated || fenced || (deps.readOnly?.() ?? false);
+    !canWrite(phase()) || (deps.readOnly?.() ?? false);
+  const roleNow = (): SyncRoleWire => ({
+    ...roleOf({ phase: phase(), lease: leaseNow }),
+    multiDevice: leaseNow?.multiDevice ?? false,
+    epoch: leaseNow?.epoch ?? row.epoch,
+    priorRenewedAt: leaseNow?.priorRenewedAt ?? null,
+  });
+  const roleListeners: ((r: SyncRoleWire) => void)[] = [];
+  let lastRole: SyncRoleWire | null = null;
+  const publishRole = (): void => {
+    const r = roleNow();
+    if (
+      lastRole &&
+      (Object.keys(r) as (keyof SyncRoleWire)[]).every(
+        (k) => lastRole![k] === r[k],
+      )
+    )
+      return;
+    lastRole = r;
+    for (const cb of roleListeners) cb(r);
+  };
+  const setFence = (on: boolean): void => {
+    fenced = on;
+    // The writer lives in a worker: the message is queued ahead of any write
+    // sent after this call.
+    void deps.db.proc?.('syncFence', { on })?.catch(() => undefined);
+  };
   const refreshGate = async (): Promise<void> => {
-    const rows = await deps.db.all(`SELECT role, joining FROM sync_state`);
-    const r = rows[0] as { role?: string; joining?: number } | undefined;
-    gated = r?.role === 'follower' || r?.joining === 1;
+    const rows = await deps.db.all(
+      `SELECT role, joining, joined, tracking, head_pending, epoch FROM sync_state`,
+    );
+    const r = rows[0] as
+      | {
+          role: SyncRole;
+          joining: number;
+          joined: number;
+          tracking: number;
+          head_pending: number;
+          epoch: number;
+        }
+      | undefined;
+    row = {
+      role: r?.role ?? 'normal',
+      joining: r?.joining === 1,
+      joined: r?.joined === 1,
+      tracking: r?.tracking === 1,
+      headPending: r?.head_pending === 1,
+      epoch: r?.epoch ?? 0,
+    };
+    gated = row.role === 'follower' || row.joining;
     await refreshOwned();
   };
   /** Accounts this device runs whatever its role: device-owned and mine. */
@@ -493,6 +564,7 @@ export function createSyncService(deps: SyncServiceDeps): SyncService {
 
   // One drain at a time: a pull, the timer, a fence lift and a promotion all
   // join the drain in flight instead of sending its rows a second time.
+  let opening: Promise<void> | null = null;
   const drainOutbound = (): Promise<{ sent: number; waiting: number }> => {
     draining ??= drainOnce().finally(() => {
       draining = null;
@@ -502,12 +574,6 @@ export function createSyncService(deps: SyncServiceDeps): SyncService {
 
   return {
     status: () => onWorker('status'),
-    enableTracking: async () => {
-      await deps.db.proc!('syncTracking', { on: true });
-    },
-    disableTracking: async () => {
-      await deps.db.proc!('syncTracking', { on: false });
-    },
     buildDelta: (after, out, capBytes, fromEpoch) =>
       onWorker('buildDelta', {
         after,
@@ -867,43 +933,68 @@ export function createSyncService(deps: SyncServiceDeps): SyncService {
     },
     isBusy: () => deps.busy?.() ?? null,
     readOnly,
-    setFenced: (on) => {
-      fenced = on;
-      if (!on && bootFence) {
-        // Accounts and workers that found the gate closed at boot start now.
-        bootFence = false;
-        void Promise.resolve(deps.onPromoted?.())
-          .then(() => drainOutbound())
-          .catch((err) =>
-            log('warn', `sync: could not open after the fence: ${String(err)}`),
-          );
-      }
-      // The writer lives in a worker: the message is queued ahead of any write
-      // sent after this call.
-      void deps.db.proc?.('syncFence', { on })?.catch(() => undefined);
-    },
-    promote: async (epoch, opts) => {
-      await deps.db.proc!('syncPromote', {
-        epoch,
-        relayImported: opts?.relayImported !== false,
-      });
+    setLease: async (snap) => {
+      leaseNow = snap;
       await refreshGate();
-      if (fenced) {
-        // Promoted but not yet allowed to lead (registration has not recorded
-        // the new head): workers and the queue start when the fence lifts.
-        bootFence = true;
-        return;
+      if (
+        snap.reason === 'fenced' ||
+        (!snap.isMaster && row.role === 'normal' && row.tracking)
+      )
+        setFence(true);
+      publishRole();
+    },
+    lead: async (o) => {
+      await refreshGate();
+      const wasFenced = fenced;
+      // A follower becomes a leader here: nothing may write until it opens.
+      const fromFollower = row.role === 'follower';
+      if (fromFollower) setFence(true);
+      let done: unknown;
+      try {
+        done = await deps.db.proc!('syncLead', o);
+      } catch (err) {
+        if (fromFollower && !wasFenced) setFence(false);
+        throw err;
       }
-      await deps.onPromoted?.();
-      // What waited for a leader runs here now.
-      await drainOutbound().catch((err) =>
-        log('warn', `sync: the queue did not drain: ${String(err)}`),
-      );
+      if (done === 'promoted') setFence(true);
+      await refreshGate();
+      publishRole();
+    },
+    open: async (kind) => {
+      if (opening) return opening;
+      await refreshGate();
+      if (opening) return opening;
+      if (!fenced) return;
+      if (row.role === 'follower' || row.joining) throw new SyncNotLeader();
+      if (kind === 'lease' && row.headPending) throw new SyncHeadPending();
+      opening = (async () => {
+        if (kind === 'head-acked') {
+          await deps.db.proc!('syncOpen', {});
+          row = { ...row, headPending: false };
+        }
+        setFence(false);
+        publishRole();
+        await Promise.resolve(deps.onOpen?.()).catch((err) =>
+          log('warn', `sync: could not open after the fence: ${String(err)}`),
+        );
+        // What waited for a leader runs here now.
+        await drainOutbound().catch((err) =>
+          log('warn', `sync: the queue did not drain: ${String(err)}`),
+        );
+      })().finally(() => {
+        opening = null;
+      });
+      return opening;
     },
     demote: async (masterDeviceId) => {
+      setFence(true);
       await deps.db.proc!('syncDemote', { masterDeviceId });
       await refreshGate();
+      publishRole();
     },
+    role: roleNow,
+    onRole: (cb) => void roleListeners.push(cb),
+    lease: () => leaseNow,
     deviceId: () => deviceId ?? deps.deviceId?.() ?? null,
     deleteArchive: async () => {
       for (const f of archiveFiles(deps.dbPath)) fs.rmSync(f, { force: true });

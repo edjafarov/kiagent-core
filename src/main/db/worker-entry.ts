@@ -8,8 +8,7 @@ import { buildDelta, type SyncCursor } from '../core/sync/delta';
 import { buildSnapshot } from '../core/sync/snapshot';
 import { readSyncStatus } from '../core/sync/status';
 import { prepareRestore, prepareSwap } from '../core/sync/swap';
-import { disableTracking, enableTracking } from '../core/sync/tracking';
-import { demote, promote } from '../core/sync/promote';
+import { demote, lead, promote } from '../core/sync/promote';
 import { gateFrom, readGateSync } from '../core/sync/role';
 import { parentPort, workerData } from 'node:worker_threads';
 import path from 'node:path';
@@ -197,13 +196,16 @@ async function runSyncRole(): Promise<void> {
           promote(db._conn!, a.epoch, { relayImported: a.relayImported });
           return null;
         },
-        syncDemote: (args) => {
-          demote(db._conn!, (args as { masterDeviceId: string }).masterDeviceId);
+        syncLead: (args) => {
+          const a = args as { epoch: number; relayImported?: boolean };
+          return lead(db._conn!, a.epoch, { relayImported: a.relayImported });
+        },
+        syncOpen: () => {
+          db._conn!.prepare(`UPDATE sync_state SET head_pending = 0`).run();
           return null;
         },
-        syncTracking: (args) => {
-          if ((args as { on: boolean }).on) enableTracking(db._conn!);
-          else disableTracking(db._conn!);
+        syncDemote: (args) => {
+          demote(db._conn!, (args as { masterDeviceId: string }).masterDeviceId);
           return null;
         },
         // The reconcile pass runs entirely on this connection: its staging
