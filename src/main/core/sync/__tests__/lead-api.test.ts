@@ -79,6 +79,16 @@ const lease = (o: Partial<LeaseSnapshot> = {}): LeaseSnapshot => ({
   priorRenewedAt: null,
   ...o,
 });
+/** Counts the queued rows the leader runs: one drain of one row is one call. */
+const runnerCount = (d: Device): (() => number) => {
+  let n = 0;
+  d.svc.setRunners({
+    ui: async () => void (n += 1),
+    core: jest.fn(),
+    commit: jest.fn(),
+  });
+  return () => n;
+};
 const state = (d: Device) =>
   d.conn().prepare(`SELECT * FROM sync_state`).get() as Record<string, unknown>;
 const epochs = (d: Device) => d.conn().prepare(`SELECT * FROM sync_epochs`).all();
@@ -100,6 +110,21 @@ describe('lead', () => {
     expect(d.svc.readOnly()).toBe(true);
     expect(d.svc.role()).toMatchObject({ leader: false, follower: false, reason: 'holder' });
     expect(readSyncStatus(d.conn()).headPending).toBe(true);
+  });
+
+  it('fences (readOnly, syncFence on posted) before the syncLead proc runs', async () => {
+    const d = await device(follower);
+    const real = (d.db as unknown as { proc: (n: string, a: unknown) => Promise<unknown> }).proc;
+    const log: string[] = [];
+    let readOnlyAtLead: boolean | null = null;
+    (d.db as unknown as { proc: unknown }).proc = async (n: string, a: unknown) => {
+      log.push(n === 'syncFence' ? `syncFence:${(a as { on: boolean }).on ? 'on' : 'off'}` : n);
+      if (n === 'syncLead') readOnlyAtLead = d.svc.readOnly();
+      return real(n, a);
+    };
+    await d.svc.lead({ epoch: 2 });
+    expect(log.slice(0, 2)).toEqual(['syncFence:on', 'syncLead']);
+    expect(readOnlyAtLead).toBe(true);
   });
 
   it('on a follower with epoch <= sync_state.epoch throws SyncEpochBehind', async () => {
@@ -141,8 +166,10 @@ describe('open', () => {
 
   it("'head-acked' clears head_pending, lifts the fence, runs onOpen and drains once; a second open is a no-op", async () => {
     const d = await device(follower);
+    const ran = runnerCount(d);
+    await d.svc.enqueue({ kind: 'ui', extensionId: 'x', name: 'n', payload: {} });
     await d.svc.lead({ epoch: 2 });
-    const drain = jest.spyOn(d.svc, 'drainOutbound');
+    expect(ran()).toBe(0);
     await Promise.all([d.svc.open('head-acked'), d.svc.open('head-acked')]);
     await d.svc.open('head-acked');
     await d.svc.open('lease');
@@ -150,7 +177,8 @@ describe('open', () => {
     expect(d.svc.readOnly()).toBe(false);
     expect(d.onOpen).toHaveBeenCalledTimes(1);
     expect(d.svc.role().leader).toBe(true);
-    drain.mockRestore();
+    expect(ran()).toBe(1);
+    expect(d.conn().prepare(`SELECT count(*) n FROM sync_outbound`).get()).toEqual({ n: 0 });
   });
 });
 
@@ -169,6 +197,16 @@ describe('setLease', () => {
     await d.svc.setLease(lease(o));
     expect(d.svc.readOnly()).toBe(true);
     expect(d.svc.role().leader).toBe(false);
+  });
+
+  it('a non-master lease closes the writer synchronously, before the returned promise settles', async () => {
+    const d = await device(leader);
+    await d.svc.open('lease');
+    expect(d.svc.readOnly()).toBe(false);
+    const p = d.svc.setLease(lease({ isMaster: false, reason: 'follower', holder: 'other' }));
+    expect(d.svc.readOnly()).toBe(true);
+    await p;
+    expect(d.svc.readOnly()).toBe(true);
   });
 
   it('a master lease leaves a leader open', async () => {
@@ -198,13 +236,19 @@ it("a lease loss during open('head-acked') leaves the device fenced and never ru
   const real = (d.db as unknown as { proc: (n: string, a: unknown) => Promise<unknown> }).proc;
   let release: () => void = () => undefined;
   const gate = new Promise<void>((r) => (release = r));
+  let entered = false;
+  const ran = runnerCount(d);
+  await d.svc.enqueue({ kind: 'ui', extensionId: 'x', name: 'n', payload: {} });
   (d.db as unknown as { proc: unknown }).proc = async (n: string, a: unknown) => {
-    if (n === 'syncOpen') await gate;
+    if (n === 'syncOpen') {
+      entered = true;
+      await gate;
+    }
     return real(n, a);
   };
   const first = d.svc.open('head-acked');
   const second = d.svc.open('head-acked');
-  await new Promise((r) => setImmediate(r));
+  while (!entered) await new Promise((r) => setImmediate(r));
   await d.svc.setLease(
     lease({ isMaster: false, reason: 'holder', holder: 'other', epoch: 2 }),
   );
@@ -212,6 +256,7 @@ it("a lease loss during open('head-acked') leaves the device fenced and never ru
   await Promise.all([first, second]);
   expect(d.svc.readOnly()).toBe(true);
   expect(d.onOpen).not.toHaveBeenCalled();
+  expect(ran()).toBe(0);
   expect(d.svc.role().leader).toBe(false);
 });
 

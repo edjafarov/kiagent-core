@@ -293,6 +293,8 @@ export function createSyncService(deps: SyncServiceDeps): SyncService {
   // Mirrors `sync_state` (role or joining) and the fence, so the answer is
   // synchronous. Every method below that changes the table refreshes it.
   let gated = deps.initialReadOnly ?? false;
+  // Invariant: `fenced` flips only in `setFence`; every close bumps `fenceGen`,
+  // and only `open` (through `setFence(false)`) lifts it.
   let fenced = deps.fencedAtBoot ?? false;
   let row = {
     role: (gated ? 'follower' : 'normal') as SyncRole,
@@ -939,12 +941,15 @@ export function createSyncService(deps: SyncServiceDeps): SyncService {
     readOnly,
     setLease: async (snap) => {
       leaseNow = snap;
-      await refreshGate();
-      if (
+      const closes = (): boolean =>
         snap.reason === 'fenced' ||
-        (!snap.isMaster && row.role === 'normal' && row.tracking)
-      )
-        setFence(true);
+        (!snap.isMaster && row.role === 'normal' && row.tracking);
+      // Close from what is cached before any await: nothing may write between
+      // the lease arriving and the fence. The fresh row can only add a close.
+      if (closes()) setFence(true);
+      publishRole();
+      await refreshGate();
+      if (!fenced && closes()) setFence(true);
       publishRole();
     },
     lead: async (o) => {
@@ -957,6 +962,7 @@ export function createSyncService(deps: SyncServiceDeps): SyncService {
       try {
         done = await deps.db.proc!('syncLead', o);
       } catch (err) {
+        // Undo only the fence this call raised on a device that had none.
         if (fromFollower && !wasFenced) setFence(false);
         throw err;
       }
