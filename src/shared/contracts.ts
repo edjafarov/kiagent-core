@@ -2118,6 +2118,57 @@ export interface CapSurfaces {
   'unsafe.mainProcess': {};
 }
 
+/** The public `sync` surface of an extension host. */
+export type SyncSurface = CapSurfaces['sync']['sync'];
+
+/** THE list of public sync methods: the host builder, the RPC allowlist and
+ *  the tests all iterate it. Main-only members of the sync service (`close`,
+ *  `onApplied`, `setRunners`, ...) are deliberately not here. */
+export const SYNC_SURFACE_METHODS = [
+  'status',
+  'enableTracking',
+  'disableTracking',
+  'buildDelta',
+  'buildSnapshot',
+  'applyDelta',
+  'prepareSwap',
+  'prepareRestore',
+  'setDeviceId',
+  'setDeviceNames',
+  'beginJoin',
+  'exportSources',
+  'hasMoveableLogins',
+  'exportSettings',
+  'importSettings',
+  'finishJoin',
+  'leaveJoin',
+  'forgetMoved',
+  'canAcceptSources',
+  'importSources',
+  'exportSecrets',
+  'importSecrets',
+  'isBusy',
+  'promote',
+  'demote',
+  'setFenced',
+  'readOnly',
+  'deleteArchive',
+  'setForwarder',
+  'runForwarded',
+  'drainOutbound',
+  'retained',
+  'queuedSettings',
+  'discardQueued',
+] as const satisfies readonly (keyof SyncSurface)[];
+
+// Compile-time cover check: a key added to the type but not the list fails here.
+type _SyncMissing = Exclude<
+  keyof SyncSurface,
+  (typeof SYNC_SURFACE_METHODS)[number]
+>;
+export const _syncSurfaceCovered: _SyncMissing extends never ? true : never =
+  true;
+
 export interface BaseHost {
   self: { id: ExtensionId; dataDir: string };
   log(level: LogLevel, msg: string): void;

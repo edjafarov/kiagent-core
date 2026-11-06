@@ -4,8 +4,6 @@
  * host incarnation. files and commands are implemented here; only commands
  * outside the public capability surface are rejected by the router.
  */
-import type { CorePrefs } from '../core/prefs';
-import type { SyncService } from '../core/sync/service';
 import type {
   EmbedResult,
   EventMeta,
@@ -14,6 +12,7 @@ import type {
   LogLevel,
   Query,
 } from '@shared/contracts';
+import { SYNC_SURFACE_METHODS } from '@shared/contracts';
 import type { PluginDb, PluginDbParams, PluginDbStep } from '@shared/plugin-db';
 import type { FileChange, ScopedFiles } from '@shared/plugin-files';
 import type { AppDb } from '@main/db/app-db';
@@ -21,6 +20,8 @@ import type { DbOwner, TxToken } from '@main/db/coordinator';
 import { pluginIdentifier } from '@shared/plugin-sql';
 import type { LogSink } from '@main/core/engine/engine';
 import type { AttentionService } from '@main/attention/service';
+import type { SyncService } from '../core/sync/service';
+import type { CorePrefs } from '../core/prefs';
 import { createNetworkService, type NetworkService } from './network-service';
 import { HostCallInTransactionError } from './host-call-context';
 import type { ManifestTier } from './manifest';
@@ -214,7 +215,7 @@ export interface SurfaceDeps {
   attention: AttentionService;
   /** Boot-owned; only an extension granted the privileged `sync` cap reaches
    *  it. Absent in a surface built without it: every call rejects. */
-  sync?: SyncSurface;
+  sync?: Omit<SyncService, 'close'>;
   /** Boot-owned store behind `host.prefs`; a surface built without it
    *  rejects every prefs call. */
   prefs?: Pick<CorePrefs, 'getExt' | 'setExt' | 'onExtChange'>;
@@ -253,53 +254,16 @@ const unsupported = (ns: string) => () => {
   );
 };
 
-type SyncSurface = Omit<SyncService, 'close'>;
-
-function syncSurface(
-  sync: SyncSurface | undefined,
+export function syncSurface(
+  sync: Omit<SyncService, 'close'> | undefined,
 ): Record<string, (...args: unknown[]) => unknown> {
   const call =
-    (m: keyof SyncSurface) =>
+    (m: (typeof SYNC_SURFACE_METHODS)[number]) =>
     (...args: unknown[]) => {
       if (!sync) throw new Error('sync is not available');
       return (sync[m] as (...a: unknown[]) => unknown)(...args);
     };
-  return {
-    status: call('status'),
-    enableTracking: call('enableTracking'),
-    disableTracking: call('disableTracking'),
-    buildDelta: call('buildDelta'),
-    buildSnapshot: call('buildSnapshot'),
-    applyDelta: call('applyDelta'),
-    prepareSwap: call('prepareSwap'),
-    prepareRestore: call('prepareRestore'),
-    setDeviceId: call('setDeviceId'),
-    setDeviceNames: call('setDeviceNames'),
-    beginJoin: call('beginJoin'),
-    exportSources: call('exportSources'),
-    hasMoveableLogins: call('hasMoveableLogins'),
-    exportSettings: call('exportSettings'),
-    importSettings: call('importSettings'),
-    finishJoin: call('finishJoin'),
-    leaveJoin: call('leaveJoin'),
-    forgetMoved: call('forgetMoved'),
-    canAcceptSources: call('canAcceptSources'),
-    importSources: call('importSources'),
-    exportSecrets: call('exportSecrets'),
-    importSecrets: call('importSecrets'),
-    isBusy: call('isBusy'),
-    promote: call('promote'),
-    demote: call('demote'),
-    setFenced: call('setFenced'),
-    readOnly: call('readOnly'),
-    deleteArchive: call('deleteArchive'),
-    setForwarder: call('setForwarder'),
-    runForwarded: call('runForwarded'),
-    drainOutbound: call('drainOutbound'),
-    retained: call('retained'),
-    queuedSettings: call('queuedSettings'),
-    discardQueued: call('discardQueued'),
-  };
+  return Object.fromEntries(SYNC_SURFACE_METHODS.map((m) => [m, call(m)]));
 }
 
 export function buildSurfaces(deps: SurfaceDeps): {
@@ -718,7 +682,9 @@ export function buildSurfaces(deps: SurfaceDeps): {
       // dotted name could land in another extension's space.
       const keyOf = (name: unknown): string => {
         if (typeof name !== 'string' || name === '' || name.includes('.'))
-          throw new TypeError('a prefs name is a non-empty string without dots');
+          throw new TypeError(
+            'a prefs name is a non-empty string without dots',
+          );
         return `${deps.extensionId}.${name}`;
       };
       const prefix = `${deps.extensionId}.`;

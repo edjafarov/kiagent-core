@@ -32,6 +32,12 @@ module.exports = {
       readOnly: await host.sync.readOnly(),
       queuedSettings: await host.sync.queuedSettings(),
       discardQueued: await host.sync.discardQueued(7),
+      setDeviceNames: await host.sync.setDeviceNames([{ deviceId: 'd', label: 'L' }]),
+      deleteArchive: await host.sync.deleteArchive(),
+      setForwarder: await host.sync.setForwarder(null),
+      runForwarded: await host.sync.runForwarded({ kind: 'k' }),
+      drainOutbound: await host.sync.drainOutbound(),
+      retained: await host.sync.retained('t'),
     };
     fs.writeFileSync(process.env.KIA_SYNC_FIXTURE_OUT, JSON.stringify(calls));
   },

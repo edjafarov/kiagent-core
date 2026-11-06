@@ -6,9 +6,13 @@ import path from 'path';
 import { openDb } from '@main/db/app-db';
 import { openStore, type CoreStore } from '@main/core/store/store';
 
+import { SYNC_SURFACE_METHODS } from '@shared/contracts';
 import { PLATFORM_API_VERSION } from '@shared/extension-rpc';
 
-import { createExtensionPlatform, type ExtensionPlatform } from '../extension-platform';
+import {
+  createExtensionPlatform,
+  type ExtensionPlatform,
+} from '../extension-platform';
 import { parseManifest } from '../manifest';
 import { nodeForkTransport } from '../transport';
 
@@ -17,14 +21,18 @@ const REPO_ROOT = path.resolve(__dirname, '../../../..');
 const CHILD_ENTRY = path.resolve(__dirname, '../extension-host-entry.ts');
 const FIXTURE = path.join(__dirname, 'fixtures', 'ext-sync');
 
-const manifest = JSON.parse(fs.readFileSync(path.join(FIXTURE, 'manifest.json'), 'utf8'));
+const manifest = JSON.parse(
+  fs.readFileSync(path.join(FIXTURE, 'manifest.json'), 'utf8'),
+);
 
 it('the platform API is 2.19.0: 2.18.0 added the join methods, 2.19.0 the queued-settings methods', () => {
   expect(PLATFORM_API_VERSION).toBe('2.19.0');
 });
 
 it('a marketplace extension declaring sync is refused, a bundled one is accepted', () => {
-  expect(() => parseManifest(manifest, { tier: 'external' })).toThrow(/only extensions bundled/);
+  expect(() => parseManifest(manifest, { tier: 'external' })).toThrow(
+    /only extensions bundled/,
+  );
   expect(parseManifest(manifest, { tier: 'bundled' }).caps).toContain('sync');
 });
 
@@ -33,10 +41,12 @@ describe('through a real forked extension host', () => {
   let store: CoreStore;
   let platform: ExtensionPlatform;
   const seen: Record<string, unknown[]> = {};
-  const note = <T>(m: string, r: T) => (...args: unknown[]) => {
-    seen[m] = args;
-    return Promise.resolve(r);
-  };
+  const note =
+    <T>(m: string, r: T) =>
+    (...args: unknown[]) => {
+      seen[m] = args;
+      return Promise.resolve(r);
+    };
 
   beforeAll(async () => {
     tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kia-sync-e2e-'));
@@ -66,27 +76,56 @@ describe('through a real forked extension host', () => {
         beginJoin: note('beginJoin', undefined),
         exportSources: note('exportSources', [{ source: 'gmail' }]),
         hasMoveableLogins: note('hasMoveableLogins', true),
-        exportSettings: note('exportSettings', { prefs: { 'a.b': 1 }, extensions: {} }),
-        importSettings: note('importSettings', { prefs: ['a.b'], extensions: [] }),
+        exportSettings: note('exportSettings', {
+          prefs: { 'a.b': 1 },
+          extensions: {},
+        }),
+        importSettings: note('importSettings', {
+          prefs: ['a.b'],
+          extensions: [],
+        }),
         finishJoin: note('finishJoin', undefined),
         leaveJoin: note('leaveJoin', undefined),
         forgetMoved: note('forgetMoved', undefined),
         canAcceptSources: note('canAcceptSources', true),
-        importSources: note('importSources', { created: ['a'], existing: [], needsConnector: [] }),
+        importSources: note('importSources', {
+          created: ['a'],
+          existing: [],
+          needsConnector: [],
+        }),
         isBusy: note('isBusy', null),
-        exportSecrets: note('exportSecrets', [{ accountId: 'a', epoch: 1, n: 3, value: null }]),
+        exportSecrets: note('exportSecrets', [
+          { accountId: 'a', epoch: 1, n: 3, value: null },
+        ]),
         importSecrets: note('importSecrets', { applied: 1 }),
         promote: note('promote', undefined),
         demote: note('demote', undefined),
         setFenced: note('setFenced', undefined),
         readOnly: note('readOnly', true),
         deleteArchive: note('deleteArchive', undefined),
-        queuedSettings: note('queuedSettings', [{ rowId: 3, key: 'core.theme', value: 'dark', stuck: false }]),
+        queuedSettings: note('queuedSettings', [
+          { rowId: 3, key: 'core.theme', value: 'dark', stuck: false },
+        ]),
         discardQueued: note('discardQueued', undefined),
+        setDeviceNames: note('setDeviceNames', undefined),
+        setForwarder: note('setForwarder', undefined),
+        runForwarded: note('runForwarded', { ok: true }),
+        drainOutbound: note('drainOutbound', { sent: 0, waiting: 0 }),
+        retained: note('retained', ['x']),
         close: async () => undefined,
       } as never,
-      sources: { register: () => {}, get: () => undefined, list: () => [], unregister: () => {} },
-      senders: { register: () => {}, get: () => undefined, ids: () => [], unregister: () => {} },
+      sources: {
+        register: () => {},
+        get: () => undefined,
+        list: () => [],
+        unregister: () => {},
+      },
+      senders: {
+        register: () => {},
+        get: () => undefined,
+        ids: () => [],
+        unregister: () => {},
+      },
       scheduler: {
         register: jest.fn(),
         unregister: jest.fn(),
@@ -95,14 +134,24 @@ describe('through a real forked extension host', () => {
         env: {},
       } as never,
       registerTool: () => () => {},
-      inference: { complete: async () => '', see: async () => '', read: async () => '', hear: async () => '' },
+      inference: {
+        complete: async () => '',
+        see: async () => '',
+        read: async () => '',
+        hear: async () => '',
+      },
       laneState: () => 'open',
       logSink: { log: () => {} },
       notify: () => {},
       transportFactory: () =>
         nodeForkTransport(CHILD_ENTRY, {
           cwd: REPO_ROOT,
-          execArgv: ['-r', 'ts-node/register/transpile-only', '-r', 'tsconfig-paths/register'],
+          execArgv: [
+            '-r',
+            'ts-node/register/transpile-only',
+            '-r',
+            'tsconfig-paths/register',
+          ],
           env: {
             ...process.env,
             KIA_EXT_HOST_CHILD: '1',
@@ -142,7 +191,9 @@ describe('through a real forked extension host', () => {
       exportSecrets: [{ accountId: 'a', epoch: 1, n: 3, value: null }],
       importSecrets: { applied: 1 },
       readOnly: true,
-      queuedSettings: [{ rowId: 3, key: 'core.theme', value: 'dark', stuck: false }],
+      queuedSettings: [
+        { rowId: 3, key: 'core.theme', value: 'dark', stuck: false },
+      ],
     });
     // onQueueChange and enqueue are core-internal: no extension can reach them.
     expect(seen.discardQueued).toEqual([7]);
@@ -152,16 +203,12 @@ describe('through a real forked extension host', () => {
     expect(seen.setFenced).toEqual([true]);
     expect(seen.exportSecrets).toEqual([{ epoch: 1, n: 2 }]);
     expect(seen.importSources).toEqual(['offer', [], 'from']);
-    expect(seen.importSettings).toEqual(['offer', { prefs: { 'a.b': 1 }, extensions: {} }]);
+    expect(seen.importSettings).toEqual([
+      'offer',
+      { prefs: { 'a.b': 1 }, extensions: {} },
+    ]);
     expect(seen.buildDelta).toEqual([{ seq: 1, cursor: 2 }, 'out', 5, 3]);
     expect(seen.prepareSwap).toEqual(['f', 'h', 'm']);
-    expect(Object.keys(seen).sort()).toEqual(
-      [
-        'applyDelta', 'beginJoin', 'buildDelta', 'buildSnapshot', 'canAcceptSources', 'demote',
-        'disableTracking', 'discardQueued', 'enableTracking', 'exportSecrets', 'exportSettings', 'exportSources', 'finishJoin', 'forgetMoved', 'hasMoveableLogins', 'importSecrets',
-        'importSettings', 'importSources', 'isBusy', 'leaveJoin', 'prepareRestore', 'prepareSwap', 'promote', 'queuedSettings', 'readOnly', 'setDeviceId',
-        'setFenced', 'status',
-      ],
-    );
+    expect(Object.keys(seen).sort()).toEqual([...SYNC_SURFACE_METHODS].sort());
   });
 });
