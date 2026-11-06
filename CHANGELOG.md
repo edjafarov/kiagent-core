@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.120.0](https://github.com/edjafarov/kiagent-core/compare/v0.119.1...v0.120.0) (2026-11-06)
+
+### Features
+
+* **core:** the lead API — setLease, lead, open, demote; a promotion's pending ack is durable in sync_state.head_pending (schema v23) ([91721ab](https://github.com/edjafarov/kiagent-core/commit/91721ab540aa4121988f0ff61a332e22110d388f))
+* **core:** the sync phase and the role as pure functions over sync_state, the fence and the lease ([d2673e1](https://github.com/edjafarov/kiagent-core/commit/d2673e13656dbc6073e39c327ea0f3783f71fd26))
+* **core:** the writer worker and main derive the boot fence from one sync_state read; canWrite(phase) is the only predicate; resetState clears a half-gated device ([776631f](https://github.com/edjafarov/kiagent-core/commit/776631f2b068078331bd0ddcd3f5b3d102890e4a))
+* **platform:** host.role.get() on every host and the sync.role platform event; PLATFORM_API 2.20.0 ([ecb6cac](https://github.com/edjafarov/kiagent-core/commit/ecb6cace27ad1a98668bae03082de1bddc22f97a))
+
+### Bug Fixes
+
+* **core:** a seed is never fenced: setLease needs a tracking leader, a refused grant posts nothing ([42429cf](https://github.com/edjafarov/kiagent-core/commit/42429cf0fc6e05959c252ab7c62b6cfae65903f1))
+* **core:** factory reset clears sync_state right before the core wipe, after every extension reset ([6a8ee53](https://github.com/edjafarov/kiagent-core/commit/6a8ee53009b6f186e57e6ca998441970872d6f51))
+* **core:** open does not undo a fence that closed while it was awaiting ([f60acfb](https://github.com/edjafarov/kiagent-core/commit/f60acfb1cc2193cdfd047a63082b0f3e8767e5a8))
+* **core:** setLease closes synchronously; the lead tests prove fence-before-proc and one drain ([f97176b](https://github.com/edjafarov/kiagent-core/commit/f97176bdefe4c326297ae77f447425ceed9de77d))
+
 ## [0.119.1](https://github.com/edjafarov/kiagent-core/compare/v0.119.0...v0.119.1) (2026-11-06)
 
 ### Bug Fixes
