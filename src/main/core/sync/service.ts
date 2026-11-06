@@ -3,7 +3,13 @@
  *  worker, so neither the window nor ingest waits for them. */
 import fs from 'node:fs';
 
-import type { OfferedSettingsWire } from '@shared/contracts';
+import type {
+  ForwardRequestWire,
+  ForwardResultWire,
+  OfferedSettingsWire,
+  SecretWire,
+  SyncStatusWire,
+} from '@shared/contracts';
 import type { AppDb } from '../../db/app-db';
 import { openDbInWorker } from '../../db/worker-client';
 import type { CoreStore } from '../store/store';
@@ -15,7 +21,6 @@ import {
   queuedSettingsOf,
   type QueuedSetting,
 } from './settings-queue';
-import type { SyncRole } from './role';
 import {
   DEVICE_OWNED_SOURCES,
   exportSources,
@@ -31,28 +36,9 @@ import {
 import { archiveFiles, swapOutcomePath } from './status';
 import { dropPendingSwap } from './swap';
 
-/** One login on the wire: `value` is the credentials as JSON text, or null for
- *  a login that was removed. */
-export interface Secret {
-  accountId: string;
-  epoch: number;
-  n: number;
-  value: string | null;
-}
-
-/** A write that crosses to the leader (step 3). `ui`: an extension's own
- *  handler; `core`: a core IPC handler such as `attention.act`; `commit`: an
- *  owner's batch (Task 2). */
-export interface ForwardRequest {
-  kind: 'ui' | 'core' | 'commit';
-  extensionId?: string;
-  name: string;
-  payload: unknown;
-}
-
-export type ForwardResult =
-  | { ok: true; value: unknown }
-  | { ok: false; code: 'no-master' | 'handler'; message: string };
+export type Secret = SecretWire;
+export type ForwardRequest = ForwardRequestWire;
+export type ForwardResult = ForwardResultWire;
 
 /** What an applied delta carried besides table names. */
 export interface AppliedMeta {
@@ -77,50 +63,11 @@ export interface ForwardRunners {
   commit(payload: unknown): Promise<unknown>;
 }
 
-export interface SyncStatus {
-  /** Device-owned accounts another device owns: they run, and send, there. */
-  elsewhere: { source: string; identifier: string; ownerDeviceId: string }[];
-  role: SyncRole;
-  tracking: boolean;
-  historyId: string | null;
-  masterDeviceId: string | null;
-  after: SyncCursor;
-  head: SyncCursor;
-  schemaVersion: number;
-  /** Mid-join: searches, but reads no source and writes nothing (spec 7.7). */
-  joining: boolean;
-  /** Set once the join finished; a joined device ignores `join_from` for good. */
-  joined: boolean;
-  /** Documents that are not archived: the heartbeat's `doc_count`. */
-  documents: number;
-  /** Accounts other than the synthetic worker, device-owned ones included. */
-  accounts: number;
-  /** The last boot swap's result, until finishJoin or leaveJoin clears it. */
-  lastSwap: 'swapped' | 'abandoned' | null;
-  /** Size of the old database a join set aside, 0 when none. */
-  archiveBytes: number;
-  /** The epoch of the master this device last applied from, or led as. */
-  epoch: number;
-  /** Digest of the copied set; a follower echoes the one its master sent. */
-  copiedSet: string;
-  /** The highest login stamp held: what a follower asks the leader for next. */
-  secretsAfter: { epoch: number; n: number };
-  /** Where this device's own epoch began, once it has led. */
-  grant: { seq: number; cursor: number } | null;
-  /** The id this device told core it is known by, once it has. */
-  deviceId: string | null;
-  /** Results of this device that wait in `sync_outbound` for a leader. */
-  outbound: { waiting: number };
-  /** Settings changed with no leader reachable that still wait to be
-   *  delivered: one entry per coalesce key. */
-  queuedSettings: QueuedSetting[];
-  /** The database file plus its journal: a cheap stand-in for the size of a
-   *  snapshot, so a joiner can weigh its disk before anything is built. */
-  dbBytes: number;
-}
+/** One shape: the wire type. */
+export type DeviceSyncStatus = SyncStatusWire;
 
 export interface SyncService {
-  status(): Promise<SyncStatus>;
+  status(): Promise<DeviceSyncStatus>;
   enableTracking(): Promise<void>;
   disableTracking(): Promise<void>;
   /** `fromEpoch`: the epoch the asker last applied from; absent, none is

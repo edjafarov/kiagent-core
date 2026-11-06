@@ -739,9 +739,7 @@ export interface ExportContext {
 /** The entire connector-authoring surface. */
 export interface Source<Cursor = unknown, Item = unknown> {
   readonly descriptor: SourceDescriptor;
-  connect(
-    auth: AuthChannel,
-  ): Promise<{
+  connect(auth: AuthChannel): Promise<{
     identifier: string;
     config?: Record<string, unknown>;
     /** Saved to the vault with the account, merged over what the auth flow
@@ -1636,7 +1634,44 @@ export type ForwardResultWire =
   | { ok: true; value: unknown }
   | { ok: false; code: 'no-master' | 'handler'; message: string };
 
+export type LeaseReason =
+  | 'solo'
+  | 'holder'
+  | 'not-signed-in'
+  | 'follower'
+  | 'fenced'
+  | 'pending-approval'
+  | 'unjoined'
+  | 'no-keystore'
+  | 'stale-root';
+
+/** What the lease says about this device right now. */
+export interface LeaseSnapshot {
+  isMaster: boolean;
+  reason: LeaseReason;
+  multiDevice: boolean;
+  approved: boolean;
+  holder: string | null;
+  epoch: number;
+  priorRenewedAt: number | null;
+  priorHolder?: string | null;
+}
+
+/** The one leader fact core publishes: whether this device leads. */
+export interface SyncRoleWire {
+  leader: boolean;
+  follower: boolean;
+  multiDevice: boolean;
+  epoch: number;
+  priorRenewedAt: number | null;
+  reason: LeaseReason | 'fenced-boot' | 'follower-copy';
+}
+
 export interface SyncStatusWire {
+  /** Device-owned accounts another device owns: they run, and send, there. */
+  elsewhere: { source: string; identifier: string; ownerDeviceId: string }[];
+  /** True while the lease head is not yet known (always false until Task 11). */
+  headPending: boolean;
   role: 'normal' | 'follower';
   tracking: boolean;
   historyId: string | null;
@@ -1654,8 +1689,8 @@ export interface SyncStatusWire {
   archiveBytes: number;
   /** The epoch of the master this device last applied from, or led as. */
   epoch: number;
-  /** Digest of the copied set (schema version, copied table names, synced
-   *  descriptors): a follower echoes the one its master reported. */
+  /** Digest of the copied set this device computed; a follower echoes the one
+   *  its master sent. */
   copiedSet: string;
   /** The highest login stamp held: what a follower asks the leader for next. */
   secretsAfter: { epoch: number; n: number };
@@ -1671,7 +1706,12 @@ export interface SyncStatusWire {
   /** Settings changed with no leader reachable that still wait to be
    *  delivered; `key` is `core.<pref>`, `core.extensions.<id>` or
    *  `<extension id>.<name>`. */
-  queuedSettings: { rowId: number; key: string; value: unknown; stuck: boolean }[];
+  queuedSettings: {
+    rowId: number;
+    key: string;
+    value: unknown;
+    stuck: boolean;
+  }[];
 }
 
 export type Cap =
@@ -1973,7 +2013,13 @@ export interface CapSurfaces {
         /** The epoch the asker last applied from; absent, nothing is rewound. */
         fromEpoch?: number,
       ): Promise<
-        | { status: 'ok'; target: SyncCursorWire; rows: number; bytes: number; sha256: string }
+        | {
+            status: 'ok';
+            target: SyncCursorWire;
+            rows: number;
+            bytes: number;
+            sha256: string;
+          }
         | { status: 'too-large' }
       >;
       buildSnapshot(
@@ -2000,7 +2046,9 @@ export interface CapSurfaces {
        *  device-owned accounts under `<identifier>#<id8>`. */
       setDeviceId(id: string): Promise<void>;
       /** What each device is called, from the device list. */
-      setDeviceNames(list: { deviceId: string; label: string }[]): Promise<void>;
+      setDeviceNames(
+        list: { deviceId: string; label: string }[],
+      ): Promise<void>;
       beginJoin(): Promise<void>;
       exportSources(toDevice: string): Promise<OfferedSourceWire[]>;
       /** Does this device hold a login it could move? Reads only; moves nothing. */
@@ -2020,7 +2068,11 @@ export interface CapSurfaces {
         offerId: string,
         list: OfferedSourceWire[],
         from: string,
-      ): Promise<{ created: string[]; existing: string[]; needsConnector: string[] }>;
+      ): Promise<{
+        created: string[];
+        existing: string[];
+        needsConnector: string[];
+      }>;
       /** Logins stamped above `after`, decrypted in main (alpha-cent spec 7.8). */
       exportSecrets(after: { epoch: number; n: number }): Promise<SecretWire[]>;
       /** Stores logins from the leader; follower only. */
@@ -2041,9 +2093,7 @@ export interface CapSurfaces {
        *  function, so it works for a host that shares the main process
        *  (remote-mcp is one); null removes it. */
       setForwarder(
-        f:
-          | ((req: ForwardRequestWire) => Promise<ForwardResultWire>)
-          | null,
+        f: ((req: ForwardRequestWire) => Promise<ForwardResultWire>) | null,
       ): Promise<void>;
       /** The leader runs a forwarded request; a follower refuses. */
       runForwarded(req: ForwardRequestWire): Promise<ForwardResultWire>;
@@ -2051,7 +2101,9 @@ export interface CapSurfaces {
        *  promotion. */
       drainOutbound(): Promise<{ sent: number; waiting: number }>;
       /** Settings waiting for a leader, one per key. */
-      queuedSettings(): Promise<{ rowId: number; key: string; value: unknown; stuck: boolean }[]>;
+      queuedSettings(): Promise<
+        { rowId: number; key: string; value: unknown; stuck: boolean }[]
+      >;
       /** Drops a waiting setting (never a data row). */
       discardQueued(rowId: number): Promise<void>;
       /** Primary keys the swap kept for an owner-capture table. */

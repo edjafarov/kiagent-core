@@ -6,9 +6,9 @@ import type BetterSqlite3 from 'better-sqlite3';
 import { QUEUED_SETTINGS_SQL, queuedSettingsOf } from './settings-queue';
 import { copiedSetDigest } from './tables';
 import type { SyncRole } from './role';
-import type { SyncStatus } from './service';
+import type { DeviceSyncStatus } from './service';
 
-export function readSyncStatus(conn: BetterSqlite3.Database): SyncStatus {
+export function readSyncStatus(conn: BetterSqlite3.Database): DeviceSyncStatus {
   const s = conn.prepare(`SELECT * FROM sync_state`).get() as {
     role: SyncRole;
     tracking: number;
@@ -34,19 +34,27 @@ export function readSyncStatus(conn: BetterSqlite3.Database): SyncStatus {
     .prepare(`SELECT count(*) AS n FROM accounts WHERE source <> 'worker'`)
     .get() as { n: number };
   const grant = conn
-    .prepare(`SELECT grant_seq AS seq, grant_cursor AS cursor FROM sync_epochs WHERE epoch = ?`)
+    .prepare(
+      `SELECT grant_seq AS seq, grant_cursor AS cursor FROM sync_epochs WHERE epoch = ?`,
+    )
     .get(s.epoch) as { seq: number; cursor: number } | undefined;
   const secrets = conn
     .prepare(`SELECT epoch, n FROM vault ORDER BY epoch DESC, n DESC LIMIT 1`)
     .get() as { epoch: number; n: number } | undefined;
-  const waiting = conn.prepare(`SELECT count(*) AS n FROM sync_outbound`).get() as { n: number };
+  const waiting = conn
+    .prepare(`SELECT count(*) AS n FROM sync_outbound`)
+    .get() as { n: number };
   const elsewhere = (
     conn
       .prepare(
         `SELECT source, identifier, owner_device_id AS owner FROM accounts
           WHERE owner_device_id IS NOT NULL AND owner_device_id <> ? ORDER BY source, identifier`,
       )
-      .all(s.device_id ?? '') as { source: string; identifier: string; owner: string }[]
+      .all(s.device_id ?? '') as {
+      source: string;
+      identifier: string;
+      owner: string;
+    }[]
   ).map((r) => ({
     source: r.source,
     // The folder suffix keeps two devices' rows apart; the user never needs it.
@@ -55,9 +63,12 @@ export function readSyncStatus(conn: BetterSqlite3.Database): SyncStatus {
   }));
   return {
     elsewhere,
+    headPending: false,
     outbound: { waiting: waiting.n },
     queuedSettings: queuedSettingsOf(
-      conn.prepare(QUEUED_SETTINGS_SQL).all() as Parameters<typeof queuedSettingsOf>[0],
+      conn.prepare(QUEUED_SETTINGS_SQL).all() as Parameters<
+        typeof queuedSettingsOf
+      >[0],
     ),
     deviceId: s.device_id,
     copiedSet: copiedSetDigest(conn),
@@ -70,7 +81,10 @@ export function readSyncStatus(conn: BetterSqlite3.Database): SyncStatus {
     documents: documents.n,
     accounts: accounts.n,
     lastSwap: readSwapOutcome(conn.name),
-    archiveBytes: archiveFiles(conn.name).reduce((n, f) => n + fs.statSync(f).size, 0),
+    archiveBytes: archiveFiles(conn.name).reduce(
+      (n, f) => n + fs.statSync(f).size,
+      0,
+    ),
     dbBytes: [conn.name, `${conn.name}-wal`].reduce(
       (n, f) => n + (fs.existsSync(f) ? fs.statSync(f).size : 0),
       0,
@@ -81,16 +95,23 @@ export function readSyncStatus(conn: BetterSqlite3.Database): SyncStatus {
     after: { seq: s.after_seq, cursor: s.after_cursor },
     head: { seq: head.seq ?? 0, cursor: head.cursor ?? 0 },
     schemaVersion: Number(
-      (conn.prepare(`SELECT value FROM meta WHERE key='schemaVersion'`).get() as { value: string }).value,
+      (
+        conn
+          .prepare(`SELECT value FROM meta WHERE key='schemaVersion'`)
+          .get() as { value: string }
+      ).value,
     ),
   };
 }
 
 /** What the last boot swap decided, kept on disk so a crash right after it
  *  can't lose it (spec 7.7: the join and the swap must agree at boot). */
-export const swapOutcomePath = (dbPath: string): string => `${dbPath}.swap-outcome`;
+export const swapOutcomePath = (dbPath: string): string =>
+  `${dbPath}.swap-outcome`;
 
-export function readSwapOutcome(dbPath: string): 'swapped' | 'abandoned' | null {
+export function readSwapOutcome(
+  dbPath: string,
+): 'swapped' | 'abandoned' | null {
   try {
     const v = fs.readFileSync(swapOutcomePath(dbPath), 'utf8');
     return v === 'swapped' || v === 'abandoned' ? v : null;

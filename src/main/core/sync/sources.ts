@@ -1,7 +1,12 @@
 /** Which sources move to another device, which stay, and what an offer holds
  *  (alpha-cent spec 7.7). Two lists, audited once, that every later step reads
  *  and none adds to. An unlisted source counts as unstable and not device-owned. */
-import type { Credentials, ExportContext, Source } from '@shared/contracts';
+import type {
+  Credentials,
+  ExportContext,
+  OfferedSourceWire,
+  Source,
+} from '@shared/contracts';
 
 import type { CoreStore } from '../store/store';
 
@@ -65,14 +70,7 @@ export const isStableIdentity = (source: string): boolean =>
 
 /** One account in an offer. `credentials` is set only for a moveable account
  *  that has a login; `owner_device_id` only for a device-owned one. */
-export interface OfferedSource {
-  source: string;
-  identifier: string;
-  config: string;
-  cadence: string | null;
-  credentials: unknown | null;
-  owner_device_id: string | null;
-}
+export type OfferedSource = OfferedSourceWire;
 
 /** First 8 characters of a device id, the suffix that keeps two devices'
  *  copies of one local identifier apart. */
@@ -130,7 +128,10 @@ async function awaitAdvertised(
     }
     timer = setTimeout(() => {
       for (const id of waiting)
-        log('warn', `sync: ${id} had not registered after ${waitMs / 1000} s; exporting without its prepareExport`);
+        log(
+          'warn',
+          `sync: ${id} had not registered after ${waitMs / 1000} s; exporting without its prepareExport`,
+        );
       finish();
     }, waitMs);
     // A connector may have registered between the check and the listener.
@@ -148,7 +149,12 @@ export async function exportSources(
 ): Promise<OfferedSource[]> {
   const accounts = await store.read.accounts();
   if (sources)
-    await awaitAdvertised(accounts, sources, log, opts.waitMs ?? PREPARE_EXPORT_WAIT_MS);
+    await awaitAdvertised(
+      accounts,
+      sources,
+      log,
+      opts.waitMs ?? PREPARE_EXPORT_WAIT_MS,
+    );
   const out: OfferedSource[] = [];
   for (const a of accounts) {
     if (a.source === 'worker') continue;
@@ -162,7 +168,9 @@ export async function exportSources(
       const owned = a.ownerDeviceId ?? null;
       out.push({
         ...base,
-        identifier: owned ? a.identifier : `${a.identifier}#${deviceSuffix(me)}`,
+        identifier: owned
+          ? a.identifier
+          : `${a.identifier}#${deviceSuffix(me)}`,
         credentials: null,
         owner_device_id: owned ?? me,
       });
@@ -174,13 +182,18 @@ export async function exportSources(
       try {
         await prepare.call(sources!.get(a.source), {
           account: a,
-          credentials: () => store.vault.load(a.id) as Promise<Credentials | null>,
+          credentials: () =>
+            store.vault.load(a.id) as Promise<Credentials | null>,
           save: (c) => store.vault.save(a.id, c),
-          log: (level, msg) => log(level === 'error' ? 'warn' : 'info', `${a.source}: ${msg}`),
+          log: (level, msg) =>
+            log(level === 'error' ? 'warn' : 'info', `${a.source}: ${msg}`),
         } satisfies ExportContext);
       } catch {
         // The message could carry a login, so only the source is named.
-        log('warn', `sync: ${a.source} could not prepare an account for export`);
+        log(
+          'warn',
+          `sync: ${a.source} could not prepare an account for export`,
+        );
       }
     }
     const login = (await store.vault.load(a.id)) as Credentials | null;
@@ -194,7 +207,10 @@ export async function exportSources(
     });
   }
   const owned = out.filter((o) => o.owner_device_id !== null).length;
-  log('info', `sync: ${out.length - owned} movable and ${owned} device-owned accounts to offer`);
+  log(
+    'info',
+    `sync: ${out.length - owned} movable and ${owned} device-owned accounts to offer`,
+  );
   return out;
 }
 
