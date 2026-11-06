@@ -328,7 +328,11 @@ export function createSyncService(deps: SyncServiceDeps): SyncService {
     lastRole = r;
     for (const cb of roleListeners) cb(r);
   };
+  // Bumped by every close, so an `open` that was awaiting can tell a newer
+  // loss from the state it started from: the loss wins.
+  let fenceGen = 0;
   const setFence = (on: boolean): void => {
+    if (on) fenceGen += 1;
     fenced = on;
     // The writer lives in a worker: the message is queued ahead of any write
     // sent after this call.
@@ -962,15 +966,21 @@ export function createSyncService(deps: SyncServiceDeps): SyncService {
     },
     open: async (kind) => {
       if (opening) return opening;
+      const gen = fenceGen;
       await refreshGate();
       if (opening) return opening;
-      if (!fenced) return;
+      if (fenceGen !== gen) return;
       if (row.role === 'follower' || row.joining) throw new SyncNotLeader();
+      if (!fenced) return;
       if (kind === 'lease' && row.headPending) throw new SyncHeadPending();
       opening = (async () => {
         if (kind === 'head-acked') {
           await deps.db.proc!('syncOpen', {});
           row = { ...row, headPending: false };
+          if (fenceGen !== gen) {
+            publishRole();
+            return;
+          }
         }
         setFence(false);
         publishRole();
