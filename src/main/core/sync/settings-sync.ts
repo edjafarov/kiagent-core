@@ -138,7 +138,7 @@ function installOfflineSettings(
         return local as { ok: boolean };
       },
       enqueue: () => prefs.queueExtensionEnabled(id, enabled),
-      apply: { forwarded: () => prefs.dropOptimistic(key), queued: () => undefined },
+      apply: { forwarded: () => prefs.ackForwarded(key, enabled), queued: () => undefined },
     });
     return how === 'forwarded' ? out : local;
   };

@@ -4,7 +4,8 @@ import os from 'os';
 import path from 'path';
 
 import { openDb, type AppDb } from '../../../db/app-db';
-import { createDbUserPrefsStore, createPrefs } from '../../prefs';
+import { createDbUserPrefsStore, createPrefs, type OfflineQueue, type UserPrefsStore } from '../../prefs';
+import { SyncNoMaster } from '../forward-core';
 import { migrate } from '../../store/schema';
 import { openStore } from '../../store/store';
 import { leadProc } from './lead-proc';
@@ -151,5 +152,95 @@ describe('forwardOrQueue', () => {
     const bad = op({ forward: async () => { throw new Error('refused'); } });
     await expect(forwardOrQueue(bad.o)).rejects.toThrow('refused');
     expect(bad.calls.enqueue).toEqual([]);
+  });
+});
+
+describe('settings on a copy through the real prefs', () => {
+  function copy() {
+    const rows: Record<string, unknown> = {};
+    const store: UserPrefsStore = {
+      all: async () => JSON.parse(JSON.stringify(rows)),
+      set: async (k, v) => void (rows[k] = v),
+      canWrite: () => false,
+    };
+    const queued: { key: string; payload: unknown }[] = [];
+    const clock = { now: 100 };
+    const queue: OfflineQueue = {
+      nowMs: () => clock.now,
+      enqueue: async (req, o) => {
+        queued.push({ key: o.coalesceKey, payload: req.payload });
+        return queued.length;
+      },
+    };
+    return { rows, store, queued, clock, queue };
+  }
+  let tmp = '';
+  afterEach(() => tmp && fs.rmSync(tmp, { recursive: true, force: true }));
+
+  it('a multi-key patch with one held key queues each key with its complete merged value (real prefs)', async () => {
+    tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'settings-sync-multi-'));
+    const c = copy();
+    c.rows['core.outbound'] = { defaultMode: 'link', extra: 1 };
+    const prefs = createPrefs(tmp, c.store);
+    await prefs.ready;
+    const fwd = jest.fn(async () => undefined);
+    prefs.setOfflineQueue(c.queue);
+    prefs.setForwardUser(async () => {
+      throw new SyncNoMaster();
+    });
+    await prefs.patch({ outbound: { defaultMode: 'chat' } });
+    prefs.setForwardUser(fwd);
+    await prefs.patch({ theme: 'dark', outbound: { defaultMode: 'link' } });
+    expect(fwd).not.toHaveBeenCalled();
+    const last = c.queued.slice(-2);
+    expect(last.map((q) => q.key)).toEqual(['core.theme', 'core.outbound']);
+    expect(last[0].payload).toEqual({ theme: 'dark' });
+    expect(last[1].payload).toEqual({ outbound: prefs.get().outbound });
+    expect((last[1].payload as { outbound: Record<string, unknown> }).outbound).toMatchObject({ defaultMode: 'link' });
+  });
+
+  it('a forwarded switch shows until a pull that started after it lands', async () => {
+    tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'settings-sync-switch-'));
+    const c = copy();
+    c.rows['core.extensions'] = { a: { enabled: false } };
+    const prefs = createPrefs(tmp, c.store);
+    await prefs.ready;
+    prefs.setOfflineQueue(c.queue);
+    const handlers: Record<string, (r: unknown) => unknown> = { 'extension:set-enabled': async () => ({ ok: true }) };
+    installSettingsSync({
+      prefs,
+      sync: {
+        forward: async () => ({ ok: true, value: { ok: true } }),
+        readOnly: () => true,
+        enqueue: c.queue.enqueue,
+        onQueueChange: () => undefined,
+        discardQueued: async () => undefined,
+        onApplied: () => () => undefined,
+        setSettingsOffer: () => undefined,
+        queuedSettings: async () => [],
+      } as never,
+      extensions: {
+        reconcileExtensions: async () => undefined,
+        failedExtensions: () => [],
+        hasPendingExtensionRecords: () => false,
+        offerExtensions: () => ({}),
+        unionExtensions: async () => [],
+      } as never,
+      handlers,
+      afterPromote: () => undefined,
+      syncExtensions: async () => undefined,
+      onNoMaster: () => undefined,
+      log: () => undefined,
+      retryEveryMs: 1000,
+      nowMs: () => c.clock.now,
+      setInterval: (() => ({ unref: () => undefined })) as never,
+    });
+    const view = () => (prefs.getCore('core.extensions') as Record<string, { enabled: boolean }>).a.enabled;
+    await handlers['extension:set-enabled']({ id: 'a', enabled: true });
+    expect(view()).toBe(true);
+    await prefs.refreshUser({ prefKeys: ['core.extensions'], pullStartedAt: 50 });
+    expect(view()).toBe(true);
+    await prefs.refreshUser({ prefKeys: ['core.extensions'], pullStartedAt: 150 });
+    expect(view()).toBe(false);
   });
 });

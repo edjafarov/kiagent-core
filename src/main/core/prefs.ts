@@ -203,9 +203,9 @@ export interface CorePrefs extends Prefs {
   /** Is a change of `key` waiting in the queue? A newer edit then goes
    *  through the queue too, so it replaces the row instead of racing it. */
   hasQueued(key: string): boolean;
-  /** A newer value for `key` went straight to the leader: forget the copy of
-   *  an older acknowledged one. */
-  dropOptimistic(key: string): void;
+  /** The leader took `value` for `key` directly: it shows until a pull that
+   *  started after this moment brings the leader's own. */
+  ackForwarded(key: string, value: unknown): void;
   /** An extension switch changed with no leader: queued under
    *  `core.extensions.<id>` and shown by `getCore('core.extensions')`. */
   queueExtensionEnabled(id: string, enabled: boolean): Promise<number>;
@@ -479,6 +479,7 @@ export function createPrefs(dir: string, user?: UserPrefsStore): CorePrefs {
           // cannot be delivered after this. Each queued key carries its
           // COMPLETE merged value (a nested pref merges right whichever edit
           // arrives last).
+          const byKey = new Map(touched.map((k) => [userPrefKey(k), k]));
           const ackForwarded = (): void => {
             for (const k of touched) {
               optimistic.set(tableKey(k), { value: next[k], ackedAt: nowMs() });
@@ -489,18 +490,17 @@ export function createPrefs(dir: string, user?: UserPrefsStore): CorePrefs {
             ackForwarded();
           } else {
             await forwardOrQueue({
-              keys: touched.map((k) => userPrefKey(k)),
+              keys: [...byKey.keys()],
               isHeld: (k) => overlay.has(k),
               forward: () => forwardUser!(userPart),
               enqueue: (key) => {
-                const k = key.slice('core.'.length) as UserPrefKey;
+                const k = byKey.get(key)!;
                 return queue!.enqueue(userPrefRequest(k, next[k]), { coalesceKey: key });
               },
               apply: {
                 forwarded: ackForwarded,
                 queued: (key, rowId) => {
-                  const k = key.slice('core.'.length) as UserPrefKey;
-                  overlay.set(key, { value: next[k], rowId });
+                  overlay.set(key, { value: next[byKey.get(key)!], rowId });
                   optimistic.delete(key);
                 },
               },
@@ -538,7 +538,7 @@ export function createPrefs(dir: string, user?: UserPrefsStore): CorePrefs {
         await seedLocked();
       }),
     hasQueued: (key) => overlay.has(key),
-    dropOptimistic: (key) => void optimistic.delete(key),
+    ackForwarded: (key, value) => void optimistic.set(key, { value, ackedAt: nowMs() }),
     setOfflineQueue(q) {
       queue = q;
     },
