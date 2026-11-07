@@ -22,6 +22,10 @@ export const SWAP_STEPS = ['committed', 'merged', 'archived', 'replaced', 'outco
 type SwapStep =
   | (typeof SWAP_STEPS)[number]
   | 'incoming-renamed'
+  | 'journaled'
+  | 'abandon-outcome'
+  | 'abandon-journal'
+  | 'abandon-cleaned'
   | 'restore-merged'
   | 'restore-moved';
 
@@ -132,28 +136,51 @@ export function prepareSwap(
   return 'ready';
 }
 
-/** A downloaded snapshot with no journal is debris from a crash between the
- *  two writes in `prepareSwap`; delete it. True when something was removed. */
+/** Without a journal nothing is in progress, so a downloaded or half-merged
+ *  snapshot is debris (a crash between the two writes in `prepareSwap`, or
+ *  during a failed swap's cleanup). True when something was removed. */
 export function dropOrphanIncoming(dbPath: string): boolean {
-  if (fs.existsSync(journalPath(dbPath)) || !fs.existsSync(incomingPath(dbPath))) return false;
-  fs.rmSync(incomingPath(dbPath), { force: true });
-  return true;
+  if (fs.existsSync(journalPath(dbPath))) return false;
+  let removed = false;
+  for (const f of [
+    incomingPath(dbPath),
+    mergedPath(dbPath),
+    `${mergedPath(dbPath)}-wal`,
+    `${mergedPath(dbPath)}-shm`,
+  ]) {
+    if (!fs.existsSync(f)) continue;
+    fs.rmSync(f, { force: true });
+    removed = true;
+  }
+  return removed;
 }
 
-/** Whether a swap is waiting, and what the last one decided (spec D4). */
+/** Whether a swap or a restore is waiting, and what the last swap decided.
+ *  While a swap is pending `markId`/`attempt` come from its journal (null for an
+ *  ordinary swap). A sidecar archive is proof that a swap completed only when
+ *  nothing is pending: while `pending` is set, the archive may belong to an
+ *  earlier attempt. */
 export function swapStatus(dbPath: string): {
-  pending: boolean;
+  pending: 'swap' | 'restore' | null;
   outcome: 'ok' | 'failed' | null;
   markId: string | null;
   attempt: number | null;
 } {
   const r = readSwapRecord(dbPath);
-  return {
-    pending: fs.existsSync(journalPath(dbPath)) || fs.existsSync(restorePath(dbPath)),
-    outcome: r ? (r.outcome === 'swapped' ? 'ok' : 'failed') : null,
-    markId: r?.markId ?? null,
-    attempt: r?.attempt ?? null,
-  };
+  const outcome = r ? (r.outcome === 'swapped' ? 'ok' : 'failed') : null;
+  if (fs.existsSync(restorePath(dbPath))) {
+    return { pending: 'restore', outcome, markId: null, attempt: null };
+  }
+  if (fs.existsSync(journalPath(dbPath))) {
+    let j: Partial<Journal> = {};
+    try {
+      j = JSON.parse(fs.readFileSync(journalPath(dbPath), 'utf8')) as Journal;
+    } catch {
+      /* unreadable journal: still pending */
+    }
+    return { pending: 'swap', outcome, markId: j.markId ?? null, attempt: j.attempt ?? null };
+  }
+  return { pending: null, outcome, markId: r?.markId ?? null, attempt: r?.attempt ?? null };
 }
 
 /** Removes the outcome only when it is the one for this mark and attempt. */
@@ -235,7 +262,8 @@ function mergeLocalTables(file: string, old: string, masterDeviceId: string, kee
       // A keep-archive swap takes the snapshot's join state: the old file's
       // published rows stay in the archive, so a later promote can't publish
       // a key or a delete that exists only there.
-      const dropsRows = (name: string) => keepArchive && name === 'sync_rows';
+      const dropsRows = (name: string) =>
+        keepArchive && (name === 'sync_rows' || name === 'sync_imported');
       for (const t of localTables) db.exec(t.sql);
       for (const t of localTables) {
         if (isVirtual(t.sql) || dropsRows(t.name)) continue;
@@ -491,6 +519,11 @@ export function applyPendingSwap(
       const old = new Database(dbPath);
       old.pragma('wal_checkpoint(TRUNCATE)');
       old.close();
+      // Never merge into a file that doesn't exist: opening it would create an
+      // empty database whose missing metadata reads as a finished merge.
+      if (!fs.existsSync(incomingPath(dbPath)) && !fs.existsSync(merged)) {
+        throw new Error('swap: no snapshot to merge');
+      }
       // A move, so no second copy of the data. The merge is one transaction, so
       // a crash during it leaves this file as it arrived.
       if (fs.existsSync(incomingPath(dbPath))) {
@@ -507,16 +540,19 @@ export function applyPendingSwap(
       if (injected) throw (injected as { e: unknown }).e;
       // Nothing has touched the old database, so it stays this device's data.
       // Retrying would fail the same way at every boot.
-      fs.rmSync(incomingPath(dbPath), { force: true });
-      fs.rmSync(merged, { force: true });
-      fs.rmSync(`${merged}-wal`, { force: true });
-      fs.rmSync(`${merged}-shm`, { force: true });
+      // The outcome and the journal go first: a journal that outlives the
+      // files would make the next boot merge into a file that isn't there.
       writeOutcome(dbPath, 'abandoned', j);
+      crashAt('abandon-outcome');
       fs.rmSync(journalPath(dbPath), { force: true });
+      crashAt('abandon-journal');
+      dropOrphanIncoming(dbPath);
+      crashAt('abandon-cleaned');
       return 'abandoned';
     }
     crashAt('committed');
     writeJournal(dbPath, { ...j, merged: true });
+    crashAt('journaled');
     ensureSidecar(j);
     crashAt('merged');
   }

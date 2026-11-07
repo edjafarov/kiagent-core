@@ -124,7 +124,7 @@ export interface SyncService {
   ): Promise<'ready' | 'no-disk' | 'invalid'>;
   /** Read-only: a swap waiting for the next boot, and the last one's result. */
   swapStatus(): Promise<{
-    pending: boolean;
+    pending: 'swap' | 'restore' | null;
     outcome: 'ok' | 'failed' | null;
     markId: string | null;
     attempt: number | null;

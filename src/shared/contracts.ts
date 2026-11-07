@@ -2051,7 +2051,7 @@ export interface CapSurfaces {
         opts?: { keepArchive: true; markId: string; attempt: number },
       ): Promise<'ready' | 'no-disk' | 'invalid'>;
       swapStatus(): Promise<{
-        pending: boolean;
+        pending: 'swap' | 'restore' | null;
         outcome: 'ok' | 'failed' | null;
         markId: string | null;
         attempt: number | null;

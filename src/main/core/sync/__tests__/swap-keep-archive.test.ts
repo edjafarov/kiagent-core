@@ -71,6 +71,7 @@ function makeFollowerReceiver(file: string): void {
     INSERT INTO sync_outbound(kind, payload, created_at) VALUES('k', x'00', 'x');
     INSERT INTO sync_retained(tbl, pk) VALUES('t', '["pk"]');
     INSERT INTO vault(account_id, blob) VALUES('mine', x'6d696e65');
+    INSERT INTO sync_imported(tbl, pk) VALUES('documents', 'X2');
   `);
   d.close();
 }
@@ -144,7 +145,7 @@ describe('keep-archive swap', () => {
       expect(archives()).toHaveLength(1);
       expect(sidecar(archives()[0]).markId).toBe('mark-1');
       expect(swapStatus(receiver)).toEqual({
-        pending: false,
+        pending: null,
         outcome: 'ok',
         markId: 'mark-1',
         attempt: 2,
@@ -186,6 +187,7 @@ describe('keep-archive swap', () => {
     await prepare();
     applyPendingSwap(receiver);
     const d = open();
+    expect(d.prepare(`SELECT * FROM sync_imported`).all()).toEqual([]);
     promote(d, 5);
     expect(d.prepare(`SELECT tbl, pk FROM sync_rows WHERE pk = 'X2'`).all()).toEqual([]);
     d.close();
@@ -239,7 +241,7 @@ describe('swap outcome', () => {
       attempt: 2,
     });
     expect(swapStatus(receiver)).toEqual({
-      pending: false,
+      pending: null,
       outcome: 'failed',
       markId: 'mark-1',
       attempt: 2,
@@ -251,7 +253,7 @@ describe('swap outcome', () => {
   it('readSwapOutcome reads the legacy bare strings', () => {
     fs.writeFileSync(`${receiver}.swap-outcome`, 'swapped');
     expect(readSwapOutcome(receiver)).toBe('swapped');
-    expect(swapStatus(receiver)).toEqual({ pending: false, outcome: 'ok', markId: null, attempt: null });
+    expect(swapStatus(receiver)).toEqual({ pending: null, outcome: 'ok', markId: null, attempt: null });
     fs.writeFileSync(`${receiver}.swap-outcome`, 'abandoned');
     expect(readSwapOutcome(receiver)).toBe('abandoned');
     fs.writeFileSync(`${receiver}.swap-outcome`, 'junk');
@@ -259,9 +261,9 @@ describe('swap outcome', () => {
   });
 
   it('swapStatus is pending while a journal waits and null-outcome before anything ran', async () => {
-    expect(swapStatus(receiver)).toEqual({ pending: false, outcome: null, markId: null, attempt: null });
+    expect(swapStatus(receiver)).toEqual({ pending: null, outcome: null, markId: null, attempt: null });
     await prepare();
-    expect(swapStatus(receiver)).toEqual({ pending: true, outcome: null, markId: null, attempt: null });
+    expect(swapStatus(receiver)).toEqual({ pending: 'swap', outcome: null, markId: 'mark-1', attempt: 2 });
   });
 
   it('clearSwapStatus clears only a matching markId and attempt', async () => {
@@ -303,5 +305,70 @@ describe('passed-over archives', () => {
     applyPendingSwap(receiver);
     expect(prepareRestore(receiver)).toBe('no-archive');
     expect(fs.existsSync(`${receiver}.restore.json`)).toBe(false);
+  });
+});
+
+describe('swapStatus while pending', () => {
+  it('an ordinary pending swap reports pending swap with null ids', async () => {
+    await prepare(null);
+    expect(swapStatus(receiver)).toEqual({ pending: 'swap', outcome: null, markId: null, attempt: null });
+  });
+  it('a pending restore reports pending restore', async () => {
+    makeNormalReceiver(receiver);
+    await prepare(null);
+    applyPendingSwap(receiver);
+    expect(prepareRestore(receiver)).toBe('ready');
+    expect(swapStatus(receiver).pending).toBe('restore');
+  });
+});
+
+describe('a crash between the journal write and the sidecar write', () => {
+  it('resumes and the sidecar is written before the archive moves', async () => {
+    await prepare();
+    expect(() =>
+      applyPendingSwap(receiver, (s) => {
+        if (s === 'journaled') throw new Error('crash');
+      }),
+    ).toThrow('crash');
+    expect(fs.readdirSync(path.dirname(receiver)).filter((f) => f.endsWith('.passed-over.json'))).toEqual([]);
+    expect(applyPendingSwap(receiver)).toBe('swapped');
+    expect(archives()).toHaveLength(1);
+    expect(sidecar(archives()[0]).markId).toBe('mark-1');
+  });
+});
+
+describe('failed-swap cleanup crash safety', () => {
+  const CLEANUP = ['abandon-outcome', 'abandon-journal', 'abandon-cleaned'] as const;
+  for (const kind of ['ordinary follower', 'keep-archive'] as const) {
+    it.each(CLEANUP)(`${kind}: a crash after %s leaves the original database and an abandoned outcome`, async (step) => {
+      await prepare(kind === 'keep-archive' ? KEEP : null);
+      fs.writeFileSync(`${receiver}.swap-incoming`, 'not a database');
+      expect(() =>
+        applyPendingSwap(receiver, (s) => {
+          if (s === step) throw new Error('crash');
+        }),
+      ).toThrow('crash');
+      const first = applyPendingSwap(receiver);
+      expect(['abandoned', 'none']).toContain(first);
+      expect(applyPendingSwap(receiver)).toBe('none');
+      const d = open();
+      expect(d.prepare(`SELECT account_id FROM vault`).all()).toEqual([{ account_id: 'mine' }]);
+      expect(d.prepare(`SELECT count(*) n FROM sync_outbound`).get()).toEqual({ n: 1 });
+      d.close();
+      expect(readSwapOutcome(receiver)).toBe('abandoned');
+      expect(archives()).toEqual([]);
+      expect(fs.readdirSync(path.dirname(receiver)).filter((f) => f.includes('.swap-') && !f.endsWith('.swap-outcome'))).toEqual([]);
+    });
+  }
+
+  it('a merged file that the journal does not call merged is never installed when nothing can be merged', async () => {
+    await prepare();
+    // Simulate the old hole: journal says not merged, and neither file exists.
+    fs.rmSync(`${receiver}.swap-incoming`, { force: true });
+    expect(applyPendingSwap(receiver)).toBe('abandoned');
+    const d = open();
+    expect(d.prepare(`SELECT account_id FROM vault`).all()).toEqual([{ account_id: 'mine' }]);
+    d.close();
+    expect(fs.existsSync(`${receiver}.swap-merged`)).toBe(false);
   });
 });
