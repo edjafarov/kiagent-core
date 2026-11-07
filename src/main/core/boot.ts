@@ -356,7 +356,11 @@ export async function bootCore(deps: BootDeps): Promise<CorePlatform> {
   const dbPath = path.join(deps.dataDir, 'kiagent.db');
   // A snapshot from the master replaces the file before anything opens it.
   if (applyPendingSwap(dbPath) === 'abandoned') {
-    sink.log('sync', 'error', 'could not apply the snapshot; kept this device as it was');
+    sink.log(
+      'sync',
+      'error',
+      'could not apply the snapshot; kept this device as it was',
+    );
   }
   const db = await openDbInWorker(dbPath, deps.dbWorkerFile);
   // Read once, before anything starts: only the boot swap changes it. A
@@ -433,10 +437,15 @@ export async function bootCore(deps: BootDeps): Promise<CorePlatform> {
 
   const promotedHooks: Array<() => void | Promise<void>> = [];
   // The service is created before the gate; these are set once the gate exists.
-  let gate: ReturnType<typeof gateEngine>;
+  // Nothing runs before the gate exists, so holding or resuming is a no-op.
+  let gate: ReturnType<typeof gateEngine> | undefined;
   const sync = createSyncService({
-    holdWork: () => gate.closeWriter(),
-    resumeWork: () => resumeHeld(platform, gate),
+    holdWork: async () => {
+      await gate?.closeWriter();
+    },
+    resumeWork: async () => {
+      if (gate) await resumeHeld(platform, gate);
+    },
     db,
     store,
     dbPath,
@@ -456,9 +465,15 @@ export async function bootCore(deps: BootDeps): Promise<CorePlatform> {
     // Fence cleared or promoted: the device can write user_prefs now, so a
     // seed that had to wait runs.
     onOpen: async () => {
-      await prefs.seedUser().catch((err) =>
-        sink.log('sync', 'warn', `could not seed user preferences: ${String(err)}`),
-      );
+      await prefs
+        .seedUser()
+        .catch((err) =>
+          sink.log(
+            'sync',
+            'warn',
+            `could not seed user preferences: ${String(err)}`,
+          ),
+        );
       for (const hook of promotedHooks) {
         await Promise.resolve(hook()).catch((err) =>
           sink.log('sync', 'warn', `a promotion hook failed: ${String(err)}`),
@@ -472,7 +487,11 @@ export async function bootCore(deps: BootDeps): Promise<CorePlatform> {
   // A connector installed later starts the accounts that were waiting for it.
   sources.onRegister((sourceId) => {
     void startWhenInstalled(platform, sourceId).catch((err) =>
-      sink.log('sync', 'error', `could not start accounts for ${sourceId}: ${String(err)}`),
+      sink.log(
+        'sync',
+        'error',
+        `could not start accounts for ${sourceId}: ${String(err)}`,
+      ),
     );
   });
   // Asked on every call, so a promotion opens this same engine.
@@ -482,8 +501,11 @@ export async function bootCore(deps: BootDeps): Promise<CorePlatform> {
   await prefs.attachUser(createDbUserPrefsStore(db, () => !sync.readOnly()));
   // What was queued before the last quit shows again, before anything serves an edit.
   await restoreQueuedSettings(prefs, sync, (c, l, m) => sink.log(c, l, m));
-  gate = gateEngine(engine, () => sync.readOnly(), sync, (l, m) =>
-    sink.log('sync', l, m),
+  gate = gateEngine(
+    engine,
+    () => sync.readOnly(),
+    sync,
+    (l, m) => sink.log('sync', l, m),
   );
   // A follower's copied rows change only by what the master sends.
   let archiveSweep = false;
@@ -525,7 +547,6 @@ export async function bootCore(deps: BootDeps): Promise<CorePlatform> {
     },
     promote: () =>
       promoteCore(platform, {
-        deviceId: () => sync.deviceId(),
         archiveSweep: startArchiveSweep,
         ledgerRekey: () => void ledgerRekey.then((r) => r.kick()),
         attachHeld: gate.attachHeld,
@@ -689,19 +710,20 @@ export async function resumeAccounts(
 export async function promoteCore(
   platform: CorePlatform,
   hooks: {
-    deviceId(): string | null;
     archiveSweep(): void;
     ledgerRekey(): void;
     attachHeld(): Promise<void>;
   },
 ): Promise<void> {
-  const me = hooks.deviceId();
-  // The first and last steps are `resumeHeld`'s two halves, split by the
-  // leader-only maintenance.
-  await resumeMine(platform, me);
-  hooks.archiveSweep();
-  hooks.ledgerRekey();
-  await hooks.attachHeld();
+  // One re-drive body: `resumeHeld` resumes the accounts, then attaches through
+  // this gate, which runs the leader-only maintenance before the held workers.
+  await resumeHeld(platform, {
+    attachHeld: async () => {
+      hooks.archiveSweep();
+      hooks.ledgerRekey();
+      await hooks.attachHeld();
+    },
+  });
 }
 
 /** The one re-drive body: accounts that are mine to run, then the held
@@ -709,18 +731,11 @@ export async function promoteCore(
 export async function resumeHeld(
   platform: CorePlatform,
   gate: { attachHeld(): Promise<void> },
-  deviceId: string | null = platform.sync.deviceId(),
 ): Promise<void> {
-  await resumeMine(platform, deviceId);
+  const me = platform.sync.deviceId();
+  await resumeAccounts(platform, { skip: (a) => notMineToRun(a, me) });
   await gate.attachHeld();
 }
-
-const resumeMine = async (
-  platform: CorePlatform,
-  deviceId: string | null,
-): Promise<void> => {
-  await resumeAccounts(platform, { skip: (a) => notMineToRun(a, deviceId) });
-};
 
 /** Its connector is here now: back to connecting, then the usual start.
  *  Returns the account to run, or null when it moved on in the meantime. */

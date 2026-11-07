@@ -162,7 +162,23 @@ describe('closeWriter', () => {
     (real.attach as jest.Mock).mockClear();
     await g.attachHeld();
     expect(real.attach).toHaveBeenCalledTimes(2);
+    expect(real.run).toHaveBeenCalledTimes(1);
     expect(g.holding()).toBe(false);
+  });
+
+  it('a run that ended on its own is not stopped by a later closeWriter', async () => {
+    const { e, inners, stops } = mk();
+    const real = { run: e.run, attach: e.attach };
+    const g = gateEngine(e as never, () => false);
+    eng(e).run({ id: 'r1' });
+    eng(e).run({ id: 'r1' }); // the cadence re-ran it; the first one is over
+    const closing = g.closeWriter();
+    expect(inners).toHaveLength(2);
+    expect(inners[0].stop).not.toHaveBeenCalled();
+    expect(inners[1].stop).toHaveBeenCalledTimes(1);
+    stops.forEach((r) => r());
+    await closing;
+    expect(real.run).toHaveBeenCalledTimes(2);
   });
 
   it('a caller that stopped its handle while held is not reattached', async () => {

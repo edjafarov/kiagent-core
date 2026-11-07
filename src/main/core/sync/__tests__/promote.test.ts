@@ -314,10 +314,10 @@ describe('what promotion starts', () => {
     const order: string[] = [];
     const p = {
       ...platform([account({})], []),
+      sync: { deviceId: () => 'me-device' },
       engine: { run: () => (order.push('resume'), {}), isRunning: () => false },
     } as unknown as CorePlatform;
     await promoteCore(p, {
-      deviceId: () => 'me-device',
       archiveSweep: () => void order.push('sweep'),
       ledgerRekey: () => void order.push('rekey'),
       attachHeld: async () => void order.push('attach'),

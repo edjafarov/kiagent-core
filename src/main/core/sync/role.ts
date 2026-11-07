@@ -218,6 +218,9 @@ export function gateEngine(
   // Attach proxies waiting for `attachHeld`, and the proxies with work running.
   const held: GatedHandle[] = [];
   const live = new Set<GatedHandle>();
+  // A `Handle` has no completion signal, so a run is replaced by the next run
+  // for the same account (the engine stops its previous handle itself).
+  const runs = new Map<string, GatedHandle>();
   let holding = false;
   const start = (p: GatedHandle, fn: () => unknown): GatedHandle => {
     p.inner = fn() as Handle;
@@ -229,6 +232,9 @@ export function gateEngine(
     const p = new GatedHandle('run', a[0], (h) => live.delete(h));
     if (holding || owned.ownedByOther?.(id)) return p;
     if (readOnly() && !owned.ownsAccount(id)) return p;
+    const prev = runs.get(id);
+    if (prev) live.delete(prev);
+    runs.set(id, p);
     return start(p, () => real.run.apply(engine, a));
   };
   e.attach = (...a) => {
@@ -261,6 +267,8 @@ export function gateEngine(
   }
   return {
     holding: () => holding,
+    /** Safe to call twice: a second call re-stops the same inners, and stop is
+     *  idempotent. */
     async closeWriter() {
       holding = true;
       const proxies = [...live];
@@ -278,6 +286,8 @@ export function gateEngine(
       );
       for (const p of proxies) {
         live.delete(p);
+        if (p.kind === 'run')
+          for (const [k, v] of runs) if (v === p) runs.delete(k);
         p.inner = null;
         if (p.kind === 'attach' && !p.stopped && !held.includes(p)) {
           held.push(p);
@@ -286,9 +296,9 @@ export function gateEngine(
       if (errors.length) {
         log(
           'warn',
-          `closeWriter: ${errors.length} handle(s) failed to stop: ${String(
-            new AggregateError(errors, 'stop failed'),
-          )} ${errors.map(String).join('; ')}`,
+          `closeWriter: ${errors.length} handle(s) failed to stop: ${errors
+            .map(String)
+            .join('; ')}`,
         );
       }
     },
