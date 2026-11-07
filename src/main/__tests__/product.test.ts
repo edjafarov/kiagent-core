@@ -139,4 +139,24 @@ describe('loadProductConfig', () => {
     );
     expect(loadProductConfig([tmp]).dormantExtensions).toBeUndefined();
   });
+
+  it('loadProductConfig accepts testNetExtensionId and keeps every existing field', () => {
+    // Fixture = a copy of the app's product/product.json plus the new field.
+    const fixture = {
+      productName: 'KIAgent',
+      macUpdatesEnabled: true,
+      dormantExtensions: [
+        'kia.agent-sessions',
+        'kia.google-docs',
+        'kia.instagram',
+        'kia.ms365',
+        'kia.onedrive',
+        'kia.hubspot',
+        'kia.notion',
+      ],
+      testNetExtensionId: 'kiagent.remote-mcp',
+    };
+    fs.writeFileSync(path.join(tmp, 'product.json'), JSON.stringify(fixture));
+    expect(loadProductConfig([tmp])).toEqual(fixture);
+  });
 });

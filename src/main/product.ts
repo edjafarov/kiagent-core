@@ -18,6 +18,7 @@ const schema = z
     bundledExtensionsDir: z.string().min(1).optional(),
     macUpdatesEnabled: z.boolean().optional(),
     dormantExtensions: z.array(z.string().min(1)).optional(),
+    testNetExtensionId: z.string().min(1).optional(),
   })
   .strict();
 
@@ -40,6 +41,11 @@ export interface ProductConfig {
    * outside pulls). Absent/empty: none; core alone changes nothing.
    */
   dormantExtensions?: string[];
+  /**
+   * The one extension allowed the compiled test-build loopback allowance
+   * (see `scopedTestNetFetch`). Absent: no extension gets it.
+   */
+  testNetExtensionId?: string;
 }
 
 export const DEFAULT_PRODUCT: ProductConfig = {

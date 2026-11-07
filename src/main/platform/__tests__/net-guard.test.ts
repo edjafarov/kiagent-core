@@ -552,12 +552,18 @@ describe('test loopback allowance (compiled gate)', () => {
   describe('parser-bypass repros (allowance port is the target port)', () => {
     it.each([
       ['leading space', (p: number) => ` http://127.0.0.1:${p}/`],
-      ['leading space + decimal host', (p: number) => ` http://2130706433:${p}/`],
+      [
+        'leading space + decimal host',
+        (p: number) => ` http://2130706433:${p}/`,
+      ],
       ['leading space + hex host', (p: number) => ` http://0x7f000001:${p}/`],
       ['leading space + 127.1', (p: number) => ` http://127.1:${p}/`],
       ['tab inside the scheme', (p: number) => `ht\ttp://127.0.0.1:${p}/`],
       ['uppercase scheme', (p: number) => `HTTP://127.0.0.1:${p}/`],
-      ['port prefix of a longer port', (p: number) => `http://127.0.0.1:${p}0/`],
+      [
+        'port prefix of a longer port',
+        (p: number) => `http://127.0.0.1:${p}0/`,
+      ],
       ['trailing-dot host', (p: number) => `http://127.0.0.1.:${p}/`],
     ])('first hop %s is refused', async (_n, mk) => {
       const { port } = await listen();
@@ -607,33 +613,48 @@ describe('test loopback allowance (compiled gate)', () => {
       ['LF after the slash', '/\n/127.1:{p}/x'],
       ['tab inside the literal host', 'http://127.0.0.\t1:{p}/x'],
       ['space in an otherwise exact literal', 'http://127.0.0.1:{p}/a b'],
-    ])('a redirect Location with an embedded control (%s) is refused', async (_n, tpl) => {
-      const target = await listen();
-      // Real Response headers reject raw CR/LF, so drive the guard through a
-      // stubbed fetch that returns the Location verbatim.
-      const fetchImpl = jest.fn(async (u: string, init?: RequestInit) => {
-        if (u.endsWith('/start'))
-          return res(302, { location: tpl.replace('{p}', String(target.port)) });
-        return fetch(u, init);
-      });
-      const f = createNetFetch({
-        lookup: noLookup,
-        fetchImpl: fetchImpl as unknown as typeof fetch,
-        allowLoopbackPort: target.port,
-      });
-      await expect(f(`http://127.0.0.1:${target.port}/start`)).rejects.toThrow();
-      expect(seen).toEqual([]);
-    });
+    ])(
+      'a redirect Location with an embedded control (%s) is refused',
+      async (_n, tpl) => {
+        const target = await listen();
+        // Real Response headers reject raw CR/LF, so drive the guard through a
+        // stubbed fetch that returns the Location verbatim.
+        const fetchImpl = jest.fn(async (u: string, init?: RequestInit) => {
+          if (u.endsWith('/start'))
+            return res(302, {
+              location: tpl.replace('{p}', String(target.port)),
+            });
+          return fetch(u, init);
+        });
+        const f = createNetFetch({
+          lookup: noLookup,
+          fetchImpl: fetchImpl as unknown as typeof fetch,
+          allowLoopbackPort: target.port,
+        });
+        await expect(
+          f(`http://127.0.0.1:${target.port}/start`),
+        ).rejects.toThrow();
+        expect(seen).toEqual([]);
+      },
+    );
 
     it('a tab in a first-hop input is refused', async () => {
       const { port } = await listen();
       const f = createNetFetch({ lookup: noLookup, allowLoopbackPort: port });
-      await expect(f(`http://127.0.0.1:${port}/a\tb`)).rejects.toThrow(NetDestinationError);
-      await expect(f(`ht\ttp://127.0.0.1:${port}/`)).rejects.toThrow(NetDestinationError);
+      await expect(f(`http://127.0.0.1:${port}/a\tb`)).rejects.toThrow(
+        NetDestinationError,
+      );
+      await expect(f(`ht\ttp://127.0.0.1:${port}/`)).rejects.toThrow(
+        NetDestinationError,
+      );
       expect(seen).toEqual([]);
     });
 
-    it.each(['\\\\public.example/hop', '//public.example/hop', '/\\public.example/hop'])(
+    it.each([
+      '\\\\public.example/hop',
+      '//public.example/hop',
+      '/\\public.example/hop',
+    ])(
       'loopback -> %s -> loopback is refused (the backslash hop revokes)',
       async (hopLocation) => {
         const a = await listen((req, res) => {
@@ -673,7 +694,10 @@ describe('test loopback allowance (compiled gate)', () => {
             res.end();
           } else res.end('landed');
         });
-        const f = createNetFetch({ lookup: noLookup, allowLoopbackPort: a.port });
+        const f = createNetFetch({
+          lookup: noLookup,
+          allowLoopbackPort: a.port,
+        });
         const r = await f(`http://127.0.0.1:${a.port}/start`);
         expect(text(r.body)).toBe('landed');
       },
@@ -753,21 +777,29 @@ describe('test loopback allowance (compiled gate)', () => {
 
   describe('scopedTestNetFetch', () => {
     const env = { KIA_TEST_SYNC: '1', KIA_TEST_NET_ALLOW: '127.0.0.1:4242' };
-    it('applies to kiagent.remote-mcp only', () => {
-      expect(scopedTestNetFetch('kiagent.remote-mcp', env, true)).toBeDefined();
+    it('configured → the named extension gets the allowance under the gate; another id does not', () => {
+      const id = 'kiagent.remote-mcp';
+      expect(scopedTestNetFetch(id, id, env, true)).toBeDefined();
       expect(
-        scopedTestNetFetch('kiagent.documents', env, true),
+        scopedTestNetFetch('kiagent.documents', id, env, true),
+      ).toBeUndefined();
+      expect(scopedTestNetFetch(id, id, env, false)).toBeUndefined();
+    });
+    it('unconfigured → undefined for every id', () => {
+      expect(
+        scopedTestNetFetch('kiagent.remote-mcp', undefined, env, true),
       ).toBeUndefined();
       expect(
-        scopedTestNetFetch('kiagent.remote-mcp', env, false),
+        scopedTestNetFetch('kiagent.documents', undefined, env, true),
       ).toBeUndefined();
     });
-    it('an extension other than remote-mcp is still refused', async () => {
+    it('an extension other than the configured one is still refused', async () => {
       const { port } = await listen();
       const e = { KIA_TEST_SYNC: '1', KIA_TEST_NET_ALLOW: `127.0.0.1:${port}` };
-      const ok = scopedTestNetFetch('kiagent.remote-mcp', e, true)!;
+      const id = 'kiagent.remote-mcp';
+      const ok = scopedTestNetFetch(id, id, e, true)!;
       expect((await ok(`http://127.0.0.1:${port}/`)).status).toBe(200);
-      expect(scopedTestNetFetch('kiagent.people', e, true)).toBeUndefined();
+      expect(scopedTestNetFetch('kiagent.people', id, e, true)).toBeUndefined();
     });
   });
 });

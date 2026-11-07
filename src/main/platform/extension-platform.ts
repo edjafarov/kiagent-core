@@ -365,6 +365,8 @@ export interface ExtensionPlatformDeps {
    *  `KIA_DORMANT_HOSTS=0` disables dormancy regardless. Never applies to
    *  bundled or `unsafe.mainProcess` entries. */
   dormantExtensions?: readonly string[];
+  /** product.json `testNetExtensionId`: the one extension that may get the test loopback allowance. */
+  testNetExtensionId?: string;
   /** Test seam for DORMANT_AFTER_MS. */
   dormantAfterMs?: number;
   download?: InstallerDeps['download'];
@@ -1169,10 +1171,11 @@ export function createExtensionPlatform(
               createNetworkService({
                 owner: serviceOwner,
                 signal: context?.signal,
-                // Compiled test builds only, remote-mcp only, one literal
+                // Compiled test builds only, the product-named extension only, one literal
                 // 127.0.0.1:<port>; undefined (default guard) otherwise.
                 fetch: scopedTestNetFetch(
                   e.manifest.id,
+                  deps.testNetExtensionId,
                   process.env,
                   KIA_TEST_HOOKS,
                 ),
