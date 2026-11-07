@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.120.1](https://github.com/edjafarov/kiagent-core/compare/v0.120.0...v0.120.1) (2026-11-07)
+
+### Bug Fixes
+
+* **core:** a factory reset returns sync_state to a plain seed — joining, joined and head_pending are cleared too ([b64dd65](https://github.com/edjafarov/kiagent-core/commit/b64dd6525e5172d40cc34b0952a58f2ed71fea74))
+
 ## [0.120.0](https://github.com/edjafarov/kiagent-core/compare/v0.119.1...v0.120.0) (2026-11-06)
 
 ### Features
