@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.122.0](https://github.com/edjafarov/kiagent-core/compare/v0.121.1...v0.122.0) (2026-11-07)
+
+### Features
+
+* **sync:** keep-archive swap with an attempt-tagged outcome ([24d7076](https://github.com/edjafarov/kiagent-core/commit/24d70763574358514671ee4ea4d2a0238c3b8d2c))
+* **sync:** lead() advances a tracking leader to a newer epoch ([f66d0e5](https://github.com/edjafarov/kiagent-core/commit/f66d0e5980ca53750ce6b95f6e94f1d22842536f))
+
+### Bug Fixes
+
+* **sync:** a merged swap file counts only with the merge's own marker ([9daaaa0](https://github.com/edjafarov/kiagent-core/commit/9daaaa01018fe6ccad87d03b7b1ba07a810e76f4))
+* **sync:** safe failed-swap cleanup, reset sync_imported on keep-archive, swapStatus reports the pending kind ([d5ce3ae](https://github.com/edjafarov/kiagent-core/commit/d5ce3ae4257419460d3141373d62c95177260e3f))
+
 ## [0.121.1](https://github.com/edjafarov/kiagent-core/compare/v0.121.0...v0.121.1) (2026-11-07)
 
 ### Bug Fixes
