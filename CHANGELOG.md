@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.120.2](https://github.com/edjafarov/kiagent-core/compare/v0.120.1...v0.120.2) (2026-11-07)
+
+### Bug Fixes
+
+* **core:** a seed overtaken by a non-master lease while lead() runs is fenced the moment tracking turns on ([24a5bcc](https://github.com/edjafarov/kiagent-core/commit/24a5bcc1d93f8e1e4289441659cf2263f869dcea))
+* **core:** lead() refuses a seed whose cached lease already says not master ([d3dd159](https://github.com/edjafarov/kiagent-core/commit/d3dd1594ff4abb5dfe655df7e97db5dd2e420953))
+
 ## [0.120.1](https://github.com/edjafarov/kiagent-core/compare/v0.120.0...v0.120.1) (2026-11-07)
 
 ### Bug Fixes
