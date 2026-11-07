@@ -10,8 +10,8 @@ import { createExtensionSync, EXTENSIONS_KEY, type ExtensionsSet } from '../../.
 import { createDbUserPrefsStore, createPrefs, type CorePrefs } from '../../prefs';
 import { migrate } from '../../store/schema';
 import { openStore } from '../../store/store';
-import { NO_MASTER_MESSAGE, SyncNoMaster, wrapForwardedChannels } from '../forward-core';
-import { installOfflineSettings, restoreOfflineSettings } from '../offline-settings';
+import { NO_MASTER_MESSAGE, SyncNoMaster } from '../forward-core';
+import { installSettingsSync, restoreQueuedSettings } from '../settings-sync';
 import { leadProc } from './lead-proc';
 import { readGateSync } from '../role';
 import { createSyncService, type SyncService } from '../service';
@@ -83,8 +83,25 @@ async function wire(follower = true, existingDir?: string): Promise<Wired> {
   };
   const refusals: string[] = [];
   const reconcile = jest.fn(async () => undefined);
-  const offline = installOfflineSettings(prefs, svc, { reconcile });
-  const local = wrapForwardedChannels(table, svc, (m) => refusals.push(m), offline);
+  const settings = installSettingsSync({
+    prefs,
+    sync: svc,
+    extensions: {
+      reconcileExtensions: reconcile,
+      failedExtensions: () => [],
+      hasPendingExtensionRecords: () => false,
+      offerExtensions: () => ({}),
+      unionExtensions: async () => [],
+    } as never,
+    handlers: table,
+    afterPromote: () => undefined,
+    syncExtensions: async () => undefined,
+    onNoMaster: (m) => refusals.push(m),
+    log: () => undefined,
+    retryEveryMs: 3_600_000,
+    setInterval: ((..._a: unknown[]) => ({ unref() {} })) as never,
+  });
+  const local = settings.forwardedLocal;
   const w = { dir, db, svc, prefs, table, local, refusals, enabled, calls, reconcile };
   wired.push(w);
   return w;
@@ -288,7 +305,7 @@ it('restoreQueued after a restart shows the queued value again', async () => {
   wired.splice(wired.indexOf(w), 1);
   const again = await wire(true, w.dir);
   expect(again.prefs.get().theme).toBe('system');
-  await restoreOfflineSettings(again.prefs, again.svc);
+  await restoreQueuedSettings(again.prefs, again.svc);
   expect(again.prefs.get().theme).toBe('dark');
   expect(again.prefs.getCore(EXTENSIONS_KEY)).toEqual({ 'conn.a': { enabled: true } });
 });

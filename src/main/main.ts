@@ -80,12 +80,11 @@ import { wireSyncAppliedPush } from './sync-applied-push';
 import { guardDraftTools } from './outbound/follower-tools';
 import {
   SYNC_REFUSED_PUSH,
-  wrapForwardedChannels,
 } from './core/sync/forward-core';
 import {
-  installOfflineSettings,
-  restoreOfflineSettings,
-} from './core/sync/offline-settings';
+  installSettingsSync,
+  restoreQueuedSettings,
+} from './core/sync/settings-sync';
 import { runCommitBatch, type CommitInput } from './core/sync/owned';
 import { followerLookup } from './core/sync/role';
 import { wireAttentionPush } from './attention/push';
@@ -911,112 +910,35 @@ function registerIpc(
   // map is wrapped in place, not `dispatch`, so the app overlay's patch of
   // `dispatch` still finds its text.
   // A setting changed with no leader applies here and waits in the queue
-  // (`installOfflineSettings`); the data verbs below still refuse.
-  const offlineHandlers = installOfflineSettings(p.prefs, p.sync, {
-    reconcile: () =>
-      extensions
-        .reconcileExtensions()
-        .catch((err) =>
-          p.logSink.log(
-            'extensions',
-            'warn',
-            `extension reconcile failed: ${String(err)}`,
-          ),
-        ),
-  });
-  const forwardedLocal = wrapForwardedChannels(
-    handlers as unknown as Record<string, (req: unknown) => unknown>,
-    p.sync,
-    (message) =>
+  // (`installSettingsSync`); the data verbs below still refuse.
+  const settings = installSettingsSync({
+    prefs: p.prefs,
+    sync: p.sync,
+    extensions,
+    handlers: handlers as unknown as Record<string, (req: unknown) => unknown>,
+    afterPromote: (hook) => p.afterPromote(hook),
+    syncExtensions: () => syncExtensions(extensions, p),
+    onNoMaster: (message) =>
       broadcast('ext:push', { ...SYNC_REFUSED_PUSH, payload: { message } }),
-    offlineHandlers,
-  );
+    log: (category, level, msg) => p.logSink.log(category, level, msg),
+    retryEveryMs: EXTENSION_RETRY_MS,
+    setInterval,
+  });
   // What was queued before the last quit shows again.
-  void restoreOfflineSettings(p.prefs, p.sync).catch((err) =>
+  void restoreQueuedSettings(p.prefs, p.sync).catch((err) =>
     p.logSink.log(
       'sync',
       'warn',
       `queued settings were not restored: ${String(err)}`,
     ),
   );
-  // A device that just became able to write seeds the extension set once.
-  p.afterPromote(() => syncExtensions(extensions, p));
-  // A connector that could not install here is tried again every hour.
-  setInterval(() => {
-    if (
-      extensions.failedExtensions().length > 0 ||
-      extensions.hasPendingExtensionRecords()
-    )
-      void syncExtensions(extensions, p);
-  }, EXTENSION_RETRY_MS).unref();
-  // What the leader changed in user_prefs arrives by the feed.
-  p.sync.onApplied((tables, meta) => {
-    if (tables.includes('user_prefs')) {
-      // The extension set is one of the rows that may have changed.
-      void p.prefs
-        .refreshUser({
-          prefKeys: meta.prefKeys,
-          pullStartedAt: meta.pullStartedAt,
-        })
-        .then(() => extensions.reconcileExtensions())
-        .catch((err) =>
-          p.logSink.log(
-            'extensions',
-            'warn',
-            `extension reconcile failed: ${String(err)}`,
-          ),
-        );
-    }
-  });
-  // A join's offer carries this device's settings and connectors; as the seed
-  // it adds what it lacks, through the same paths a user change takes, so it
-  // reaches every follower by the feed (spec 7.9 rule 6).
-  p.sync.setSettingsOffer({
-    export: async () => ({
-      prefs: await p.prefs.offerable(),
-      extensions: extensions.offerExtensions(),
-    }),
-    import: async (s) => {
-      const prefs = await p.prefs.addMissing(s.prefs);
-      const added = await extensions.unionExtensions(s.extensions);
-      // The seed installs a joiner's connector the way any device does.
-      if (added.length > 0) {
-        void extensions
-          .reconcileExtensions()
-          .catch((err) =>
-            p.logSink.log(
-              'extensions',
-              'warn',
-              `extension reconcile failed: ${String(err)}`,
-            ),
-          );
-      }
-      return { prefs, extensions: added };
-    },
-  });
   p.sync.setRunners({
     ui: async (extensionId, name, payload) => {
       const r = await extensions.callUi(extensionId, name, payload);
       if (r.ok) return r.value;
       throw new Error(r.message);
     },
-    core: async (name, req) => {
-      // Not an IPC channel: only a follower's `host.prefs.set` sends it, and
-      // the leader's own listeners hear it as another device's change.
-      if (name === 'prefs:set-ext') {
-        const { key, value } = (req ?? {}) as {
-          key?: unknown;
-          value?: unknown;
-        };
-        if (typeof key !== 'string')
-          throw new Error('prefs:set-ext needs a key');
-        await p.prefs.setExt(key, value, { notify: true });
-        return undefined;
-      }
-      const local = forwardedLocal.get(name);
-      if (!local) throw new Error(`${name} is not a forwarded channel`);
-      return local(req);
-    },
+    core: settings.coreRunner,
     commit: async (input) => {
       const r = await runCommitBatch(
         { db: p.db, store: p.store },
