@@ -8,7 +8,8 @@ import { createDbUserPrefsStore, createPrefs, type OfflineQueue, type UserPrefsS
 import { SyncNoMaster } from '../forward-core';
 import { migrate } from '../../store/schema';
 import { openStore } from '../../store/store';
-import { createExtensionSync, type ExtensionOps, type LocalExtension } from '../../../platform/extension-set';
+import { createExtensionSync } from '../../../platform/extension-set';
+import { fakeOps } from '../../../platform/__tests__/helpers/extension-fakes';
 import { leadProc } from './lead-proc';
 import { readGateSync } from '../role';
 import { createSyncService } from '../service';
@@ -82,9 +83,15 @@ it('installSettingsSync wires the same things main did', async () => {
   // onApplied(['user_prefs']) refreshes prefs, then reconciles once.
   const refresh = jest.spyOn(prefs, 'refreshUser');
   captured!(['user_prefs'], {});
-  await jest.advanceTimersByTimeAsync(0);
+  // Settle the chain on the refresh itself, not on a timer tick.
+  await refresh.mock.results[0].value;
+  await Promise.resolve();
   expect(refresh).toHaveBeenCalledTimes(1);
   expect(extensions.reconcileExtensions).toHaveBeenCalledTimes(1);
+  // The settings are re-read before the connectors are reconciled against them.
+  expect(refresh.mock.invocationCallOrder[0]).toBeLessThan(
+    extensions.reconcileExtensions.mock.invocationCallOrder[0],
+  );
 
   // The retry timer calls syncExtensions when a connector failed.
   syncExtensions.mockClear();
@@ -254,34 +261,6 @@ describe('settings on a copy through the real prefs', () => {
   });
 });
 
-/** The extension-reconcile test's fake ops, as is. */
-function fakeOps(initial: LocalExtension[]) {
-  const local = new Map(initial.map((e) => [e.id, { ...e }]));
-  const calls: string[] = [];
-  const ops: ExtensionOps & { calls: string[]; local: typeof local } = {
-    calls,
-    local,
-    list: () => [...local.values()].map((e) => ({ ...e })),
-    async setEnabled(id, enabled) {
-      calls.push(`enable:${id}:${enabled}`);
-      const e = local.get(id);
-      if (!e) return { ok: false, error: 'none' };
-      e.enabled = enabled;
-      return { ok: true };
-    },
-    async installFromRef(ref) {
-      calls.push(`install:${ref}`);
-      return { ok: false, error: 'offline' };
-    },
-    async uninstall(id) {
-      calls.push(`uninstall:${id}`);
-      local.delete(id);
-      return { ok: true };
-    },
-  };
-  return ops;
-}
-
 describe('a copy through the real service, then promoted', () => {
   /** A joined follower (tracking, a head), the way lead-api.test builds one;
    *  promoted with `lead({epoch})` + `open('head-acked')`. */
@@ -361,7 +340,6 @@ describe('a copy through the real service, then promoted', () => {
   });
 
   it("a promoted leader's setEnabled on an id with a queued switch: no deadlock, one reconcile at most, overlay empty", async () => {
-    jest.setTimeout(10_000);
     const ops = fakeOps([{ id: 'a', origin: 'marketplace', enabled: true, ref: 'github:kia-plugins/a@1' }]);
     let setSync: ReturnType<typeof createExtensionSync>;
     const r = await rig({
@@ -405,7 +383,7 @@ describe('a copy through the real service, then promoted', () => {
     expect(r.prefs.hasQueued('core.extensions.a')).toBe(false);
     expect(r.rows()).toEqual([]);
     expect((r.prefs.getCore('core.extensions') as Record<string, { enabled: boolean }>).a.enabled).toBe(true);
-  });
+  }, 10_000);
 
   it('the fifth refusal emits stuck once and the overlay entry shows it; a later drain does not emit again', async () => {
     const t = { now: 1_000_000 };

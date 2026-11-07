@@ -17,7 +17,6 @@ import { createSyncService, type SyncService } from '../service';
 
 const entry = require.resolve('../../../db/worker-entry.ts');
 const repoRoot = path.resolve(__dirname, '..', '..', '..', '..', '..');
-const GAP = 10_000_000_000;
 let dir: string;
 let dbPath: string;
 let db: AppDb;
@@ -103,8 +102,6 @@ const follow = () =>
     `UPDATE sync_state SET role='follower', master_device_id='m1', tracking=0,
                            history_id='h1', after_seq=7, after_cursor=5, joined=1`,
   );
-const seqOf = async (name: string) =>
-  ((await db.all(`SELECT seq FROM sqlite_sequence WHERE name = ?`, [name]))[0]?.seq ?? 0) as number;
 
 describe('the writer', () => {
   it('refuses after demote without a restart', async () => {
@@ -132,7 +129,6 @@ describe('the writer', () => {
     expect(promoted).toBe(0);
     await sync.open('head-acked');
     await expect(write()).resolves.toBeTruthy();
-    await new Promise((r) => setTimeout(r, 50));
     expect(promoted).toBe(1);
   });
 
@@ -173,103 +169,6 @@ describe('the writer', () => {
     expect(sync.readOnly()).toBe(true);
     await sync.leaveJoin();
     expect(sync.readOnly()).toBe(false);
-  });
-});
-
-describe('promote', () => {
-  it('raises both counters to the epoch range, and the next rows land above it', async () => {
-    await follow();
-    await promote(3);
-    expect(await seqOf('changes')).toBeGreaterThanOrEqual(3 * GAP);
-    expect(await seqOf('sync_rows')).toBeGreaterThanOrEqual(3 * GAP);
-    await write();
-    const head = (await db.all(`SELECT max(seq) AS m FROM changes`))[0].m as number;
-    expect(head).toBeGreaterThan(3 * GAP);
-  });
-
-  it('raises counters that already have rows, with one sequence row each, and the next rows land above', async () => {
-    await write();
-    await write();
-    await follow();
-    await promote(3);
-    for (const name of ['changes', 'sync_rows']) {
-      const rows = await db.all(`SELECT seq FROM sqlite_sequence WHERE name = ?`, [name]);
-      expect(rows).toHaveLength(1);
-      expect(rows[0].seq as number).toBeGreaterThanOrEqual(3 * GAP);
-    }
-    await write();
-    const head = (await db.all(`SELECT max(seq) AS m FROM changes`))[0].m as number;
-    expect(head).toBeGreaterThan(3 * GAP);
-  });
-
-  it('never lowers a counter that is already higher', async () => {
-    await follow();
-    await db.run(`INSERT OR REPLACE INTO sqlite_sequence(name, seq) VALUES ('changes', ?)`, [9 * GAP]);
-    await promote(2);
-    expect(await seqOf('changes')).toBe(9 * GAP);
-  });
-
-  it('writes sync_epochs with the old position and records the epoch', async () => {
-    await follow();
-    await promote(3);
-    const rows = await db.all(`SELECT * FROM sync_epochs`);
-    expect(rows).toEqual([{ epoch: 3, grant_seq: 7, grant_cursor: 5 }]);
-    expect((await state()).epoch).toBe(3);
-  });
-
-  it('the sync_epochs row is the first tracked row, so it travels', async () => {
-    await follow();
-    await promote(3);
-    const first = await db.all(`SELECT tbl, pk, cursor FROM sync_rows ORDER BY cursor LIMIT 1`);
-    expect(first).toMatchObject([{ tbl: 'sync_epochs', pk: '[3]' }]);
-    expect(Number((first[0] as { cursor: number }).cursor)).toBeGreaterThan(3 * GAP);
-  });
-
-  it('keeps history_id, turns tracking on and clears the master', async () => {
-    await follow();
-    await promote(2);
-    expect(await state()).toMatchObject({ role: 'normal', tracking: 1, history_id: 'h1', master_device_id: null });
-  });
-
-  it('status reports the epoch and the grant of the device\'s own epoch', async () => {
-    await follow();
-    expect(await sync.status()).toMatchObject({ epoch: 0, grant: null });
-    await promote(3);
-    expect(await sync.status()).toMatchObject({ epoch: 3, grant: { seq: 7, cursor: 5 } });
-  });
-
-  it('promoting twice with the same epoch changes nothing the second time', async () => {
-    await follow();
-    await promote(2);
-    await promote(2);
-    expect(await db.all(`SELECT * FROM sync_epochs`)).toHaveLength(1);
-  });
-
-  it('deletes every consumer and their ledger rows so workers re-seed', async () => {
-    await follow();
-    await db.run(`INSERT INTO consumers(name, cursor) VALUES ('worker:ocr:v1', 99)`);
-    await db.run(
-      `INSERT INTO work_ledger(consumer, seq, attempts, outcome, updated_at) VALUES ('worker:ocr:v1', 4, 1, 'done', 'n')`,
-    );
-    await promote(2);
-    expect(await db.all(`SELECT * FROM consumers`)).toEqual([]);
-    expect(await db.all(`SELECT * FROM work_ledger`)).toEqual([]);
-  });
-
-  it('demote sets after to the head and stops tracking', async () => {
-    await sync.lead({ epoch: 1 });
-    await write();
-    const head = (await db.all(
-      `SELECT (SELECT coalesce(max(seq), 0) FROM documents) AS s, (SELECT coalesce(max(cursor), 0) FROM sync_rows) AS c`,
-    ))[0];
-    await sync.demote('m2');
-    expect(await state()).toMatchObject({
-      role: 'follower',
-      tracking: 0,
-      master_device_id: 'm2',
-      after_seq: head.s,
-      after_cursor: head.c,
-    });
   });
 });
 

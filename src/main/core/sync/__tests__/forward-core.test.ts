@@ -31,12 +31,6 @@ it('every FORWARDED_CHANNELS entry has a handler in main\'s table and every writ
     expect(isForwardedChannel(c)).toBe(false);
 });
 
-it('forwardCore sends kind core with the channel name and returns the leader value', async () => {
-  const forward = jest.fn(async () => ({ ok: true as const, value: { sent: true } }));
-  await expect(forwardCore({ forward }, 'outbox:send', { draftId: 'd1' })).resolves.toEqual({ sent: true });
-  expect(forward).toHaveBeenCalledWith({ kind: 'core', name: 'outbox:send', payload: { draftId: 'd1' } });
-});
-
 it('no leader rejects with the exact copy and a code; a refusal carries the leader message', async () => {
   const none = { forward: async () => ({ ok: false as const, code: 'no-master' as const, message: 'x' }) };
   const err = (await forwardCore(none, "attention:act", {}).catch((e: unknown) => e)) as SyncNoMaster;

@@ -348,6 +348,8 @@ it('a row queued before quit is in the overlay before any handler is registered,
   // Boot's order: the preferences attach, the queue is restored, then the handlers serve.
   const again = await wire(true, w.dir);
   await restoreQueuedSettings(again.prefs, again.svc, () => undefined);
+  // The overlay shows the queued key after the restore and before any edit.
+  expect(again.prefs.hasQueued('core.theme')).toBe(true);
   await again.local.get('prefs:patch')!({ theme: 'light' });
   expect(again.prefs.get().theme).toBe('light');
   const out = again.db._conn!.prepare(`SELECT coalesce_key AS k, payload FROM sync_outbound`).all() as { k: string; payload: Buffer }[];

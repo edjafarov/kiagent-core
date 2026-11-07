@@ -1,6 +1,7 @@
 /** @jest-environment node */
 // Projection.leadKinds: account changes reach the state while the main feed
 // is still stuck behind a backlog.
+import { EventEmitter, once } from 'events';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
@@ -14,13 +15,30 @@ import { createEngine } from '../engine';
 
 type State = { accounts: string[]; docs: number };
 
+/** Whoever changes something a test waits on (a fake, a callback) calls
+ *  `bump()`; `waitUntil` re-checks its condition on each bump, with one
+ *  timer that only fires on failure. */
+const changed = new EventEmitter();
+const bump = () => changed.emit('change');
 const waitUntil = async (cond: () => boolean, ms = 2000) => {
-  for (let i = 0; i < ms / 10 && !cond(); i += 1)
-    // eslint-disable-next-line no-await-in-loop
-    await new Promise((r) => {
-      setTimeout(r, 10);
-    });
+  const ac = new AbortController();
+  const timer = setTimeout(() => ac.abort(), ms);
+  try {
+    while (!cond()) {
+      // eslint-disable-next-line no-await-in-loop
+      await once(changed, 'change', { signal: ac.signal });
+    }
+  } catch {
+    // aborted: the condition did not come true in time
+  } finally {
+    clearTimeout(timer);
+  }
   expect(cond()).toBe(true);
+};
+/** An onDiff callback that records the state and wakes the waiters. */
+const record = (states: State[]) => (s: State) => {
+  states.push(s);
+  bump();
 };
 
 describe('engine.project leadKinds', () => {
@@ -29,6 +47,7 @@ describe('engine.project leadKinds', () => {
   let feeds: Array<{ kinds?: Change['kind'][]; noBody?: boolean }>;
   let releaseMain: () => void;
   let failLead: number;
+  let leadClosed: number;
 
   beforeEach(async () => {
     dir = fs.mkdtempSync(path.join(os.tmpdir(), 'kiagent-project-lead-'));
@@ -39,6 +58,7 @@ describe('engine.project leadKinds', () => {
     });
     feeds = [];
     failLead = 0;
+    leadClosed = 0;
     const gate = new Promise<void>((resolve) => {
       releaseMain = resolve;
     });
@@ -50,6 +70,7 @@ describe('engine.project leadKinds', () => {
         opts?: { kinds?: Change['kind'][]; noBody?: boolean },
       ) {
         feeds.push({ kinds: opts?.kinds, noBody: opts?.noBody });
+        bump();
         const inner = real.feed(after, opts);
         if (opts?.kinds && failLead > 0) {
           failLead -= 1;
@@ -64,7 +85,19 @@ describe('engine.project leadKinds', () => {
             }),
           };
         }
-        if (opts?.kinds) return inner;
+        if (opts?.kinds)
+          return {
+            [Symbol.asyncIterator]() {
+              const it = inner[Symbol.asyncIterator]();
+              return {
+                next: () => it.next(),
+                async return(v?: unknown) {
+                  leadClosed += 1;
+                  return it.return ? it.return(v) : { done: true, value: v };
+                },
+              };
+            },
+          };
         return {
           async *[Symbol.asyncIterator]() {
             await gate;
@@ -118,7 +151,7 @@ describe('engine.project leadKinds', () => {
     const states: State[] = [];
     const handle = engine().project(
       projection({ leadKinds: ['account', 'accountRemoved'] }),
-      (s) => states.push(s),
+      record(states),
     );
     await waitUntil(() => states.length > 0);
     const acc = await store.createAccount({ source: 's', identifier: 'new' });
@@ -150,7 +183,7 @@ describe('engine.project leadKinds', () => {
     const states: State[] = [];
     const handle = engine().project(
       projection({ documentBodies: false }),
-      (s) => states.push(s),
+      record(states),
     );
     await waitUntil(() => states.length > 0);
     await handle.stop();
@@ -161,35 +194,37 @@ describe('engine.project leadKinds', () => {
     const states: State[] = [];
     const handle = engine().project(
       projection({ leadKinds: ['account'] }),
-      (s) => states.push(s),
+      record(states),
     );
     await waitUntil(() => states.length > 0);
     await handle.stop();
+    // The lead feed's iterator was closed, so nothing can reach the state.
+    expect(leadClosed).toBe(1);
     const n = states.length;
     await store.createAccount({ source: 's', identifier: 'late' });
-    await new Promise((r) => {
-      setTimeout(r, 100);
-    });
     expect(states).toHaveLength(n);
   });
 
   it('the main feed does not re-apply what the lead already applied', async () => {
     const applied: string[] = [];
+    const docsSeen: string[] = [];
     const base = projection({ leadKinds: ['account', 'accountRemoved'] });
     const handle = engine().project(
       {
         ...base,
         apply(state, changes) {
-          for (const c of changes)
+          for (const c of changes) {
             if (c.kind === 'account') applied.push(c.account.id);
+            if (c.kind === 'document') docsSeen.push(c.document.externalId);
+          }
+          bump();
           return base.apply(state, changes);
         },
       },
       () => {},
     );
-    await new Promise((r) => {
-      setTimeout(r, 50);
-    });
+    // Both feeds are open before the account is created.
+    await waitUntil(() => feeds.some((f) => f.kinds) && feeds.some((f) => !f.kinds));
     const acc = await store.createAccount({ source: 's', identifier: 'once' });
     await waitUntil(() => applied.includes(acc.id));
     releaseMain();
@@ -207,9 +242,9 @@ describe('engine.project leadKinds', () => {
         },
       ],
     });
-    await new Promise((r) => {
-      setTimeout(r, 200);
-    });
+    // The main feed has now replayed everything up to the document 'y', which
+    // follows the account in the log: the account was offered to it by then.
+    await waitUntil(() => docsSeen.includes('y'));
     await handle.stop();
     expect(applied.filter((id) => id === acc.id)).toHaveLength(1);
   });
@@ -224,10 +259,11 @@ describe('engine.project leadKinds', () => {
         ...base,
         async init(read) {
           inits += 1;
+          bump();
           return base.init(read);
         },
       },
-      (s) => states.push(s),
+      record(states),
     );
     await waitUntil(() => inits === 2, 4000);
     const acc = await store.createAccount({ source: 's', identifier: 'after' });
@@ -247,6 +283,7 @@ describe('engine.project leadKinds', () => {
         ...base,
         async init(read) {
           started = true;
+          bump();
           await initGate;
           return base.init(read);
         },
@@ -257,6 +294,7 @@ describe('engine.project leadKinds', () => {
     let stopped = false;
     const stopping = handle.stop().then(() => {
       stopped = true;
+      bump();
     });
     releaseInit();
     await waitUntil(() => stopped);
@@ -275,10 +313,11 @@ describe('engine.project leadKinds', () => {
           created = (
             await store.createAccount({ source: 's', identifier: 'mid' })
           ).id;
+          bump();
           return s;
         },
       },
-      (s) => states.push(s),
+      record(states),
     );
     await waitUntil(() => created !== '');
     await waitUntil(() => states.at(-1)?.accounts.includes(created) ?? false);

@@ -6,6 +6,7 @@ import path from 'path';
 
 import { openDb } from '@main/db/app-db';
 import { openStore, type CoreStore } from '@main/core/store/store';
+import type { SyncService } from '@main/core/sync/service';
 
 import { createExtensionPlatform, type ExtensionPlatform } from '../extension-platform';
 import { runExtensionHost } from '../extension-host-entry';
@@ -14,11 +15,11 @@ import { createInMemoryHostPair } from '../transport';
 jest.setTimeout(120_000);
 const FIXTURE = path.join(__dirname, 'fixtures', 'ext-fwd');
 
-interface FakeSync {
-  readOnly: jest.Mock;
-  forward: jest.Mock;
-  enqueue: jest.Mock;
-}
+/** The members `callUi` and `forwardCore` read, typed against the real service. */
+type PlatformSync = Pick<SyncService, 'readOnly' | 'forward' | 'enqueue' | 'onApplied'>;
+type FakeSync = {
+  [K in keyof PlatformSync]: jest.Mock<ReturnType<PlatformSync[K]>, Parameters<PlatformSync[K]>>;
+};
 
 const build = (tmp: string, store: CoreStore, sync: FakeSync, fixture = FIXTURE, id = 'test.fwd') => {
   fs.cpSync(fixture, path.join(tmp, 'bundled', id), { recursive: true });
@@ -27,7 +28,8 @@ const build = (tmp: string, store: CoreStore, sync: FakeSync, fixture = FIXTURE,
     bundledDir: path.join(tmp, 'bundled'),
     store,
     attention: {} as never,
-    sync: sync as never,
+    // The platform's dep is the whole service; the fake carries what it reads.
+    sync: sync as unknown as SyncService,
     sources: { register: () => {}, get: () => undefined, list: () => [], unregister: () => {} },
     senders: { register: () => {}, get: () => undefined, ids: () => [], unregister: () => {} },
     scheduler: {
@@ -60,7 +62,7 @@ describe('forwarding through callUi', () => {
   let tmp: string;
   let store: CoreStore;
   let platform: ExtensionPlatform;
-  const sync: FakeSync = { readOnly: jest.fn(), forward: jest.fn(), enqueue: jest.fn() };
+  const sync: FakeSync = { readOnly: jest.fn(), forward: jest.fn(), enqueue: jest.fn(), onApplied: jest.fn() };
 
   beforeAll(async () => {
     tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kia-fwd-'));
@@ -186,7 +188,7 @@ describe('activation checks the sync names', () => {
       decrypt: (b) => b.toString('utf8'),
       detectLanguages: () => [],
     });
-    const platform = build(tmp, store, { readOnly: jest.fn(), forward: jest.fn(), enqueue: jest.fn() }, bad);
+    const platform = build(tmp, store, { readOnly: jest.fn(), forward: jest.fn(), enqueue: jest.fn(), onApplied: jest.fn() }, bad);
     try {
       await platform.start();
       const snap = platform.snapshot().find((e) => e.id === 'test.fwd');

@@ -126,8 +126,9 @@ describe('the offline queue overlay', () => {
   });
 
   it('setExt with no leader queues kiagent.meetings.summaryInstructions with the whole value', async () => {
-    const { p, queue } = await follower();
+    const { p, queue, store } = await follower();
     await p.setExt('kiagent.meetings.summaryInstructions', { text: 'be brief', n: 2 });
+    expect(store.rows).toEqual({}); // queued and shown, not written
     expect(queue.rows).toHaveLength(1);
     expect(queue.rows[0].key).toBe('kiagent.meetings.summaryInstructions');
     expect(queue.rows[0].req).toEqual({
@@ -275,7 +276,7 @@ describe('the offline queue overlay', () => {
     expect(store.rows['core.theme']).toBe('light');
   });
 
-  it('on a leader (canWrite) an ack drops the overlay and keeps no optimistic value', async () => {
+  it('on a leader (the canWrite branch) an ack drops the overlay and keeps no optimistic value', async () => {
     const { p, queue, store } = await follower({ 'core.theme': 'light' });
     await p.patch({ theme: 'dark' });
     store.writable = true; // promotion

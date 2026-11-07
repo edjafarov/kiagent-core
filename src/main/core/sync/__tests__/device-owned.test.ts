@@ -437,14 +437,8 @@ describe('owner deletions converge on the leader', () => {
       core: jest.fn(),
       commit: (p) => runCommitBatch(to, p as never),
     });
-    const sentTo = to;
-    from.svc.setForwarder(async (r) => {
-      try {
-        return { ok: true, value: await (sentTo.svc.runForwarded(r) as Promise<{ ok: true; value: unknown }>).then((x) => x.value) };
-      } catch (e) {
-        return { ok: false, code: 'handler', message: String(e) };
-      }
-    });
+    // A refusal comes back as { ok: false, code: 'handler' } from runForwarded itself.
+    from.svc.setForwarder((r) => to.svc.runForwarded(r));
     return from.svc.drainOutbound();
   };
 
@@ -537,7 +531,7 @@ describe('an account owned by another device never runs here (final review)', ()
     expect(real).toHaveBeenCalledTimes(2);
   });
 
-  it('a follower does not run it either', async () => {
+  it('a follower does not run it either (idle either way)', async () => {
     const d = await device({ follower: true });
     addAccount(d, 'theirs', 'local-folder', `docs#${OTHER.slice(0, 8)}`, OTHER);
     await d.svc.setDeviceId(DEVICE);

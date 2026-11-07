@@ -338,7 +338,7 @@ describe('write guard', () => {
     }
   });
 
-  it('applyDelta is not refused while joining', () => {
+  it('applyDelta is not refused while joining (pins the skip list)', () => {
     joining();
     expect(() => tx().applyDelta(path.join(dir, 'missing'))).not.toThrow(SyncReadOnly);
   });
@@ -370,6 +370,16 @@ describe('write guard', () => {
   });
 
   it('no statement outside write-tx and sync writes accounts or documents', () => {
+    // The named files that write them, each with its reason; a new file that
+    // does must be added here on purpose.
+    const ALLOWED = new RegExp(
+      [
+        'core/sync/service\\.ts', // device-id adoption suffixes owned identifiers; join and leave resume moved accounts
+        'core/sync/promote\\.ts', // renumbers documents into the new epoch on promotion
+        'core/sync/owned\\.ts', // the leader creates a device-owned account row for its owner's commit batch
+        'core/sync/sources\\.ts', // PAUSE_MOVED_SQL: accounts the seed has moved rest as paused
+      ].join('|'),
+    );
     const root = path.resolve(__dirname, '..', '..', '..');
     const out = execFileSync(
       'grep',
@@ -381,7 +391,8 @@ describe('write guard', () => {
       .filter(Boolean)
       .filter(
         (l) =>
-          !/__tests__|core\/store\/(write-tx|schema)\.ts|core\/sync\//.test(l) &&
+          !/__tests__|core\/store\/(write-tx|schema)\.ts/.test(l) &&
+          !ALLOWED.test(l) &&
           !/^\S+:\d+:\s*(\/\/|\*)/.test(l),
       );
     expect(strays).toEqual([]);

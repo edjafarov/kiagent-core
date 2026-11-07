@@ -13,7 +13,8 @@ import { openStore, type CoreStore } from '../../store/store';
 import { createWriteTx, type WriteTx } from '../../store/write-tx';
 import { buildDelta, SyncStageInvalid, type SyncCursor } from '../delta';
 import { disableTracking, enableTracking } from '../tracking';
-import { SyncReadOnly } from '../role';
+import { readGateSync, SyncReadOnly } from '../role';
+import { createSyncService } from '../service';
 import { addAttention, addDraft, addOutbox, physical, registerPlugin } from './synced-plugin';
 
 const deps = {
@@ -362,5 +363,35 @@ describe('user_prefs keys (phase 6c)', () => {
     const a = await account();
     await commit(a.id, [doc('d1')]);
     expect(sync().prefKeys).toEqual([]);
+  });
+});
+
+describe('ownership follows the accounts a delta brings (core-sync 4.4)', () => {
+  it('applyDelta refreshes ownership when accounts changed', async () => {
+    dst().prepare(`UPDATE sync_state SET joined = 1, device_id = 'me-device'`).run();
+    const svc = createSyncService({
+      bootGate: readGateSync(dst()),
+      db: dest,
+      store: openStore(dest, deps),
+      dbPath: path.join(dir, 'dst.db'),
+      workerFile: '',
+      log: () => undefined,
+    });
+    await svc.loadOwned();
+    const pull = async () => {
+      const r = buildDelta(reader, after, 0, stage, 250 * 1024 * 1024);
+      if (r.status !== 'ok') throw new Error(r.status);
+      after = (await svc.applyDelta(stage)).target;
+    };
+    const a = await sourceStore.createAccount({ source: 'local-folder', identifier: 'docs#x' });
+    src().prepare(`UPDATE accounts SET owner_device_id = 'other-device' WHERE id = ?`).run(a.id);
+    await pull();
+    expect(svc.ownsAccount(a.id)).toBe(false);
+    expect(svc.ownedByOther(a.id)).toBe(true);
+    // The owner moves to this device: the next delta carries the new row.
+    src().prepare(`UPDATE accounts SET owner_device_id = 'me-device' WHERE id = ?`).run(a.id);
+    await pull();
+    expect(svc.ownsAccount(a.id)).toBe(true);
+    expect(svc.ownedByOther(a.id)).toBe(false);
   });
 });

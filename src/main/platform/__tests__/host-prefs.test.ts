@@ -186,15 +186,26 @@ describe('host.prefs surface', () => {
   });
 });
 
+const deferred = () => {
+  let resolve!: () => void;
+  const promise = new Promise<void>((r) => {
+    resolve = r;
+  });
+  return { promise, resolve };
+};
+
 describe('host.prefs in the extension process', () => {
   it('get/set go to the host as prefs.get/prefs.set and onChange rides the platform.prefs.change event', async () => {
     const { main, child } = createInMemoryHostPair();
     const mainEp = createRpcEndpoint(main);
     const calls: Array<[string, string, unknown[]]> = [];
+    const unwatched = deferred();
     mainEp.onCall(async (ns, method, args) => {
       calls.push([ns, method, args]);
+      if (method === 'unwatch') unwatched.resolve();
       return method === 'get' ? 41 : undefined;
     });
+    const bothSeen = deferred();
     const seen: unknown[][] = [];
     let off: (() => void) | undefined;
     let got: unknown;
@@ -208,7 +219,10 @@ describe('host.prefs in the extension process', () => {
       }) {
         got = await host.prefs.get('a');
         await host.prefs.set('a', 2);
-        off = host.prefs.onChange((n, v) => seen.push([n, v]));
+        off = host.prefs.onChange((n, v) => {
+          seen.push([n, v]);
+          if (seen.length === 2) bothSeen.resolve();
+        });
         return {};
       },
     };
@@ -248,13 +262,13 @@ describe('host.prefs in the extension process', () => {
       payload: { name: 'b', value: undefined },
       meta: { from: 'platform', at: 2 },
     });
-    await new Promise((r) => setTimeout(r, 20));
+    await bothSeen.promise;
     expect(seen).toEqual([
       ['a', 3],
       ['b', undefined],
     ]);
     off!();
-    await new Promise((r) => setTimeout(r, 20));
+    await unwatched.promise;
     expect(calls[calls.length - 1]).toEqual(['prefs', 'unwatch', []]);
   });
 });

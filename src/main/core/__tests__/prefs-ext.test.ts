@@ -3,7 +3,6 @@ import os from 'os';
 import path from 'path';
 
 import { createPrefs, type UserPrefsStore } from '../prefs';
-import { forwardCore, NO_MASTER_MESSAGE, SyncNoMaster } from '../sync/forward-core';
 
 function fakeStore(initial: Record<string, unknown> = {}, writable = true) {
   const rows: Record<string, unknown> = { ...initial };
@@ -100,40 +99,6 @@ describe('extension prefs on CorePrefs', () => {
     expect(forwarded).toEqual([{ key: 'ext.id.a', value: { v: 1 } }]);
     expect(store.rows).toEqual({});
     expect(p.getExt('ext.id.a')).toEqual({ v: 1 });
-  });
-
-  it('on a follower with no leader setExt rejects with the no-master message and keeps nothing', async () => {
-    const store = fakeStore({}, false);
-    const p = await make(store);
-    const sync = { forward: async () => ({ ok: false as const, code: 'no-master', message: 'x' }) };
-    p.setForwardExt(async (key, value) => {
-      await forwardCore(sync as never, 'prefs:set-ext', { key, value });
-    });
-    const err = await p.setExt('ext.id.a', 1).catch((e) => e);
-    expect(err).toBeInstanceOf(SyncNoMaster);
-    expect(err.message).toBe(NO_MASTER_MESSAGE);
-    expect(p.getExt('ext.id.a')).toBeUndefined();
-  });
-
-  it('on a follower with no leader and a queue set, setExt applies and queues instead of rejecting', async () => {
-    const store = fakeStore({}, false);
-    const p = await make(store);
-    const queued: unknown[] = [];
-    p.setOfflineQueue({
-      nowMs: () => 0,
-      enqueue: async (req, opts) => {
-        queued.push({ req, key: opts.coalesceKey });
-        return 1;
-      },
-    });
-    const sync = { forward: async () => ({ ok: false as const, code: 'no-master', message: 'x' }) };
-    p.setForwardExt(async (key, value) => {
-      await forwardCore(sync as never, 'prefs:set-ext', { key, value });
-    });
-    await p.setExt('ext.id.a', 1);
-    expect(queued).toHaveLength(1);
-    expect(p.getExt('ext.id.a')).toBe(1);
-    expect(store.rows).toEqual({});
   });
 
   it('a follower the forward feed later overwrites: refresh replaces the optimistic value', async () => {

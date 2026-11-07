@@ -14,9 +14,11 @@ import {
   type ExtensionPlatform,
 } from '../extension-platform';
 import { parseManifest } from '../manifest';
-import { nodeForkTransport } from '../transport';
+import { runExtensionHost } from '../extension-host-entry';
+import { createInMemoryHostPair, type HostTransport } from '../transport';
 
-jest.setTimeout(240_000);
+import { waitFor } from './helpers/platform-harness';
+
 const LEASE = {
   isMaster: true,
   reason: 'holder',
@@ -26,8 +28,6 @@ const LEASE = {
   epoch: 2,
   priorRenewedAt: null,
 };
-const REPO_ROOT = path.resolve(__dirname, '../../../..');
-const CHILD_ENTRY = path.resolve(__dirname, '../extension-host-entry.ts');
 const FIXTURE = path.join(__dirname, 'fixtures', 'ext-sync');
 
 const manifest = JSON.parse(
@@ -45,7 +45,25 @@ it('a marketplace extension declaring sync is refused, a bundled one is accepted
   expect(parseManifest(manifest, { tier: 'bundled' }).caps).toContain('sync');
 });
 
-describe('through a real forked extension host', () => {
+/** The in-memory pair with the process boundary's one property that matters
+ *  here: every message is structured-cloned on the way across, so an argument
+ *  or a result that would not survive a real IPC hop fails here too. (A real
+ *  forked child is exercised by extension-e2e.test.ts.) */
+function clonedHostPair(): HostTransport {
+  const pair = createInMemoryHostPair();
+  const { send: mainSend } = pair.main;
+  const { send: childSend } = pair.child;
+  pair.main.send = (m) => mainSend(structuredClone(m));
+  pair.child.send = (m) => childSend(structuredClone(m));
+  runExtensionHost(pair.child, {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires, global-require, import/no-dynamic-require
+    requireModule: (p: string) => require(p),
+    exit: (code) => pair.simulateExit(code),
+  });
+  return pair.main;
+}
+
+describe('through an in-memory extension host (messages cloned across the hop)', () => {
   let tmp: string;
   let store: CoreStore;
   let platform: ExtensionPlatform;
@@ -151,24 +169,9 @@ describe('through a real forked extension host', () => {
       laneState: () => 'open',
       logSink: { log: () => {} },
       notify: () => {},
-      transportFactory: () =>
-        nodeForkTransport(CHILD_ENTRY, {
-          cwd: REPO_ROOT,
-          execArgv: [
-            '-r',
-            'ts-node/register/transpile-only',
-            '-r',
-            'tsconfig-paths/register',
-          ],
-          env: {
-            ...process.env,
-            KIA_EXT_HOST_CHILD: '1',
-            TS_NODE_TRANSPILE_ONLY: '1',
-            TS_NODE_PROJECT: path.join(REPO_ROOT, 'tsconfig.json'),
-          },
-        }),
+      transportFactory: clonedHostPair,
       onChange: () => {},
-      hostTimeouts: { readyTimeoutMs: 180_000, activateTimeoutMs: 180_000 },
+      hostTimeouts: { readyTimeoutMs: 30_000, activateTimeoutMs: 30_000 },
     } as never);
     await platform.start();
   });
@@ -182,9 +185,7 @@ describe('through a real forked extension host', () => {
 
   it('every method reaches the service from an activated extension', async () => {
     const out = process.env.KIA_SYNC_FIXTURE_OUT!;
-    for (let i = 0; i < 1800 && !fs.existsSync(out); i += 1) {
-      await new Promise((r) => setTimeout(r, 100));
-    }
+    await waitFor(() => fs.existsSync(out), 10_000);
     expect(JSON.parse(fs.readFileSync(out, 'utf8'))).toMatchObject({
       status: { role: 'normal' },
       buildDelta: { status: 'too-large' },
