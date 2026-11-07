@@ -2227,6 +2227,8 @@ export function createEngine(deps: EngineDeps): Engine & {
             return; // feed ended: only abortable() exhausting on abort
           } catch (err) {
             if (abort.signal.aborted) return;
+            // A commit that raced the fence: the hold stops this worker.
+            if ((err as { code?: unknown })?.code === 'SYNC_READ_ONLY') return;
             if (!isDbWorkerTransientError(err) || retries >= FEED_RETRY_MAX) {
               logs.log(
                 `worker:${worker.name}`,

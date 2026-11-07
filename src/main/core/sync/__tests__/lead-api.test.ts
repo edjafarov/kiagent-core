@@ -25,6 +25,7 @@ interface Device {
   db: AppDb;
   svc: SyncService;
   onOpen: jest.Mock;
+  holdWork: jest.Mock;
   conn: () => import('better-sqlite3').Database;
 }
 const devices: Device[] = [];
@@ -40,6 +41,7 @@ async function device(
   const conn = () => db._conn!;
   (db as unknown as { proc: unknown }).proc = leadProc(conn);
   const onOpen = jest.fn(async () => undefined);
+  const holdWork = jest.fn(async () => undefined);
   const svc = createSyncService({
     bootGate: readGateSync(conn()),
     db,
@@ -51,9 +53,10 @@ async function device(
     dbPath: path.join(dir, 'a.db'),
     workerFile: '',
     onOpen,
+    holdWork,
     log: () => undefined,
   });
-  const d = { dir, db, svc, onOpen, conn };
+  const d = { dir, db, svc, onOpen, holdWork, conn };
   devices.push(d);
   return d;
 }
@@ -209,6 +212,7 @@ describe('lead', () => {
     expect(d.svc.readOnly()).toBe(true);
     expect(d.svc.role().leader).toBe(false);
     expect(log.filter((n) => n === 'syncFence:on')).toHaveLength(1);
+    expect(d.holdWork).toHaveBeenCalledTimes(1);
   });
 
   it('fences an overtaken seed before the final refresh can report it as leader', async () => {

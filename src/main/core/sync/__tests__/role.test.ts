@@ -230,6 +230,20 @@ describe('closeWriter', () => {
     expect(h.status).toBe('running');
   });
 
+  it('I2: a resume that lands while closeWriter drains still re-attaches the parked workers', async () => {
+    const { e, stops } = mk();
+    const real = { run: e.run, attach: e.attach };
+    const g = gateEngine(e as never, () => false);
+    eng(e).attach({ id: 'a1' });
+    const closing = g.closeWriter();
+    (real.attach as jest.Mock).mockClear();
+    const resumed = g.attachHeld(); // lands mid-drain
+    stops.forEach((r) => r());
+    await closing;
+    await resumed;
+    expect(real.attach).toHaveBeenCalledTimes(1);
+  });
+
   it('a caller that stopped its handle while held is not reattached', async () => {
     const { e, stops } = mk();
     const real = { run: e.run, attach: e.attach };

@@ -12,7 +12,7 @@ import type { Account, LeaseSnapshot } from '@shared/contracts';
 import { promoteCore, resumeAccounts, resumeHeld, type CorePlatform } from '../../boot';
 import { openStore, type CoreStore } from '../../store/store';
 import { notMineToRun } from '../sources';
-import { readSyncGate } from '../role';
+import { gateEngine, readSyncGate } from '../role';
 import { createSyncService, type SyncService } from '../service';
 
 const entry = require.resolve('../../../db/worker-entry.ts');
@@ -401,7 +401,31 @@ describe('what promotion starts', () => {
       archiveSweep: () => void order.push('sweep'),
       ledgerRekey: () => void order.push('rekey'),
       attachHeld: async () => void order.push('attach'),
+      release: async () => undefined,
     });
+    expect(order).toEqual(['resume', 'sweep', 'rekey', 'attach']);
+  });
+  it('promoteCore releases the hold before it re-runs accounts, through the real gate', async () => {
+    const order: string[] = [];
+    const run = jest.fn(() => (order.push('resume'), { stop: async () => undefined, status: 'running' }));
+    const eng = { run, attach: jest.fn(() => ({ stop: async () => undefined, status: 'running' })), rerunDeferred: jest.fn() };
+    const g = gateEngine(eng as never, () => false);
+    await g.closeWriter();
+    const p = {
+      ...platform([account({})], []),
+      sync: { deviceId: () => 'me-device' },
+      engine: { run: (a: Account) => (eng as unknown as { run(a: Account): unknown }).run(a), isRunning: () => false },
+    } as unknown as CorePlatform;
+    await promoteCore(p, {
+      archiveSweep: () => void order.push('sweep'),
+      ledgerRekey: () => void order.push('rekey'),
+      attachHeld: async () => {
+        order.push('attach');
+        await g.attachHeld();
+      },
+      release: g.release,
+    });
+    expect(run).toHaveBeenCalledTimes(1);
     expect(order).toEqual(['resume', 'sweep', 'rekey', 'attach']);
   });
 });

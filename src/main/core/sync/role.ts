@@ -213,7 +213,7 @@ export function gateEngine(
   attachHeld(): Promise<void>;
   closeWriter(): Promise<void>;
   /** Ends the hold, so a resume's account runs start. `attachHeld` calls it. */
-  release(): void;
+  release(): Promise<void>;
   holding(): boolean;
 } {
   const e = engine as Record<string, (...a: unknown[]) => unknown>;
@@ -225,6 +225,8 @@ export function gateEngine(
   // for the same account (the engine stops its previous handle itself).
   const runs = new Map<string, GatedHandle>();
   let holding = false;
+  // The quiesce in flight: a resume waits for it, or it finds `held` empty.
+  let closing: Promise<void> | null = null;
   const start = (p: GatedHandle, fn: () => unknown): GatedHandle => {
     p.inner = fn() as Handle;
     live.add(p);
@@ -268,48 +270,59 @@ export function gateEngine(
       return result;
     };
   }
+  const closeNow = async (): Promise<void> => {
+    holding = true;
+    const proxies = [...live];
+    // Every stop is called before any is awaited.
+    const stops = proxies.map((p) => {
+      try {
+        return Promise.resolve(p.inner?.stop());
+      } catch (err) {
+        return Promise.reject(err);
+      }
+    });
+    const settled = await Promise.allSettled(stops);
+    const errors = settled.flatMap((r) =>
+      r.status === 'rejected' ? [r.reason] : [],
+    );
+    for (const p of proxies) {
+      live.delete(p);
+      if (p.kind === 'run')
+        for (const [k, v] of runs) if (v === p) runs.delete(k);
+      p.inner = null;
+      if (p.kind === 'attach' && !p.stopped && !held.includes(p)) {
+        held.push(p);
+      }
+    }
+    if (errors.length) {
+      log(
+        'warn',
+        `closeWriter: ${errors.length} handle(s) failed to stop: ${errors
+          .map(String)
+          .join('; ')}`,
+      );
+    }
+  };
+
+  const release = async (): Promise<void> => {
+    await closing;
+    holding = false;
+  };
+
   return {
     holding: () => holding,
     /** Safe to call twice: a second call re-stops the same inners, and stop is
      *  idempotent. */
-    async closeWriter() {
-      holding = true;
-      const proxies = [...live];
-      // Every stop is called before any is awaited.
-      const stops = proxies.map((p) => {
-        try {
-          return Promise.resolve(p.inner?.stop());
-        } catch (err) {
-          return Promise.reject(err);
-        }
+    closeWriter() {
+      const run: Promise<void> = closeNow().finally(() => {
+        if (closing === run) closing = null;
       });
-      const settled = await Promise.allSettled(stops);
-      const errors = settled.flatMap((r) =>
-        r.status === 'rejected' ? [r.reason] : [],
-      );
-      for (const p of proxies) {
-        live.delete(p);
-        if (p.kind === 'run')
-          for (const [k, v] of runs) if (v === p) runs.delete(k);
-        p.inner = null;
-        if (p.kind === 'attach' && !p.stopped && !held.includes(p)) {
-          held.push(p);
-        }
-      }
-      if (errors.length) {
-        log(
-          'warn',
-          `closeWriter: ${errors.length} handle(s) failed to stop: ${errors
-            .map(String)
-            .join('; ')}`,
-        );
-      }
+      closing = run;
+      return run;
     },
-    release() {
-      holding = false;
-    },
+    release,
     async attachHeld() {
-      holding = false;
+      await release();
       // Still read-only (a cancelled join on a follower): keep them held.
       if (readOnly()) return;
       for (const p of held.splice(0)) {

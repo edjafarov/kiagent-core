@@ -715,10 +715,10 @@ export async function promoteCore(
     ledgerRekey(): void;
     attachHeld(): Promise<void>;
     /** Ends the gate's hold, so the account runs below start. */
-    release?(): void;
+    release(): Promise<void>;
   },
 ): Promise<void> {
-  hooks.release?.();
+  await hooks.release();
   await resumeAccounts(platform, {
     skip: (a) => notMineToRun(a, platform.sync.deviceId()),
   });
@@ -731,10 +731,10 @@ export async function promoteCore(
  *  workers. Not `promote()`: no archive sweep, no ledger re-key. */
 export async function resumeHeld(
   platform: CorePlatform,
-  gate: { attachHeld(): Promise<void>; release?(): void },
+  gate: { attachHeld(): Promise<void>; release?(): Promise<void> },
 ): Promise<void> {
   // The hold ends first: a run started while it holds is an unstarted proxy.
-  gate.release?.();
+  await gate.release?.();
   const me = platform.sync.deviceId();
   await resumeAccounts(platform, { skip: (a) => notMineToRun(a, me) });
   await gate.attachHeld();
