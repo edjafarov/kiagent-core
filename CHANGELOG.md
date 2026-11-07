@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.120.4](https://github.com/edjafarov/kiagent-core/compare/v0.120.3...v0.120.4) (2026-11-07)
+
+### Bug Fixes
+
+* **sync:** an overtaken seed is fenced before the final refresh can report it as leader ([bc07087](https://github.com/edjafarov/kiagent-core/commit/bc07087e0808306ed04873b8be509e2eea1cfa27))
+
 ## [0.120.3](https://github.com/edjafarov/kiagent-core/compare/v0.120.2...v0.120.3) (2026-11-07)
 
 ### Bug Fixes
