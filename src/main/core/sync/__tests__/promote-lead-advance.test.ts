@@ -51,8 +51,9 @@ describe('lead on a tracking leader', () => {
       grant_seq: number;
       grant_cursor: number;
     };
-    expect(row.grant_seq).toBeGreaterThanOrEqual(25 * GAP);
-    expect(row.grant_cursor).toBeGreaterThanOrEqual(25 * GAP);
+    // Counters were below the range, so the raised value is exactly the start of it.
+    expect(row.grant_seq).toBe(25 * GAP);
+    expect(row.grant_cursor).toBe(25 * GAP);
     expect(epochOf()).toBe(25);
     await store.createAccount({ source: 's', identifier: 'x' });
     const head = (conn().prepare(`SELECT max(seq) AS m FROM changes`).get() as { m: number }).m;
@@ -64,5 +65,19 @@ describe('lead on a tracking leader', () => {
     expect(lead(conn(), 25)).toBe('noop');
     expect(lead(conn(), 24)).toBe('noop');
     expect(epochOf()).toBe(25);
+  });
+
+  it('never lowers a counter that is already above the new range', () => {
+    const high = 30 * GAP;
+    conn().prepare(`UPDATE sqlite_sequence SET seq = ? WHERE name IN ('changes','sync_rows')`).run(high);
+    expect(lead(conn(), 25)).toBe('advanced');
+    expect(seqOf('changes')).toBeGreaterThanOrEqual(high);
+    expect(seqOf('sync_rows')).toBeGreaterThanOrEqual(high);
+    const row = conn().prepare(`SELECT grant_seq, grant_cursor FROM sync_epochs WHERE epoch = 25`).get() as {
+      grant_seq: number;
+      grant_cursor: number;
+    };
+    expect(row.grant_seq).toBeGreaterThanOrEqual(high);
+    expect(row.grant_cursor).toBeGreaterThanOrEqual(high);
   });
 });
