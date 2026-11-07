@@ -9,6 +9,8 @@ import { enableTracking } from './tracking';
 /** Numbers are never reused: a new master counts from `epoch x 10^10`. */
 export const EPOCH_GAP = 10_000_000_000;
 
+// (D2) An extension uninstall travels as a tombstone in `core.extensions`
+// (`removed: true`), never as a row deletion.
 const COUNTERS = ['changes', 'sync_rows'] as const;
 
 export interface PromoteOptions {

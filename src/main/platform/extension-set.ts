@@ -3,7 +3,12 @@
  *  rewrites it from the three actions, and every device reconciles itself to
  *  it. This module is the logic; the platform supplies the ops and the store. */
 
-export type ExtensionsSet = Record<string, { enabled: boolean; ref?: string }>;
+/** `removed: true` is a tombstone: the user uninstalled the connector, and
+ *  every device uninstalls it too. Optional, so an older device ignores it. */
+export type ExtensionsSet = Record<
+  string,
+  { enabled: boolean; ref?: string; removed?: true }
+>;
 
 /** The `user_prefs` key that holds the set. */
 export const EXTENSIONS_KEY = 'core.extensions';
@@ -47,7 +52,7 @@ export interface ExtensionOps {
 export type PendingRecord =
   | { kind: 'enabled'; id: string; enabled: boolean }
   | { kind: 'installed'; id: string; ref: string | undefined }
-  | { kind: 'uninstalled'; id: string };
+  | { kind: 'uninstalled'; id: string; origin: 'marketplace' | 'dev' | 'bundled' };
 
 export interface ReconcileResult {
   installed: string[];
@@ -123,8 +128,24 @@ export function createExtensionSync(d: {
     // Absence never uninstalls: a connector missing from the set is left alone.
     for (const [id, want] of Object.entries(set)) {
       // A user action here not yet in the set must not be reverted.
-      if (pending.has(id)) continue;
+      const held = pending.get(id);
+      if (held && held.kind === 'enabled' && want.removed) {
+        // The removal came first; this enable can no longer apply.
+        pending.delete(id);
+        d.log(`extension ${id} was removed on another device; its pending enable is discarded`);
+      } else if (held) continue;
       const have = local.get(id);
+      // Before needsInstall: a tombstone never installs, whatever it carries.
+      if (want.removed) {
+        if (have?.origin !== 'marketplace') continue;
+        const u = await ops.uninstall(id);
+        if (!u.ok) {
+          const s = await ops.setEnabled(id, false);
+          if (!s.ok) fail(id, s.error);
+          else fail(id, 'kept: this device has its accounts');
+        }
+        continue;
+      }
       if (needsInstall(have, want)) {
         const r = await ops.installFromRef(want.ref!, { grantConsent: true });
         if (!r.ok) {
@@ -153,6 +174,7 @@ export function createExtensionSync(d: {
       await store.update((cur) => {
         const next = { ...base(cur) };
         const have = next[id];
+        if (have?.removed) return cur;
         const entry = ops.list().find((e) => e.id === id);
         if (!have && entry?.origin === 'dev') return cur;
         next[id] = {
@@ -172,19 +194,21 @@ export function createExtensionSync(d: {
         [id]: { enabled: true, ref },
       }));
   };
-  const recordUninstalled = async (id: string): Promise<void> => {
+  const recordUninstalled = async (
+      id: string,
+      origin: 'marketplace' | 'dev' | 'bundled',
+  ): Promise<void> => {
       if (!store.canWrite()) return;
       await store.update((cur) => {
-        const next = { ...base(cur) };
-        delete next[id];
-        return next;
+        if (origin !== 'marketplace') return cur;
+        return { ...base(cur), [id]: { enabled: false, removed: true } };
       });
   };
 
   const applyRecord = async (p: PendingRecord): Promise<void> => {
     if (p.kind === 'enabled') return recordEnabled(p.id, p.enabled);
     if (p.kind === 'installed') return recordInstalled(p.id, p.ref);
-    return recordUninstalled(p.id);
+    return recordUninstalled(p.id, p.origin);
   };
   const flushPending = async (): Promise<void> => {
     for (const [id, p] of [...pending]) {
@@ -249,7 +273,12 @@ export function createExtensionSync(d: {
     /** What this device would offer in a join: its marketplace installs with
      *  their refs and the bundled extensions someone switched. Never a dev
      *  (local-path) install. */
-    offer: (): ExtensionsSet => setFromLocal(ops.list()),
+    offer: (): ExtensionsSet => {
+      const have = store.get();
+      return Object.fromEntries(
+        Object.entries(setFromLocal(ops.list())).filter(([id]) => !have?.[id]?.removed),
+      );
+    },
     /** The master's half of a join: adds every offered entry the set lacks. An
      *  entry already in the set keeps its value; nothing is removed. Returns
      *  the ids added. */

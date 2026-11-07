@@ -264,7 +264,7 @@ describe('one queue and recorded actions', () => {
   it('does not record when the local op failed', async () => {
     const store = fakeStore({});
     const sync = mk(store, fakeOps([]));
-    const r = await sync.act(async () => ({ ok: false }), () => ({ kind: 'uninstalled', id: 'x' }));
+    const r = await sync.act(async () => ({ ok: false }), () => ({ kind: 'uninstalled', id: 'x', origin: 'marketplace' }));
     expect(r.ok).toBe(false);
     expect(store.writes).toBe(0);
   });
@@ -283,8 +283,8 @@ describe('leader writes the set', () => {
     const sync = mk(store, fakeOps([]));
     await sync.recordInstalled('kia.slack', 'github:kia-plugins/slack@v2');
     expect(store.get()).toEqual({ 'kia.slack': { enabled: true, ref: 'github:kia-plugins/slack@v2' } });
-    await sync.recordUninstalled('kia.slack');
-    expect(store.get()).toEqual({});
+    await sync.recordUninstalled('kia.slack', 'marketplace');
+    expect(store.get()).toEqual({ 'kia.slack': { enabled: false, removed: true } });
   });
 
   it('first write on a device that never seeded builds the set from local state', async () => {
@@ -309,6 +309,126 @@ describe('leader writes the set', () => {
     const store = fakeStore({});
     await mk(store, fakeOps([])).recordInstalled('dev.x', undefined);
     expect(store.get()).toEqual({});
+  });
+});
+
+describe('uninstall follows the user as a tombstone', () => {
+  const REF = 'github:kia-plugins/slack@v2';
+  const slack = (over: Partial<LocalExtension> = {}): LocalExtension => ({
+    id: 'kia.slack', origin: 'marketplace', enabled: true, ref: REF, ...over,
+  });
+
+  it('M7: an uninstall on the leader writes a tombstone and every other device uninstalls', async () => {
+    const leaderStore = fakeStore({ 'kia.slack': { enabled: true, ref: REF } });
+    const leaderOps = fakeOps([slack()]);
+    const leader = mk(leaderStore, leaderOps);
+    await leader.act(() => leaderOps.uninstall('kia.slack'), () => ({ kind: 'uninstalled', id: 'kia.slack', origin: 'marketplace' }));
+    expect(leaderStore.get()).toEqual({ 'kia.slack': { enabled: false, removed: true } });
+    const followerOps = fakeOps([slack()]);
+    const follower = mk(fakeStore(leaderStore.get(), false), followerOps);
+    expect(await follower.runFromStore()).toEqual({ installed: [], failed: [] });
+    expect(followerOps.calls).toEqual(['uninstall:kia.slack']);
+    expect(followerOps.local.has('kia.slack')).toBe(false);
+  });
+
+  it('the guard keeps and disables: a refused raw uninstall becomes setEnabled(false) and a kept report', async () => {
+    const ops = fakeOps([slack()]);
+    ops.uninstall = async (id) => {
+      ops.calls.push(`uninstall:${id}`);
+      return { ok: false, error: 'accounts' };
+    };
+    const r = await mk(fakeStore(), ops).reconcile({ 'kia.slack': { enabled: false, removed: true } });
+    expect(ops.calls).toEqual(['uninstall:kia.slack', 'enable:kia.slack:false']);
+    expect(r.failed).toEqual([{ id: 'kia.slack', error: 'kept: this device has its accounts' }]);
+    expect(ops.local.get('kia.slack')!.enabled).toBe(false);
+  });
+
+  it('reinstall replaces the tombstone with {enabled:true, ref}', async () => {
+    const store = fakeStore({ 'kia.slack': { enabled: false, removed: true } });
+    await mk(store, fakeOps([])).recordInstalled('kia.slack', REF);
+    expect(store.get()).toEqual({ 'kia.slack': { enabled: true, ref: REF } });
+  });
+
+  it('the kept device does not offer it, and union refuses it while the tombstone stands', async () => {
+    const store = fakeStore({ 'kia.slack': { enabled: false, removed: true } });
+    const sync = mk(store, fakeOps([slack({ enabled: false })]));
+    expect(sync.offer()).toEqual({});
+    expect(await sync.union({ 'kia.slack': { enabled: true, ref: REF } })).toEqual([]);
+    expect(store.get()).toEqual({ 'kia.slack': { enabled: false, removed: true } });
+  });
+
+  it('a pending enable meeting a tombstone is discarded and the removal applies', async () => {
+    const logs: string[] = [];
+    const store = fakeStore({});
+    store.update = async () => {
+      throw new Error('disk full');
+    };
+    const ops = fakeOps([slack()]);
+    const sync = createExtensionSync({ store, ops, log: (m) => logs.push(m) });
+    await sync
+      .act(() => ops.setEnabled('kia.slack', true), () => ({ kind: 'enabled', id: 'kia.slack', enabled: true }))
+      .catch(() => undefined);
+    expect(sync.hasPending()).toBe(true);
+    ops.calls.length = 0;
+    await sync.reconcile({ 'kia.slack': { enabled: false, removed: true } });
+    expect(sync.hasPending()).toBe(false);
+    expect(ops.calls).toEqual(['uninstall:kia.slack']);
+    expect(logs.some((m) => m.includes('kia.slack'))).toBe(true);
+  });
+
+  it('a pending install record wins until recorded', async () => {
+    const store = fakeStore({});
+    store.update = async () => {
+      throw new Error('disk full');
+    };
+    const ops = fakeOps([slack()]);
+    const sync = mk(store, ops);
+    await sync
+      .act(() => Promise.resolve({ ok: true }), () => ({ kind: 'installed', id: 'kia.slack', ref: REF }))
+      .catch(() => undefined);
+    expect(sync.hasPending()).toBe(true);
+    await sync.reconcile({ 'kia.slack': { enabled: false, removed: true } });
+    expect(ops.calls).toEqual([]);
+    expect(sync.hasPending()).toBe(true);
+  });
+
+  it('a refused raw uninstall on the leader writes no tombstone', async () => {
+    const store = fakeStore({ 'kia.slack': { enabled: true, ref: REF } });
+    const sync = mk(store, fakeOps([slack()]));
+    await sync.act(
+      async () => ({ ok: false }),
+      () => ({ kind: 'uninstalled', id: 'kia.slack', origin: 'marketplace' }),
+    );
+    expect(store.get()).toEqual({ 'kia.slack': { enabled: true, ref: REF } });
+    expect(store.writes).toBe(0);
+  });
+
+  it('a dev-origin uninstall writes nothing', async () => {
+    const store = fakeStore({});
+    const sync = mk(store, fakeOps([]));
+    await sync.act(
+      async () => ({ ok: true }),
+      () => ({ kind: 'uninstalled', id: 'dev.x', origin: 'dev' }),
+    );
+    expect(store.get()).toEqual({});
+    expect(store.writes).toBe(0);
+  });
+
+  it('a tombstone for an id this device never installed calls nothing and offers nothing', async () => {
+    const store = fakeStore({ 'kia.slack': { enabled: false, removed: true } });
+    const ops = fakeOps([]);
+    const sync = mk(store, ops);
+    const r = await sync.reconcile(store.get()!);
+    expect(r).toEqual({ installed: [], failed: [] });
+    expect(ops.calls).toEqual([]);
+    expect(sync.offer()).toEqual({});
+  });
+
+  it('a tombstone that carries a ref still installs nothing on a device without it', async () => {
+    const ops = fakeOps([]);
+    const r = await mk(fakeStore(), ops).reconcile({ 'kia.slack': { enabled: false, ref: REF, removed: true } });
+    expect(ops.calls).toEqual([]);
+    expect(r).toEqual({ installed: [], failed: [] });
   });
 });
 
@@ -504,7 +624,18 @@ describe('platform wiring', () => {
     expect(await store.consents.latest('test.basic' as never)).toBeTruthy();
     expect(setStore.get()).toEqual({ 'test.basic': { enabled: true, ref: REF } });
     expect((await platform.uninstall('test.basic')).ok).toBe(true);
-    expect(setStore.get()).toEqual({});
+    expect(setStore.get()).toEqual({ 'test.basic': { enabled: false, removed: true } });
+  });
+
+  it('enable on a tombstone is refused before the raw op', async () => {
+    setStore.set({ 'test.fwd': { enabled: false, removed: true } });
+    const writes = setStore.writes;
+    const before = enabled('test.fwd');
+    const r = await platform.setEnabled('test.fwd', true);
+    expect(r).toEqual({ ok: false, error: 'This connector was removed on another device. Reinstall it first.' });
+    expect(enabled('test.fwd')).toBe(before);
+    expect(setStore.writes).toBe(writes);
+    setStore.set({});
   });
 
   it('reconcile installs a missing connector from the set with consent, then leaves it alone when it leaves the set', async () => {

@@ -2162,16 +2162,27 @@ export function createExtensionPlatform(
 
   // Each action and its recording into the set run on the one queue that
   // reconcile uses; a failed recording rejects (and is retried later).
-  full.setEnabled = (id, enabled) =>
-    setSync.act(
+  full.setEnabled = (id, enabled) => {
+    if (enabled && deps.extensionSet?.get()?.[id]?.removed)
+      return Promise.resolve({
+        ok: false,
+        error: 'This connector was removed on another device. Reinstall it first.',
+      });
+    return setSync.act(
       () => rawSetEnabled(id, enabled),
       () => ({ kind: 'enabled', id, enabled }),
     );
-  full.uninstall = (id) =>
-    setSync.act(
-      () => rawUninstall(id),
-      () => ({ kind: 'uninstalled', id }),
+  };
+  full.uninstall = (id) => {
+    let origin: 'marketplace' | 'dev' | 'bundled' = 'marketplace';
+    return setSync.act(
+      () => {
+        origin = entries.get(id)?.origin ?? origin;
+        return rawUninstall(id);
+      },
+      () => ({ kind: 'uninstalled', id, origin }),
     );
+  };
   full.installCommit = async (token) => {
     let staged: { ref: string; origin: 'marketplace' | 'dev' } | undefined;
     try {
