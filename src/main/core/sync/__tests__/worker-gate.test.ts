@@ -154,6 +154,36 @@ it('the fence closes a plugin connection too, and lifting it opens it', async ()
   await expect(insert('items', 'a')).resolves.toBeUndefined();
 });
 
+it('seed overtaken mid-lead: a copied-table write is refused after lead() resolves; a fresh grant and open lift it', async () => {
+  const lease = (o: object) => ({
+    isMaster: true,
+    reason: 'holder' as const,
+    multiDevice: true,
+    approved: true,
+    holder: 'me-device',
+    epoch: 2,
+    priorRenewedAt: null,
+    ...o,
+  });
+  // Hold the real worker's syncLead until the newer lease has landed.
+  const realProc = db.proc!.bind(db);
+  let release!: () => void;
+  const held = new Promise<void>((r) => (release = r));
+  (db as unknown as { proc: unknown }).proc = async (n: string, a: unknown) => {
+    if (n === 'syncLead') await held;
+    return realProc(n, a);
+  };
+  const p = sync.lead({ epoch: 1 });
+  await new Promise((r) => setTimeout(r, 50));
+  await sync.setLease(lease({ isMaster: false, reason: 'fenced' }) as never);
+  release();
+  await p;
+  await expect(insert('items', 'a')).rejects.toThrow(/read-only/);
+  await sync.setLease(lease({}) as never);
+  await sync.open('head-acked');
+  await expect(insert('items', 'a')).resolves.toBeUndefined();
+}, 60_000);
+
 it('attention publish is refused on a follower, a tick quietly writes nothing, and promote reopens it', async () => {
   const args = {
     producer: 'gate',

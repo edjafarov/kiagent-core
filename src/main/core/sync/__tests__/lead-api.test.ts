@@ -188,6 +188,50 @@ describe('lead', () => {
     expect(d.svc.readOnly()).toBe(false);
   });
 
+  it('a seed whose lead() is overtaken by a non-master lease ends tracking AND fenced: readOnly true, role not leader, one syncFence on', async () => {
+    const d = await device();
+    const log = procLog(d);
+    const real = (d.db as unknown as { proc: (n: string, a: unknown) => Promise<unknown> }).proc;
+    let release!: () => void;
+    const held = new Promise<void>((r) => (release = r));
+    (d.db as unknown as { proc: unknown }).proc = async (n: string, a: unknown) => {
+      if (n === 'syncLead') await held;
+      return real(n, a);
+    };
+    const p = d.svc.lead({ epoch: 1 });
+    await new Promise((r) => setTimeout(r, 20));
+    // Tracking is still 0: setLease exempts the seed and closes nothing.
+    await d.svc.setLease(lease({ isMaster: false, reason: 'fenced', holder: 'me' }));
+    expect(d.svc.readOnly()).toBe(false);
+    release();
+    await p;
+    expect(state(d)).toMatchObject({ tracking: 1 });
+    expect(d.svc.readOnly()).toBe(true);
+    expect(d.svc.role().leader).toBe(false);
+    expect(log.filter((n) => n === 'syncFence:on')).toHaveLength(1);
+  });
+
+  it("the same device recovers on a fresh master grant: setLease(holder) then open('head-acked') -> readOnly false", async () => {
+    const d = await device();
+    const real = (d.db as unknown as { proc: (n: string, a: unknown) => Promise<unknown> }).proc;
+    let release!: () => void;
+    const held = new Promise<void>((r) => (release = r));
+    (d.db as unknown as { proc: unknown }).proc = async (n: string, a: unknown) => {
+      if (n === 'syncLead') await held;
+      return real(n, a);
+    };
+    const p = d.svc.lead({ epoch: 1 });
+    await new Promise((r) => setTimeout(r, 20));
+    await d.svc.setLease(lease({ isMaster: false, reason: 'fenced', holder: 'me' }));
+    release();
+    await p;
+    expect(d.svc.readOnly()).toBe(true);
+    await d.svc.setLease(lease());
+    await d.svc.open('head-acked');
+    expect(d.svc.readOnly()).toBe(false);
+    expect(d.svc.role().leader).toBe(true);
+  });
+
   it('on a tracking leader is a no-op whatever the epoch', async () => {
     const d = await device(leader);
     await d.svc.lead({ epoch: 9 });

@@ -317,6 +317,9 @@ export function createSyncService(deps: SyncServiceDeps): SyncService {
     epoch: 0,
   };
   let leaseNow: LeaseSnapshot | null = null;
+  // Bumped first thing in every `setLease`, so a `lead` that was awaiting can
+  // tell a lease arrived meanwhile.
+  let leaseSeq = 0;
   const phase = (): SyncPhase => phaseOf({ ...row, fenced });
   const readOnly = (): boolean =>
     !canWrite(phase()) || (deps.readOnly?.() ?? false);
@@ -950,6 +953,7 @@ export function createSyncService(deps: SyncServiceDeps): SyncService {
     isBusy: () => deps.busy?.() ?? null,
     readOnly,
     setLease: async (snap) => {
+      leaseSeq += 1;
       leaseNow = snap;
       // Only a leader that tracks is ever fenced: a seed (tracking 0) stays
       // writable whatever the lease says.
@@ -966,6 +970,7 @@ export function createSyncService(deps: SyncServiceDeps): SyncService {
       publishRole();
     },
     lead: async (o) => {
+      const seq = leaseSeq;
       await refreshGate();
       const wasFenced = fenced;
       // A follower becomes a leader here: nothing may write until it opens.
@@ -983,6 +988,18 @@ export function createSyncService(deps: SyncServiceDeps): SyncService {
       }
       if (done === 'promoted') setFence(true);
       await refreshGate();
+      // A seed is never fenced; a seed that becomes a tracking leader while a
+      // non-master lease arrived (setLease exempted it, tracking was 0) is
+      // fenced at the moment tracking turns on.
+      if (
+        leaseSeq !== seq &&
+        !fenced &&
+        row.role === 'normal' &&
+        row.tracking &&
+        leaseNow &&
+        (leaseNow.reason === 'fenced' || !leaseNow.isMaster)
+      )
+        setFence(true);
       publishRole();
     },
     open: async (kind) => {
