@@ -211,6 +211,33 @@ describe('lead', () => {
     expect(log.filter((n) => n === 'syncFence:on')).toHaveLength(1);
   });
 
+  it('fences an overtaken seed before the final refresh can report it as leader', async () => {
+    const d = await device();
+    const real = (d.db as unknown as { proc: (n: string, a: unknown) => Promise<unknown> }).proc;
+    let release!: () => void;
+    const held = new Promise<void>((r) => (release = r));
+    (d.db as unknown as { proc: unknown }).proc = async (n: string, a: unknown) => {
+      if (n === 'syncLead') await held;
+      return real(n, a);
+    };
+    const p = d.svc.lead({ epoch: 1 });
+    await new Promise((r) => setTimeout(r, 20));
+    await d.svc.setLease(lease({ isMaster: false, reason: 'fenced', holder: 'me' }));
+    // From here on, record the role seen at the first await of the final refresh.
+    const seen: boolean[] = [];
+    const realAll = d.db.all.bind(d.db);
+    (d.db as unknown as { all: unknown }).all = (sql: string, ...rest: unknown[]) => {
+      if (sql.includes('master_device_id')) seen.push(d.svc.role().leader);
+      return (realAll as (...a: unknown[]) => unknown)(sql, ...rest);
+    };
+    release();
+    await p;
+    expect(seen.length).toBeGreaterThan(0);
+    expect(seen.every((l) => l === false)).toBe(true);
+    expect(d.svc.readOnly()).toBe(true);
+    expect(d.svc.role().leader).toBe(false);
+  });
+
   it("the same device recovers on a fresh master grant: setLease(holder) then open('head-acked') -> readOnly false", async () => {
     const d = await device();
     const real = (d.db as unknown as { proc: (n: string, a: unknown) => Promise<unknown> }).proc;

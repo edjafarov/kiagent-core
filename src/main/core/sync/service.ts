@@ -987,6 +987,17 @@ export function createSyncService(deps: SyncServiceDeps): SyncService {
         throw err;
       }
       if (done === 'promoted') setFence(true);
+      // A seed overtaken while tracking turned on is fenced before the row
+      // can report it as a tracking leader (refreshGate awaits after it
+      // assigns `row`).
+      if (
+        leaseSeq !== seq &&
+        !fenced &&
+        row.role === 'normal' &&
+        leaseNow &&
+        (leaseNow.reason === 'fenced' || !leaseNow.isMaster)
+      )
+        setFence(true);
       await refreshGate();
       // A seed is never fenced; a seed that becomes a tracking leader while a
       // non-master lease arrived (setLease exempted it, tracking was 0) is
