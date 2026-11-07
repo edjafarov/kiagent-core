@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.121.1](https://github.com/edjafarov/kiagent-core/compare/v0.121.0...v0.121.1) (2026-11-07)
+
+### Bug Fixes
+
+* **sync:** a join cancelled while the hold is in flight stays cancelled ([171251b](https://github.com/edjafarov/kiagent-core/commit/171251bd513124b7c099665ba2a3601c8600193f))
+* **sync:** release waits for every drain in flight; forward reply contract documented ([5352aaf](https://github.com/edjafarov/kiagent-core/commit/5352aafafa7bba1dde84160132905d4c9bbe6906))
+
 ## [0.121.0](https://github.com/edjafarov/kiagent-core/compare/v0.120.4...v0.121.0) (2026-11-07)
 
 ### Features
