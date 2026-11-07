@@ -372,3 +372,75 @@ describe('failed-swap cleanup crash safety', () => {
     expect(fs.existsSync(`${receiver}.swap-merged`)).toBe(false);
   });
 });
+
+describe('a merged file counts only with positive evidence', () => {
+  const kinds = [
+    ['ordinary follower', null],
+    ['keep-archive', KEEP],
+  ] as const;
+  const tables = (d: Database.Database) =>
+    (d.prepare(`SELECT name FROM sqlite_master WHERE type='table'`).all() as { name: string }[]).map((r) => r.name);
+  const intact = () => {
+    const d = open();
+    expect(d.prepare(`SELECT account_id FROM vault`).all()).toEqual([{ account_id: 'mine' }]);
+    expect(d.prepare(`SELECT count(*) n FROM documents`).get()).toEqual({ n: 0 });
+    d.close();
+  };
+  const swappedRight = () => {
+    const d = open();
+    expect(d.prepare(`SELECT count(*) n FROM documents`).get()).toEqual({ n: 1 });
+    expect(d.prepare(`SELECT master_device_id m FROM sync_state`).get()).toEqual({ m: MASTER });
+    expect(d.prepare(`SELECT account_id FROM vault`).all()).toEqual([{ account_id: 'mine' }]);
+    expect(tables(d)).not.toContain('sync_swap_merged');
+    d.close();
+  };
+
+  for (const [kind, opts] of kinds) {
+    it(`${kind}: an empty .swap-merged with the incoming present is discarded and re-merged`, async () => {
+      await prepare(opts);
+      fs.writeFileSync(`${receiver}.swap-merged`, '');
+      expect(applyPendingSwap(receiver)).toBe('swapped');
+      swappedRight();
+    });
+
+    it(`${kind}: an empty .swap-merged with no incoming is abandoned and the original is intact`, async () => {
+      await prepare(opts);
+      fs.rmSync(`${receiver}.swap-incoming`);
+      fs.writeFileSync(`${receiver}.swap-merged`, '');
+      expect(applyPendingSwap(receiver)).toBe('abandoned');
+      expect(readSwapOutcome(receiver)).toBe('abandoned');
+      intact();
+      expect(fs.existsSync(`${receiver}.swap-merged`)).toBe(false);
+    });
+
+    it(`${kind}: a merged file with a wrong marker is not installed`, async () => {
+      await prepare(opts);
+      fs.rmSync(`${receiver}.swap-incoming`);
+      const m = new Database(`${receiver}.swap-merged`);
+      m.exec(`CREATE TABLE sync_swap_merged(sha256 TEXT); INSERT INTO sync_swap_merged VALUES('wrong');
+              CREATE TABLE sync_state(role TEXT)`);
+      m.close();
+      expect(applyPendingSwap(receiver)).toBe('abandoned');
+      intact();
+    });
+
+    it(`${kind}: a merged snapshot without a marker (hash-matching, no merge) is not installed`, async () => {
+      await prepare(opts);
+      fs.renameSync(`${receiver}.swap-incoming`, `${receiver}.swap-merged`);
+      expect(applyPendingSwap(receiver)).toBe('abandoned');
+      intact();
+    });
+
+    it(`${kind}: a crash after the merge commit and before the journal write still resumes as merged`, async () => {
+      await prepare(opts);
+      expect(() =>
+        applyPendingSwap(receiver, (s) => {
+          if (s === 'committed') throw new Error('crash');
+        }),
+      ).toThrow('crash');
+      expect(JSON.parse(fs.readFileSync(`${receiver}.swap.json`, 'utf8')).merged).toBe(false);
+      expect(applyPendingSwap(receiver)).toBe('swapped');
+      swappedRight();
+    });
+  }
+});

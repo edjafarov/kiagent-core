@@ -33,6 +33,8 @@ interface Journal {
   masterDeviceId: string;
   /** Set once the merged file is complete; the renames can then be redone. */
   merged: boolean;
+  /** The snapshot's hash: the merge writes it into the merged file as proof. */
+  sha256?: string;
   replacesCopy?: boolean;
   archive: string;
   /** Set by a keep-archive swap: the old file always becomes a tagged archive. */
@@ -52,6 +54,33 @@ export interface KeepArchiveOpts {
 const journalPath = (db: string) => `${db}.swap.json`;
 const incomingPath = (db: string) => `${db}.swap-incoming`;
 const mergedPath = (db: string) => `${db}.swap-merged`;
+
+/** Written by the merge transaction itself; a merged file counts as merged
+ *  only when this holds the journal's snapshot hash. Dropped after install. */
+const MERGE_MARKER = 'sync_swap_merged';
+
+const hasMergeMarker = (file: string, sha256: string | undefined): boolean => {
+  if (!sha256 || !fs.existsSync(file)) return false;
+  let db: Database.Database | null = null;
+  try {
+    db = new Database(file, { readonly: true });
+    const r = db.prepare(`SELECT sha256 FROM ${MERGE_MARKER}`).all() as { sha256: string }[];
+    return r.length === 1 && r[0].sha256 === sha256;
+  } catch {
+    return false;
+  } finally {
+    db?.close();
+  }
+};
+
+const dropMergeMarker = (file: string): void => {
+  const db = new Database(file);
+  try {
+    db.exec(`DROP TABLE IF EXISTS ${MERGE_MARKER}`);
+  } finally {
+    db.close();
+  }
+};
 
 /** The swap's result, durable before the journal goes: the join reads it at
  *  boot and must never be told nothing happened when it did. */
@@ -127,6 +156,7 @@ export function prepareSwap(
   writeJournal(dbPath, {
     masterDeviceId,
     merged: false,
+    sha256,
     replacesCopy: opts?.keepArchive ? false : roleOf(dbPath) === 'follower',
     archive,
     ...(opts?.keepArchive
@@ -215,16 +245,21 @@ export async function findPassedOverArchive(
 }
 
 /** Adds every local table of `old` to the snapshot at `file`. */
-function mergeLocalTables(file: string, old: string, masterDeviceId: string, keepArchive = false): void {
+function mergeLocalTables(
+  file: string,
+  old: string,
+  masterDeviceId: string,
+  sha256: string,
+  keepArchive = false,
+): void {
   const db = new Database(file);
   try {
     db.pragma('foreign_keys = OFF');
-    // The merge commits, then the journal says so; a crash in between leaves a
-    // file that's already merged, which is recognised by its dropped table.
+    // No metadata means this is not a snapshot: never read that as "merged".
     const pending = db
       .prepare(`SELECT 1 FROM sqlite_master WHERE name = ?`)
       .get(SNAPSHOT_META);
-    if (!pending) return;
+    if (!pending) throw new Error('swap: not a snapshot');
     db.prepare(`ATTACH ? AS old`).run(old);
     db.unsafeMode(true);
     db.transaction(() => {
@@ -256,7 +291,7 @@ function mergeLocalTables(file: string, old: string, masterDeviceId: string, kee
         ).map((r) => r.name),
       );
       const localTables = defs.filter(
-        (d) => d.type === 'table' && !copied(d.name) && !shadow.has(d.name),
+        (d) => d.type === 'table' && !copied(d.name) && !shadow.has(d.name) && d.name !== MERGE_MARKER,
       );
       const isVirtual = (sql: string) => /^CREATE\s+VIRTUAL/i.test(sql);
       // A keep-archive swap takes the snapshot's join state: the old file's
@@ -319,6 +354,8 @@ function mergeLocalTables(file: string, old: string, masterDeviceId: string, kee
            pre_demote_epoch = NULL${keepArchive ? ', joined = 1' : ''}`,
       ).run(meta.after_seq, meta.after_cursor, meta.history_id, masterDeviceId, meta.epoch);
       db.exec(`DROP TABLE main.${SNAPSHOT_META}`);
+      db.exec(`CREATE TABLE main.${MERGE_MARKER}(sha256 TEXT NOT NULL)`);
+      db.prepare(`INSERT INTO main.${MERGE_MARKER}(sha256) VALUES(?)`).run(sha256);
     })();
     db.unsafeMode(false);
     db.exec(`DETACH old`);
@@ -519,14 +556,18 @@ export function applyPendingSwap(
       const old = new Database(dbPath);
       old.pragma('wal_checkpoint(TRUNCATE)');
       old.close();
-      // Never merge into a file that doesn't exist: opening it would create an
-      // empty database whose missing metadata reads as a finished merge.
-      if (!fs.existsSync(incomingPath(dbPath)) && !fs.existsSync(merged)) {
-        throw new Error('swap: no snapshot to merge');
+      // A merged file counts only with the marker the merge transaction wrote
+      // for this swap's snapshot; anything else is debris and goes.
+      if (fs.existsSync(merged) && !hasMergeMarker(merged, j.sha256)) {
+        for (const ext of ['', '-wal', '-shm']) fs.rmSync(`${merged}${ext}`, { force: true });
       }
-      // A move, so no second copy of the data. The merge is one transaction, so
-      // a crash during it leaves this file as it arrived.
-      if (fs.existsSync(incomingPath(dbPath))) {
+      if (!fs.existsSync(merged)) {
+        if (!fs.existsSync(incomingPath(dbPath))) throw new Error('swap: no snapshot to merge');
+        // Merged where it lies, so a crash leaves either an untouched snapshot
+        // or one carrying its marker; then a rename.
+        if (!hasMergeMarker(incomingPath(dbPath), j.sha256)) {
+          mergeLocalTables(incomingPath(dbPath), dbPath, j.masterDeviceId, j.sha256 ?? '', j.keepArchive === true);
+        }
         fs.renameSync(incomingPath(dbPath), merged);
         try {
           crashAt('incoming-renamed');
@@ -535,7 +576,6 @@ export function applyPendingSwap(
           throw e;
         }
       }
-      mergeLocalTables(merged, dbPath, j.masterDeviceId, j.keepArchive === true);
     } catch {
       if (injected) throw (injected as { e: unknown }).e;
       // Nothing has touched the old database, so it stays this device's data.
@@ -574,6 +614,8 @@ export function applyPendingSwap(
     fs.renameSync(merged, dbPath);
     crashAt('replaced');
   }
+  // The proof has done its job; later swaps must not meet it.
+  if (fs.existsSync(dbPath)) dropMergeMarker(dbPath);
   writeOutcome(dbPath, 'swapped', j);
   crashAt('outcome');
   fs.rmSync(journalPath(dbPath), { force: true });
