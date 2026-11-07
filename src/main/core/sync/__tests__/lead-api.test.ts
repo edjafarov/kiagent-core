@@ -232,6 +232,15 @@ describe('lead', () => {
     expect(d.svc.role().leader).toBe(true);
   });
 
+  it('lead() on a seed whose cached lease is non-master is refused with SyncNotLeader and changes nothing (tracking stays 0, no proc)', async () => {
+    const d = await device();
+    await d.svc.setLease(lease({ isMaster: false, reason: 'fenced', holder: 'me' }));
+    const log = procLog(d);
+    await expect(d.svc.lead({ epoch: 1 })).rejects.toBeInstanceOf(SyncNotLeader);
+    expect(state(d)).toMatchObject({ tracking: 0 });
+    expect(log).toEqual([]);
+  });
+
   it('on a tracking leader is a no-op whatever the epoch', async () => {
     const d = await device(leader);
     await d.svc.lead({ epoch: 9 });
