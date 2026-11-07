@@ -276,6 +276,10 @@ export interface SyncServiceDeps {
   /** This device is a follower or joining: it takes no offers. An extra hold
    *  on top of what `sync_state` says; the service tracks that itself. */
   readOnly?: () => boolean;
+  /** Quiesces the running work (the gate's `closeWriter`). */
+  holdWork?: () => Promise<void>;
+  /** Starts it again (`resumeHeld`). */
+  resumeWork?: () => Promise<void>;
   /** Milliseconds, for the delivery queue's backoff. */
   nowMs?: () => number;
   /** What `sync_state` said at boot, read once. The writer worker derives its

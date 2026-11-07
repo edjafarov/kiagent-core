@@ -432,7 +432,11 @@ export async function bootCore(deps: BootDeps): Promise<CorePlatform> {
   });
 
   const promotedHooks: Array<() => void | Promise<void>> = [];
+  // The service is created before the gate; these are set once the gate exists.
+  let gate: ReturnType<typeof gateEngine>;
   const sync = createSyncService({
+    holdWork: () => gate.closeWriter(),
+    resumeWork: () => resumeHeld(platform, gate),
     db,
     store,
     dbPath,
@@ -478,7 +482,9 @@ export async function bootCore(deps: BootDeps): Promise<CorePlatform> {
   await prefs.attachUser(createDbUserPrefsStore(db, () => !sync.readOnly()));
   // What was queued before the last quit shows again, before anything serves an edit.
   await restoreQueuedSettings(prefs, sync, (c, l, m) => sink.log(c, l, m));
-  const gate = gateEngine(engine, () => sync.readOnly(), sync);
+  gate = gateEngine(engine, () => sync.readOnly(), sync, (l, m) =>
+    sink.log('sync', l, m),
+  );
   // A follower's copied rows change only by what the master sends.
   let archiveSweep = false;
   const startArchiveSweep = (): void => {
@@ -690,11 +696,31 @@ export async function promoteCore(
   },
 ): Promise<void> {
   const me = hooks.deviceId();
-  await resumeAccounts(platform, { skip: (a) => notMineToRun(a, me) });
+  // The first and last steps are `resumeHeld`'s two halves, split by the
+  // leader-only maintenance.
+  await resumeMine(platform, me);
   hooks.archiveSweep();
   hooks.ledgerRekey();
   await hooks.attachHeld();
 }
+
+/** The one re-drive body: accounts that are mine to run, then the held
+ *  workers. Not `promote()`: no archive sweep, no ledger re-key. */
+export async function resumeHeld(
+  platform: CorePlatform,
+  gate: { attachHeld(): Promise<void> },
+  deviceId: string | null = platform.sync.deviceId(),
+): Promise<void> {
+  await resumeMine(platform, deviceId);
+  await gate.attachHeld();
+}
+
+const resumeMine = async (
+  platform: CorePlatform,
+  deviceId: string | null,
+): Promise<void> => {
+  await resumeAccounts(platform, { skip: (a) => notMineToRun(a, deviceId) });
+};
 
 /** Its connector is here now: back to connecting, then the usual start.
  *  Returns the account to run, or null when it moved on in the meantime. */

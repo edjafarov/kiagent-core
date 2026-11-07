@@ -63,10 +63,13 @@ describe('engine gate', () => {
   it('is read on every call: the same engine runs once the role flips', async () => {
     let ro = true;
     const e = idle();
+    const realRun = e.run;
     gateEngine(e as never, () => ro);
     expect(pull(e).status).toBe('paused');
+    expect(realRun).not.toHaveBeenCalled();
     ro = false;
-    expect(pull(e)).toBe('real');
+    expect((pull(e) as unknown as { inner: unknown }).inner).toBe('real');
+    expect(realRun).toHaveBeenCalledTimes(1);
     ro = true;
     expect(pull(e).status).toBe('paused');
   });
@@ -118,6 +121,122 @@ describe('engine gate', () => {
       await expect((real as never as Record<string, () => Promise<unknown>>)[m]()).resolves.toBe('real');
     },
   );
+});
+
+describe('closeWriter', () => {
+  const mk = () => {
+    const stops: Array<() => void> = [];
+    const mkInner = () => ({
+      status: 'running',
+      stats: async () => ({ pending: 0 }),
+      stop: jest.fn(
+        () => new Promise<void>((res) => stops.push(res)),
+      ),
+    });
+    const inners: ReturnType<typeof mkInner>[] = [];
+    const next = () => {
+      const i = mkInner();
+      inners.push(i);
+      return i;
+    };
+    const e = idle({ run: jest.fn(next), attach: jest.fn(next) });
+    return { e, inners, stops };
+  };
+  type Eng = { run(a: unknown): { stop(): Promise<void> }; attach(a: unknown): { stop(): Promise<void>; status: string } };
+  const eng = (e: unknown) => e as Eng;
+
+  it('closeWriter stops every live handle before awaiting any, holds unstopped attaches and drops runs', async () => {
+    const { e, inners, stops } = mk();
+    const real = { run: e.run, attach: e.attach };
+    const g = gateEngine(e as never, () => false);
+    eng(e).attach({ id: 'a1' });
+    eng(e).attach({ id: 'a2' });
+    eng(e).run({ id: 'r1' });
+    const closing = g.closeWriter();
+    expect(g.holding()).toBe(true);
+    expect(inners).toHaveLength(3);
+    for (const i of inners) expect(i.stop).toHaveBeenCalledTimes(1);
+    expect(stops).toHaveLength(3);
+    stops.forEach((r) => r());
+    await closing;
+    (real.attach as jest.Mock).mockClear();
+    await g.attachHeld();
+    expect(real.attach).toHaveBeenCalledTimes(2);
+    expect(g.holding()).toBe(false);
+  });
+
+  it('a caller that stopped its handle while held is not reattached', async () => {
+    const { e, stops } = mk();
+    const real = { run: e.run, attach: e.attach };
+    const g = gateEngine(e as never, () => false);
+    const h = eng(e).attach({ id: 'a1' });
+    const closing = g.closeWriter();
+    stops.forEach((r) => r());
+    await closing;
+    await h.stop();
+    (real.attach as jest.Mock).mockClear();
+    await g.attachHeld();
+    expect(real.attach).not.toHaveBeenCalled();
+  });
+
+  it('run and attach during a quiesce get an idle or held proxy and start nothing', async () => {
+    const { e } = mk();
+    const real = { run: e.run, attach: e.attach };
+    const g = gateEngine(e as never, () => false);
+    const closing = g.closeWriter();
+    expect(g.holding()).toBe(true);
+    const r = eng(e).run({ id: 'r' });
+    const a = eng(e).attach({ id: 'a' });
+    await closing;
+    expect(real.run).not.toHaveBeenCalled();
+    expect(real.attach).not.toHaveBeenCalled();
+    expect((r as never as { status: string }).status).toBe('paused');
+    expect(a.status).toBe('paused');
+    await g.attachHeld();
+    expect(real.attach).toHaveBeenCalledTimes(1);
+  });
+
+  it('close twice then attachHeld attaches once', async () => {
+    const { e, stops } = mk();
+    const real = { run: e.run, attach: e.attach };
+    const g = gateEngine(e as never, () => false);
+    eng(e).attach({ id: 'a1' });
+    const c1 = g.closeWriter();
+    stops.forEach((r) => r());
+    await c1;
+    await g.closeWriter();
+    (real.attach as jest.Mock).mockClear();
+    await g.attachHeld();
+    expect(real.attach).toHaveBeenCalledTimes(1);
+  });
+
+  it('a stop that throws does not stop the others from being held; closeWriter resolves', async () => {
+    const log = jest.fn();
+    const mkI = (fail: boolean) => ({
+      status: 'running',
+      stats: async () => ({ pending: 0 }),
+      stop: jest.fn(async () => {
+        if (fail) throw new Error('boom');
+      }),
+    });
+    const e = idle({
+      attach: jest
+        .fn()
+        .mockReturnValueOnce(mkI(false))
+        .mockReturnValueOnce(mkI(true))
+        .mockReturnValueOnce(mkI(false)),
+    });
+    const real = { run: e.run, attach: e.attach };
+    const g = gateEngine(e as never, () => false, undefined as never, log);
+    eng(e).attach({ id: 'a1' });
+    eng(e).attach({ id: 'a2' });
+    eng(e).attach({ id: 'a3' });
+    await expect(g.closeWriter()).resolves.toBeUndefined();
+    expect(log).toHaveBeenCalledWith('warn', expect.stringContaining('boom'));
+    (real.attach as jest.Mock).mockClear();
+    await g.attachHeld();
+    expect(real.attach).toHaveBeenCalledTimes(3);
+  });
 });
 
 describe('write guard', () => {
@@ -302,7 +421,7 @@ describe('gateEngine with device-owned accounts (step 3)', () => {
   it('a follower runs an account it owns and refuses the others', () => {
     const e = idle();
     gateEngine(e as never, () => true, owned);
-    expect(callRun(e, 'mine')).toBe('real');
+    expect((callRun(e, 'mine') as { inner: unknown }).inner).toBe('real');
     expect((callRun(e, 'theirs') as { status: string }).status).toBe('paused');
   });
 

@@ -403,7 +403,7 @@ describe('one ownership predicate, read per call', () => {
     await d.svc.loadOwned();
     const e = engineOver(d, () => d.store.createAccount({ source: 'local-folder', identifier: 'this-machine' }));
     const account = (await e.connect({ descriptor: { id: 'local-folder' } })) as { id: string };
-    expect((e.run as unknown as (a: { id: string }) => unknown)({ id: account.id })).toBe('real');
+    expect(((e.run as unknown as (a: { id: string }) => unknown)({ id: account.id }) as { inner: unknown }).inner).toBe('real');
   });
 
   it.each([
@@ -532,8 +532,8 @@ describe('an account owned by another device never runs here (final review)', ()
     expect((runOn(e, 'theirs') as { status: string }).status).toBe('paused');
     expect((runOn(e, 'theirs') as { status: string }).status).toBe('paused');
     expect(real).not.toHaveBeenCalled();
-    expect(runOn(e, 'mine')).toBe('real');
-    expect(runOn(e, 'free')).toBe('real');
+    expect((runOn(e, 'mine') as { inner: unknown }).inner).toBe('real');
+    expect((runOn(e, 'free') as { inner: unknown }).inner).toBe('real');
     expect(real).toHaveBeenCalledTimes(2);
   });
 

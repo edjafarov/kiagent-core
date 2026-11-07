@@ -206,25 +206,41 @@ export function gateEngine(
     ownsAccount: () => false,
     ownsSource: () => false,
   },
-): { attachHeld(): Promise<void> } {
+  log: (level: 'info' | 'warn' | 'error', msg: string) => void = () =>
+    undefined,
+): {
+  attachHeld(): Promise<void>;
+  closeWriter(): Promise<void>;
+  holding(): boolean;
+} {
   const e = engine as Record<string, (...a: unknown[]) => unknown>;
   const real = { ...e };
-  const held: { worker: unknown; proxy: HeldHandle }[] = [];
+  // Attach proxies waiting for `attachHeld`, and the proxies with work running.
+  const held: GatedHandle[] = [];
+  const live = new Set<GatedHandle>();
+  let holding = false;
+  const start = (p: GatedHandle, fn: () => unknown): GatedHandle => {
+    p.inner = fn() as Handle;
+    live.add(p);
+    return p;
+  };
   e.run = (...a) => {
     const id = (a[0] as { id: string } | undefined)?.id ?? '';
-    if (owned.ownedByOther?.(id)) return idleHandle();
-    return readOnly() && !owned.ownsAccount(id)
-      ? idleHandle()
-      : real.run.apply(engine, a);
+    const p = new GatedHandle('run', a[0], (h) => live.delete(h));
+    if (holding || owned.ownedByOther?.(id)) return p;
+    if (readOnly() && !owned.ownsAccount(id)) return p;
+    return start(p, () => real.run.apply(engine, a));
   };
   e.attach = (...a) => {
-    if (!readOnly()) return real.attach.apply(engine, a);
-    const proxy = new HeldHandle();
-    held.push({ worker: a[0], proxy });
-    return proxy;
+    const p = new GatedHandle('attach', a[0], (h) => live.delete(h));
+    if (holding || readOnly()) {
+      held.push(p);
+      return p;
+    }
+    return start(p, () => real.attach.apply(engine, a));
   };
   e.rerunDeferred = async (...a) =>
-    readOnly() ? undefined : real.rerunDeferred.apply(engine, a);
+    readOnly() || holding ? undefined : real.rerunDeferred.apply(engine, a);
   for (const m of REFUSED) {
     e[m] = async (...a) => {
       if (readOnly()) {
@@ -244,20 +260,60 @@ export function gateEngine(
     };
   }
   return {
+    holding: () => holding,
+    async closeWriter() {
+      holding = true;
+      const proxies = [...live];
+      // Every stop is called before any is awaited.
+      const stops = proxies.map((p) => {
+        try {
+          return Promise.resolve(p.inner?.stop());
+        } catch (err) {
+          return Promise.reject(err);
+        }
+      });
+      const settled = await Promise.allSettled(stops);
+      const errors = settled.flatMap((r) =>
+        r.status === 'rejected' ? [r.reason] : [],
+      );
+      for (const p of proxies) {
+        live.delete(p);
+        p.inner = null;
+        if (p.kind === 'attach' && !p.stopped && !held.includes(p)) {
+          held.push(p);
+        }
+      }
+      if (errors.length) {
+        log(
+          'warn',
+          `closeWriter: ${errors.length} handle(s) failed to stop: ${String(
+            new AggregateError(errors, 'stop failed'),
+          )} ${errors.map(String).join('; ')}`,
+        );
+      }
+    },
     async attachHeld() {
-      for (const h of held.splice(0)) {
-        if (h.proxy.stopped) continue;
-        h.proxy.inner = real.attach.call(engine, h.worker) as Handle;
+      holding = false;
+      for (const p of held.splice(0)) {
+        if (p.stopped) continue;
+        start(p, () => real.attach.call(engine, p.worker));
       }
     },
   };
 }
 
-/** What `attach` returned while the device was read-only. */
-class HeldHandle {
+/** What `run` and `attach` return: a proxy over the real handle, so the gate
+ *  can stop the work and, for an attach, start it again later. */
+export class GatedHandle {
   inner: Handle | null = null;
 
   stopped = false;
+
+  constructor(
+    readonly kind: 'run' | 'attach',
+    readonly worker: unknown,
+    private readonly release: (h: GatedHandle) => void,
+  ) {}
 
   get status(): Handle['status'] {
     return this.inner ? this.inner.status : 'paused';
@@ -269,6 +325,7 @@ class HeldHandle {
 
   async stop(): Promise<void> {
     this.stopped = true;
+    this.release(this);
     await this.inner?.stop();
   }
 }
