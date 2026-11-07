@@ -232,13 +232,33 @@ describe('lead', () => {
     expect(d.svc.role().leader).toBe(true);
   });
 
-  it('lead() on a seed whose cached lease is non-master is refused with SyncNotLeader and changes nothing (tracking stays 0, no proc)', async () => {
+  it('a seed with a non-master lease cached BEFORE lead() (the rig: alone, undecided) still leads, unfenced', async () => {
     const d = await device();
-    await d.svc.setLease(lease({ isMaster: false, reason: 'fenced', holder: 'me' }));
-    const log = procLog(d);
-    await expect(d.svc.lead({ epoch: 1 })).rejects.toBeInstanceOf(SyncNotLeader);
-    expect(state(d)).toMatchObject({ tracking: 0 });
-    expect(log).toEqual([]);
+    await d.svc.setLease(lease({ isMaster: false, reason: 'unjoined', holder: null }));
+    await d.svc.lead({ epoch: 1 });
+    expect(state(d)).toMatchObject({ tracking: 1 });
+    expect(d.svc.readOnly()).toBe(false);
+  });
+
+  it("the rig's takeover: follower with a non-master lease, setLease(master) then lead() with the same master lease arriving mid-lead, open('head-acked') succeeds", async () => {
+    const d = await device(follower);
+    await d.svc.setLease(lease({ isMaster: false, reason: 'follower', holder: 'm1' }));
+    await d.svc.setLease(lease());
+    const real = (d.db as unknown as { proc: (n: string, a: unknown) => Promise<unknown> }).proc;
+    let release!: () => void;
+    const held = new Promise<void>((r) => (release = r));
+    (d.db as unknown as { proc: unknown }).proc = async (n: string, a: unknown) => {
+      if (n === 'syncLead') await held;
+      return real(n, a);
+    };
+    const p = d.svc.lead({ epoch: 2, relayImported: true });
+    await new Promise((r) => setTimeout(r, 20));
+    await d.svc.setLease(lease());
+    release();
+    await p;
+    await d.svc.open('head-acked');
+    expect(d.svc.role().leader).toBe(true);
+    expect(d.svc.readOnly()).toBe(false);
   });
 
   it('on a tracking leader is a no-op whatever the epoch', async () => {

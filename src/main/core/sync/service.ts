@@ -972,15 +972,6 @@ export function createSyncService(deps: SyncServiceDeps): SyncService {
     lead: async (o) => {
       const seq = leaseSeq;
       await refreshGate();
-      // Invariant: a seed whose cached lease already says not-master never
-      // starts leading (followers legitimately hold non-master leases).
-      if (
-        row.role === 'normal' &&
-        !row.tracking &&
-        leaseNow !== null &&
-        !leaseNow.isMaster
-      )
-        throw new SyncNotLeader();
       const wasFenced = fenced;
       // A follower becomes a leader here: nothing may write until it opens.
       const fromFollower = row.role === 'follower';
