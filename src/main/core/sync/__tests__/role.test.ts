@@ -289,6 +289,25 @@ describe('closeWriter', () => {
     expect(real.attach).toHaveBeenCalledTimes(1);
   });
 
+  it('release waits for a second drain that started while it waited', async () => {
+    const { e, stops } = mk();
+    const g = gateEngine(e as never, () => false);
+    eng(e).attach({ id: 'a1' });
+    const c1 = g.closeWriter();
+    let released = false;
+    const rel = g.release().then(() => (released = true));
+    const c2 = g.closeWriter();
+    stops[0]();
+    await c1;
+    for (let i = 0; i < 5; i += 1) await Promise.resolve();
+    expect(released).toBe(false);
+    expect(g.holding()).toBe(true);
+    stops[1]();
+    await c2;
+    await rel;
+    expect(g.holding()).toBe(false);
+  });
+
   it('a stop that throws does not stop the others from being held; closeWriter resolves', async () => {
     const log = jest.fn();
     const mkI = (fail: boolean) => ({

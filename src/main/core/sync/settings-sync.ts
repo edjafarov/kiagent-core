@@ -23,7 +23,8 @@ export interface ForwardOrQueueOp {
   keys: string[];
   isHeld: (key: string) => boolean;
   /** Asks the leader. Its answer is the channel's own `{ ok }` value: a
-   *  refusal (`ok: false`) is the leader's answer, not a transport failure. */
+   *  refusal (`ok: false`) is the leader's answer, not a transport failure.
+   *  A reply without `ok: true` is treated as refused. */
   forward: () => Promise<{ ok: boolean }>;
   /** A change that must also run on this device (a connector switch); a
    *  failed run queues nothing. */

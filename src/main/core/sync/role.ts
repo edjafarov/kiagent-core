@@ -305,7 +305,8 @@ export function gateEngine(
   };
 
   const release = async (): Promise<void> => {
-    await closing;
+    // A closeWriter started during the await replaces `closing`: wait for it too.
+    while (closing) await closing;
     holding = false;
   };
 
