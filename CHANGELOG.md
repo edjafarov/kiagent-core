@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.121.0](https://github.com/edjafarov/kiagent-core/compare/v0.120.4...v0.121.0) (2026-11-07)
+
+### Features
+
+* **core:** an uninstall follows the user as a tombstone; a device with the connector's accounts keeps it disabled ([2445dd5](https://github.com/edjafarov/kiagent-core/commit/2445dd5efbd415e59a6756670f1cc06f22ddcc8d))
+* **core:** gateEngine owns every handle as a proxy; closeWriter quiesces and holds the running work ([16b9880](https://github.com/edjafarov/kiagent-core/commit/16b98800c35f142ad484c462729c0e4a0fb43fa4))
+* **core:** lease loss fences then holds the work; beginJoin holds first; leaveJoin resumes; a closed gate mid-commit is silent ([ba18920](https://github.com/edjafarov/kiagent-core/commit/ba18920f7d19f6c607f83fcb23aabb8d91a9db8c))
+* **core:** queue events carry stuck; the promote-drain and queued-switch wiring are pinned ([fc186e0](https://github.com/edjafarov/kiagent-core/commit/fc186e0930dd951d3f8f4f48e1bae33f6a6c317f))
+
+### Bug Fixes
+
+* **core:** a connector switch the leader refuses is not acknowledged here ([43684a7](https://github.com/edjafarov/kiagent-core/commit/43684a7417189a0471dd068dd9a3efaa15cb820f))
+* **core:** a finished run leaves the gate's live set; holdWork and resumeWork are no-ops before the gate exists ([2392e45](https://github.com/edjafarov/kiagent-core/commit/2392e45789d614d0edb62f93ef1fd15c0f78d753))
+* **core:** a kept connector is reported once; an unknown id never writes a tombstone ([c7e7ced](https://github.com/edjafarov/kiagent-core/commit/c7e7ced4bf3bc2e0fee69b18099e074b9763dafe))
+* **core:** a resume waits for the quiesce; every fence-on path holds once; promoteCore's release is required and tested; the live feed is silent on a closed gate ([87014ea](https://github.com/edjafarov/kiagent-core/commit/87014ea633e63f75c75a19559228da408e73da02))
+* **core:** queued settings are restored before IPC serves an edit; the leader filters a forwarded patch to user keys ([7ab5d59](https://github.com/edjafarov/kiagent-core/commit/7ab5d59b2272614941f27a8122da17400ac0a21c))
+
 ## [0.120.4](https://github.com/edjafarov/kiagent-core/compare/v0.120.3...v0.120.4) (2026-11-07)
 
 ### Bug Fixes
