@@ -220,7 +220,7 @@ export interface CorePrefs extends Prefs {
   queueExtensionEnabled(id: string, enabled: boolean): Promise<number>;
   /** The queue delivered or discarded a keyed row. */
   onQueueChange(e: {
-    kind: 'delivered' | 'discarded';
+    kind: 'delivered' | 'discarded' | 'stuck';
     rowId: number;
     coalesceKey: string | null;
   }): void;
@@ -387,7 +387,10 @@ export function createPrefs(dir: string, user?: UserPrefsStore): CorePrefs {
   };
 
   // Every read-merge-write of the user part runs one at a time, so a patch
-  // always starts from the latest mirror.
+  // always starts from the latest mirror. This is one of two serial chains
+  // (the other is the extension set's): `act -> updateCore -> supersede ->
+  // discardQueued -> onQueueChange` crosses from the set's chain into this
+  // one once and never back, so the two cannot wait on each other.
   let chain: Promise<unknown> = Promise.resolve();
   const serial = <T>(fn: () => Promise<T>): Promise<T> => {
     const r = chain.then(fn);
@@ -579,6 +582,17 @@ export function createPrefs(dir: string, user?: UserPrefsStore): CorePrefs {
       if (key === null) return;
       const entry = overlay.get(key);
       if (!entry || entry.rowId !== e.rowId) return;
+      if (e.kind === 'stuck') {
+        // Kept for good: marked, never removed, so a device that writes shows
+        // the table instead (an older row's event cannot reach a newer entry).
+        const ext = extView();
+        const before = current;
+        overlay.set(key, { ...entry, stuck: true });
+        recompute();
+        if (!sameJson(before, current)) emit();
+        fireExtChanges(ext);
+        return;
+      }
       const ext = extView();
       const before = current;
       overlay.delete(key);

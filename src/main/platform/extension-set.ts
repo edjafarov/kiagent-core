@@ -88,6 +88,9 @@ export function createExtensionSync(d: {
 }) {
   const { store, ops } = d;
   let failedNow: { id: string; error: string }[] = [];
+  // One of two serial chains (prefs' is the other): `act -> updateCore ->
+  // supersede -> discardQueued -> onQueueChange` crosses from this chain into
+  // prefs' once and never back.
   let chain: Promise<unknown> = Promise.resolve();
   const serial = <T>(fn: () => Promise<T>): Promise<T> => {
     const r = chain.then(fn);

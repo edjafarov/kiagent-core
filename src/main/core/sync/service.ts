@@ -61,9 +61,10 @@ export interface AppliedMeta {
   pullStartedAt?: number;
 }
 
-/** A keyed row of `sync_outbound` left the queue. */
+/** A keyed row of `sync_outbound` left the queue, or (`stuck`) stays in it
+ *  for good after its last refusal. */
 export interface QueueChange {
-  kind: 'delivered' | 'discarded';
+  kind: 'delivered' | 'discarded' | 'stuck';
   rowId: number;
   coalesceKey: string | null;
 }
@@ -563,6 +564,11 @@ export function createSyncService(deps: SyncServiceDeps): SyncService {
           'error',
           `sync: giving up on a queued ${req.name} from ${sourceName(req)}; it stays in the queue`,
         );
+        fireQueue({
+          kind: 'stuck',
+          rowId: next.id,
+          coalesceKey: next.coalesce_key,
+        });
       } else {
         // No leader reachable: nothing was tried, so nothing is counted.
         break;

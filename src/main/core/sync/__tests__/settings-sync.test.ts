@@ -8,6 +8,7 @@ import { createDbUserPrefsStore, createPrefs, type OfflineQueue, type UserPrefsS
 import { SyncNoMaster } from '../forward-core';
 import { migrate } from '../../store/schema';
 import { openStore } from '../../store/store';
+import { createExtensionSync, type ExtensionOps, type LocalExtension } from '../../../platform/extension-set';
 import { leadProc } from './lead-proc';
 import { readGateSync } from '../role';
 import { createSyncService } from '../service';
@@ -242,5 +243,203 @@ describe('settings on a copy through the real prefs', () => {
     expect(view()).toBe(true);
     await prefs.refreshUser({ prefKeys: ['core.extensions'], pullStartedAt: 150 });
     expect(view()).toBe(false);
+  });
+});
+
+/** The extension-reconcile test's fake ops, as is. */
+function fakeOps(initial: LocalExtension[]) {
+  const local = new Map(initial.map((e) => [e.id, { ...e }]));
+  const calls: string[] = [];
+  const ops: ExtensionOps & { calls: string[]; local: typeof local } = {
+    calls,
+    local,
+    list: () => [...local.values()].map((e) => ({ ...e })),
+    async setEnabled(id, enabled) {
+      calls.push(`enable:${id}:${enabled}`);
+      const e = local.get(id);
+      if (!e) return { ok: false, error: 'none' };
+      e.enabled = enabled;
+      return { ok: true };
+    },
+    async installFromRef(ref) {
+      calls.push(`install:${ref}`);
+      return { ok: false, error: 'offline' };
+    },
+    async uninstall(id) {
+      calls.push(`uninstall:${id}`);
+      local.delete(id);
+      return { ok: true };
+    },
+  };
+  return ops;
+}
+
+describe('a copy through the real service, then promoted', () => {
+  /** A joined follower (tracking, a head), the way lead-api.test builds one;
+   *  promoted with `lead({epoch})` + `open('head-acked')`. */
+  async function rig(over: { nowMs?: () => number; extensions?: Record<string, unknown>; writes?: { on: boolean } } = {}) {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'settings-promote-'));
+    db = await openDb(path.join(dir, 'a.db'));
+    migrate(db._conn!);
+    db._conn!
+      .prepare(
+        `UPDATE sync_state SET role='follower', master_device_id='m1', tracking=0,
+                               history_id='h1', after_seq=7, after_cursor=5, joined=1, epoch=1`,
+      )
+      .run();
+    (db as unknown as { proc: unknown }).proc = leadProc(() => db!._conn!);
+    const svc = createSyncService({
+      bootGate: readGateSync(db._conn!),
+      db,
+      store: openStore(db, {
+        encrypt: (s: string) => Buffer.from(s, 'utf8'),
+        decrypt: (b: Buffer) => b.toString('utf8'),
+        detectLanguages: () => ['eng'],
+      }),
+      dbPath: path.join(dir, 'a.db'),
+      workerFile: '',
+      log: () => undefined,
+      nowMs: over.nowMs,
+    });
+    const prefs = createPrefs(
+      path.join(dir, 'prefs'),
+      createDbUserPrefsStore(db, () => !!over.writes?.on || !svc.readOnly()),
+    );
+    await prefs.ready;
+    const extensions = {
+      reconcileExtensions: jest.fn(async () => undefined),
+      failedExtensions: () => [],
+      hasPendingExtensionRecords: () => false,
+      offerExtensions: () => ({}),
+      unionExtensions: async () => [],
+      ...over.extensions,
+    };
+    const handlers: Record<string, (r: unknown) => unknown> = {};
+    const settingsDeps = (h: typeof handlers) => ({
+      prefs,
+      sync: svc,
+      extensions: extensions as never,
+      handlers: h,
+      afterPromote: () => undefined,
+      syncExtensions: async () => undefined,
+      onNoMaster: () => undefined,
+      log: () => undefined,
+      retryEveryMs: 1000,
+      nowMs: over.nowMs ?? Date.now,
+      setInterval: (() => ({ unref: () => undefined })) as never,
+    });
+    const promote = async (epoch: number) => {
+      await svc.lead({ epoch });
+      await svc.open('head-acked');
+    };
+    const rows = () => db!._conn!.prepare(`SELECT id, attempts FROM sync_outbound`).all();
+    return { svc, prefs, extensions, handlers, settingsDeps, promote, rows };
+  }
+
+  it('a copy queues an ext pref, is promoted, and the drain dispatches the row locally through the shipped runner with notify', async () => {
+    const r = await rig();
+    const settings = installSettingsSync(r.settingsDeps({}));
+    await r.prefs.setExt('kiagent.x.y', { a: 1 });
+    expect(r.rows()).toHaveLength(1);
+    expect(r.prefs.hasQueued('kiagent.x.y')).toBe(true);
+    const seen: unknown[] = [];
+    r.prefs.onExtChange((k, v) => seen.push([k, v]));
+    r.svc.setRunners({ ui: jest.fn(), commit: jest.fn(), core: settings.coreRunner });
+    await r.promote(2);
+    expect(r.rows()).toEqual([]);
+    expect(r.prefs.hasQueued('kiagent.x.y')).toBe(false);
+    expect(r.prefs.getExt('kiagent.x.y')).toEqual({ a: 1 });
+    expect(seen).toEqual([['kiagent.x.y', { a: 1 }]]);
+  });
+
+  it("a promoted leader's setEnabled on an id with a queued switch: no deadlock, one reconcile at most, overlay empty", async () => {
+    jest.setTimeout(10_000);
+    const ops = fakeOps([{ id: 'a', origin: 'marketplace', enabled: true, ref: 'github:kia-plugins/a@1' }]);
+    let setSync: ReturnType<typeof createExtensionSync>;
+    const r = await rig({
+      extensions: { reconcileExtensions: jest.fn(async () => void (await setSync.runFromStore())) },
+    });
+    setSync = createExtensionSync({
+      store: {
+        get: () => r.prefs.getCore('core.extensions') as never,
+        canWrite: () => !r.svc.readOnly(),
+        update: (fn) => r.prefs.updateCore('core.extensions', (cur) => fn(cur as never)),
+      },
+      ops,
+      log: () => undefined,
+    });
+    const handlers = r.handlers;
+    handlers['extension:set-enabled'] = (req) => {
+      const { id, enabled } = req as { id: string; enabled: boolean };
+      return setSync.act(
+        () => ops.setEnabled(id, enabled),
+        () => ({ kind: 'enabled', id, enabled }),
+      );
+    };
+    installSettingsSync(r.settingsDeps(handlers));
+    // The copy switches `a` off with no leader: applied here, queued.
+    await handlers['extension:set-enabled']({ id: 'a', enabled: false });
+    expect(r.prefs.hasQueued('core.extensions.a')).toBe(true);
+    // No runners are bound, so the promotion's drain leaves the row waiting.
+    await r.promote(2);
+    expect(r.rows()).toHaveLength(1);
+    let timer: NodeJS.Timeout | undefined;
+    const done = await Promise.race([
+      Promise.resolve(handlers['extension:set-enabled']({ id: 'a', enabled: true })).then(() => 'done'),
+      new Promise((res) => {
+        timer = setTimeout(() => res('deadlock'), 5000);
+      }),
+    ]);
+    clearTimeout(timer);
+    expect(done).toBe('done');
+    await new Promise((res) => setTimeout(res, 50));
+    expect(r.extensions.reconcileExtensions.mock.calls.length).toBeLessThanOrEqual(1);
+    expect(r.prefs.hasQueued('core.extensions.a')).toBe(false);
+    expect(r.rows()).toEqual([]);
+    expect((r.prefs.getCore('core.extensions') as Record<string, { enabled: boolean }>).a.enabled).toBe(true);
+  });
+
+  it('the fifth refusal emits stuck once and the overlay entry shows it; a later drain does not emit again', async () => {
+    const t = { now: 1_000_000 };
+    const writes = { on: false };
+    const r = await rig({ nowMs: () => t.now, writes });
+    installSettingsSync(r.settingsDeps({}));
+    await r.prefs.setExt('kiagent.x.y', 7);
+    const stuck: unknown[] = [];
+    r.svc.onQueueChange((e) => e.kind === 'stuck' && stuck.push(e));
+    r.svc.setForwarder(async () => ({ ok: false, code: 'handler', message: 'bad' }));
+    const drain = async () => {
+      await r.svc.drainOutbound();
+      t.now += 24 * 60 * 60_000;
+    };
+    for (let i = 0; i < 4; i += 1) await drain();
+    expect(stuck).toEqual([]);
+    // Not stuck yet: a device that writes still shows the queued value.
+    writes.on = true;
+    expect(r.prefs.getExt('kiagent.x.y')).toBe(7);
+    writes.on = false;
+    await drain();
+    expect(stuck).toEqual([{ kind: 'stuck', rowId: 1, coalesceKey: 'kiagent.x.y' }]);
+    writes.on = true;
+    expect(r.prefs.getExt('kiagent.x.y')).toBeUndefined();
+    writes.on = false;
+    await drain();
+    await drain();
+    expect(stuck).toHaveLength(1);
+  });
+
+  it('an old in-flight row never marks its newer replacement', async () => {
+    const writes = { on: false };
+    const r = await rig({ writes });
+    installSettingsSync(r.settingsDeps({}));
+    await r.prefs.setExt('kiagent.x.y', 1);
+    await r.prefs.setExt('kiagent.x.y', 2);
+    const [row] = r.rows() as { id: number }[];
+    expect(row.id).toBe(2);
+    r.prefs.onQueueChange({ kind: 'stuck', rowId: 1, coalesceKey: 'kiagent.x.y' });
+    writes.on = true;
+    expect(r.prefs.getExt('kiagent.x.y')).toBe(2);
+    r.prefs.onQueueChange({ kind: 'stuck', rowId: 2, coalesceKey: 'kiagent.x.y' });
+    expect(r.prefs.getExt('kiagent.x.y')).toBeUndefined();
   });
 });
