@@ -1022,8 +1022,10 @@ export function createSyncService(deps: SyncServiceDeps): SyncService {
       // tracked, not fenced and not a follower, with no restart.
       await deps.db.run(
         `UPDATE sync_state SET role = 'normal', tracking = 0, after_seq = 0,
-           after_cursor = 0, history_id = NULL, master_device_id = NULL`,
+           after_cursor = 0, history_id = NULL, master_device_id = NULL,
+           joining = 0, joined = 0, head_pending = 0, pre_demote_epoch = NULL`,
       );
+      // role() reports leader/solo from here until the next lease report.
       // The lease described the account this device led; the wipe forgets it.
       leaseNow = null;
       fenceGen += 1;

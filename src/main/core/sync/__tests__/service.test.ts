@@ -174,3 +174,18 @@ it('resetState on a fenced tracking device clears the half gate: writable, a lea
     store.createAccount({ source: 's', identifier: 'i' }),
   ).resolves.toBeDefined();
 }, 60_000);
+
+it('resetState on a joining device returns sync_state to a plain seed: joining, joined, head_pending cleared', async () => {
+  await sync.lead({ epoch: 1 });
+  await sync.beginJoin();
+  await db.run(`UPDATE sync_state SET joined = 1, head_pending = 1`);
+  await sync.resetState();
+  expect(sync.readOnly()).toBe(false);
+  const st = await sync.status();
+  expect(st.joining).toBe(false);
+  expect(st.joined).toBe(false);
+  expect(st.headPending).toBe(false);
+  expect(
+    await db.all(`SELECT joining, joined, head_pending, pre_demote_epoch FROM sync_state`),
+  ).toEqual([{ joining: 0, joined: 0, head_pending: 0, pre_demote_epoch: null }]);
+}, 60_000);
