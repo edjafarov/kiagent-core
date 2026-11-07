@@ -292,12 +292,18 @@ describe('lead', () => {
     expect(d.svc.readOnly()).toBe(false);
   });
 
-  it('on a tracking leader is a no-op whatever the epoch', async () => {
+  it('on a tracking leader is a no-op for an epoch that is not newer', async () => {
     const d = await device(leader);
-    await d.svc.lead({ epoch: 9 });
+    await d.svc.lead({ epoch: 1 });
     await d.svc.lead({ epoch: 0 });
     expect(state(d)).toMatchObject({ epoch: 1, head_pending: 0 });
     expect(epochs(d)).toEqual([]);
+  });
+
+  it('on a tracking leader advances to a newer epoch (D3)', async () => {
+    const d = await device(leader);
+    await d.svc.lead({ epoch: 9 });
+    expect(state(d)).toMatchObject({ epoch: 9, head_pending: 0 });
   });
 });
 

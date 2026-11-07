@@ -26,6 +26,22 @@ export interface PromoteOptions {
   headPending?: boolean;
 }
 
+/** Raises both counters to the start of `epoch`'s range (never lowers them). */
+function raiseCounters(conn: BetterSqlite3.Database, epoch: number): void {
+  // sqlite_sequence has no unique key, so INSERT OR REPLACE would add a second
+  // row beside the existing one, and SQLite reads the first. Update what is
+  // there; a table that never had an insert has no row, so only then insert.
+  const raise = conn.prepare(`UPDATE sqlite_sequence SET seq = max(seq, ?) WHERE name = ?`);
+  const create = conn.prepare(
+    `INSERT INTO sqlite_sequence(name, seq)
+     SELECT ?, ? WHERE NOT EXISTS (SELECT 1 FROM sqlite_sequence WHERE name = ?)`,
+  );
+  for (const name of COUNTERS) {
+    raise.run(epoch * EPOCH_GAP, name);
+    create.run(name, epoch * EPOCH_GAP, name);
+  }
+}
+
 export function promote(
   conn: BetterSqlite3.Database,
   epoch: number,
@@ -50,18 +66,7 @@ export function promote(
       )
       .run(epoch, opts.headPending ? 1 : 0);
     if (done) return;
-    // sqlite_sequence has no unique key, so INSERT OR REPLACE would add a second
-    // row beside the existing one, and SQLite reads the first. Update what is
-    // there; a table that never had an insert has no row, so only then insert.
-    const raise = conn.prepare(`UPDATE sqlite_sequence SET seq = max(seq, ?) WHERE name = ?`);
-    const create = conn.prepare(
-      `INSERT INTO sqlite_sequence(name, seq)
-       SELECT ?, ? WHERE NOT EXISTS (SELECT 1 FROM sqlite_sequence WHERE name = ?)`,
-    );
-    for (const name of COUNTERS) {
-      raise.run(epoch * EPOCH_GAP, name);
-      create.run(name, epoch * EPOCH_GAP, name);
-    }
+    raiseCounters(conn, epoch);
     enableTracking(conn);
     // After the triggers exist, so this is the first tracked row and travels.
     conn
@@ -104,7 +109,7 @@ export function lead(
   conn: BetterSqlite3.Database,
   epoch: number,
   opts: { relayImported?: boolean } = {},
-): 'promoted' | 'seeded' | 'noop' {
+): 'promoted' | 'seeded' | 'advanced' | 'noop' {
   const s = conn
     .prepare(`SELECT role, tracking, epoch FROM sync_state`)
     .get() as { role: string; tracking: number; epoch: number };
@@ -113,7 +118,21 @@ export function lead(
     promote(conn, epoch, { ...opts, headPending: true });
     return 'promoted';
   }
-  if (s.tracking === 1) return 'noop';
+  if (s.tracking === 1) {
+    // A tracking leader told to lead a newer epoch (the previous leader
+    // vanished) moves into it: counters first, so the grant is the raised value.
+    if (epoch <= s.epoch) return 'noop';
+    conn.transaction(() => {
+      raiseCounters(conn, epoch);
+      const seq = (conn.prepare(`SELECT seq FROM sqlite_sequence WHERE name = 'changes'`).get() as { seq: number }).seq;
+      const cursor = (conn.prepare(`SELECT seq FROM sqlite_sequence WHERE name = 'sync_rows'`).get() as { seq: number }).seq;
+      conn
+        .prepare(`INSERT OR IGNORE INTO sync_epochs(epoch, grant_seq, grant_cursor) VALUES (?, ?, ?)`)
+        .run(epoch, seq, cursor);
+      conn.prepare(`UPDATE sync_state SET epoch = ?`).run(epoch);
+    })();
+    return 'advanced';
+  }
   conn.transaction(() => {
     enableTracking(conn);
     conn
