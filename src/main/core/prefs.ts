@@ -152,6 +152,15 @@ export type UserPrefKey = (typeof USER_PREF_KEYS)[number];
 const USER_KEY_SET: ReadonlySet<string> = new Set(USER_PREF_KEYS);
 const tableKey = (k: string): string => `core.${k}`;
 
+/** The user's keys of a patch that arrived from another device; any other key
+ *  (a device setting, a non-object) is dropped. */
+export function pickUserKeys(p: unknown): Partial<AppPrefs> {
+  const out: Record<string, unknown> = {};
+  if (p === null || typeof p !== 'object') return out as Partial<AppPrefs>;
+  for (const [k, v] of Object.entries(p)) if (USER_KEY_SET.has(k) && v !== undefined) out[k] = v;
+  return out as Partial<AppPrefs>;
+}
+
 export function splitPatch(p: Partial<AppPrefs>): {
   user: Partial<AppPrefs>;
   device: Partial<AppPrefs>;

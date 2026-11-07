@@ -53,6 +53,7 @@ import {
 } from './host-profile';
 import { createLogs } from './logs';
 import { createDbUserPrefsStore, createPrefs, type CorePrefs } from './prefs';
+import { restoreQueuedSettings } from './sync/settings-sync';
 import { createScheduler } from './scheduler';
 import type { CoreScheduler } from './scheduler';
 import { bootPhase, canWrite, gateEngine, readSyncGate } from './sync/role';
@@ -475,6 +476,8 @@ export async function bootCore(deps: BootDeps): Promise<CorePlatform> {
   // The user's preferences come from the copied table from here on; a device
   // that can write it moves any it still keeps in prefs.json there, once.
   await prefs.attachUser(createDbUserPrefsStore(db, () => !sync.readOnly()));
+  // What was queued before the last quit shows again, before anything serves an edit.
+  await restoreQueuedSettings(prefs, sync, (c, l, m) => sink.log(c, l, m));
   const gate = gateEngine(engine, () => sync.readOnly(), sync);
   // A follower's copied rows change only by what the master sends.
   let archiveSweep = false;

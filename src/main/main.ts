@@ -83,7 +83,6 @@ import {
 } from './core/sync/forward-core';
 import {
   installSettingsSync,
-  restoreQueuedSettings,
 } from './core/sync/settings-sync';
 import { runCommitBatch, type CommitInput } from './core/sync/owned';
 import { followerLookup } from './core/sync/role';
@@ -925,14 +924,6 @@ function registerIpc(
     nowMs: Date.now,
     setInterval,
   });
-  // What was queued before the last quit shows again.
-  void restoreQueuedSettings(p.prefs, p.sync).catch((err) =>
-    p.logSink.log(
-      'sync',
-      'warn',
-      `queued settings were not restored: ${String(err)}`,
-    ),
-  );
   p.sync.setRunners({
     ui: async (extensionId, name, payload) => {
       const r = await extensions.callUi(extensionId, name, payload);

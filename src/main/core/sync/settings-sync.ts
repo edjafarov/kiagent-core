@@ -4,7 +4,7 @@
  *  changes arrive by the feed; connectors retry; a join's offer carries this
  *  device's settings. Main calls `installSettingsSync` once, after the
  *  preferences, the sync service and the extension platform exist. */
-import type { CorePrefs } from '../prefs';
+import { pickUserKeys, type CorePrefs } from '../prefs';
 import type { ExtensionPlatform } from '../../platform/extension-platform';
 import {
   forwardCore,
@@ -218,6 +218,9 @@ export function installSettingsSync(d: SettingsSyncDeps): {
       await prefs.setExt(key, value, { notify: true });
       return undefined;
     }
+    // A copy may only send user keys: a device key in a forwarded patch is
+    // this leader's own business, never another device's.
+    if (name === 'prefs:patch') return prefs.patch(pickUserKeys(req));
     const local = forwardedLocal.get(name);
     if (!local) throw new Error(`${name} is not a forwarded channel`);
     return local(req);
@@ -225,12 +228,18 @@ export function installSettingsSync(d: SettingsSyncDeps): {
   return { forwardedLocal, coreRunner };
 }
 
-/** Boot, once the preferences have attached: what was queued before the last
- *  quit shows again. */
+/** Boot, once the preferences have attached and before anything serves an
+ *  edit: what was queued before the last quit shows again. A queue that cannot
+ *  be read leaves the overlay empty and is logged, never thrown. */
 export async function restoreQueuedSettings(
   prefs: Pick<CorePrefs, 'ready' | 'restoreQueued'>,
   sync: Pick<SyncService, 'queuedSettings'>,
+  log: (category: string, level: 'warn', msg: string) => void,
 ): Promise<void> {
-  await prefs.ready;
-  prefs.restoreQueued(await sync.queuedSettings());
+  try {
+    await prefs.ready;
+    prefs.restoreQueued(await sync.queuedSettings());
+  } catch (err) {
+    log('sync', 'warn', `queued settings were not restored: ${String(err)}`);
+  }
 }

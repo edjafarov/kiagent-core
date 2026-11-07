@@ -27,6 +27,7 @@ interface Wired {
   enabled: Map<string, boolean>;
   calls: Record<string, jest.Mock>;
   reconcile: jest.Mock;
+  coreRunner: (name: string, req: unknown) => Promise<unknown>;
 }
 const wired: Wired[] = [];
 const dirs: string[] = [];
@@ -103,7 +104,7 @@ async function wire(follower = true, existingDir?: string): Promise<Wired> {
     setInterval: ((..._a: unknown[]) => ({ unref() {} })) as never,
   });
   const local = settings.forwardedLocal;
-  const w = { dir, db, svc, prefs, table, local, refusals, enabled, calls, reconcile };
+  const w = { dir, db, svc, prefs, table, local, refusals, enabled, calls, reconcile, coreRunner: settings.coreRunner };
   wired.push(w);
   return w;
 }
@@ -306,7 +307,7 @@ it('restoreQueued after a restart shows the queued value again', async () => {
   wired.splice(wired.indexOf(w), 1);
   const again = await wire(true, w.dir);
   expect(again.prefs.get().theme).toBe('system');
-  await restoreQueuedSettings(again.prefs, again.svc);
+  await restoreQueuedSettings(again.prefs, again.svc, () => undefined);
   expect(again.prefs.get().theme).toBe('dark');
   expect(again.prefs.getCore(EXTENSIONS_KEY)).toEqual({ 'conn.a': { enabled: true } });
 });
@@ -352,4 +353,48 @@ it('a reconcile that fails does not fail the discard', async () => {
   await w.table['extension:set-enabled']({ id: 'conn.a', enabled: true });
   const [row] = await w.svc.queuedSettings();
   await expect(w.svc.discardQueued(row.rowId)).resolves.toBeUndefined();
+});
+
+it('a row queued before quit is in the overlay before any handler is registered, so an edit replaces the row', async () => {
+  const w = await wire();
+  await w.prefs.patch({ theme: 'dark' });
+  expect(rows(w)).toEqual([{ kind: 'prefs:patch', k: 'core.theme' }]);
+  await w.db.close();
+  wired.splice(wired.indexOf(w), 1);
+  // Boot's order: the preferences attach, the queue is restored, then the handlers serve.
+  const again = await wire(true, w.dir);
+  await restoreQueuedSettings(again.prefs, again.svc, () => undefined);
+  await again.local.get('prefs:patch')!({ theme: 'light' });
+  expect(again.prefs.get().theme).toBe('light');
+  const out = again.db._conn!.prepare(`SELECT coalesce_key AS k, payload FROM sync_outbound`).all() as { k: string; payload: Buffer }[];
+  expect(out).toHaveLength(1);
+  expect(JSON.stringify(JSON.parse(out[0].payload.toString('utf8')).payload)).toBe('{"theme":"light"}');
+});
+
+it('queuedSettings rejecting leaves an empty overlay and the first edit forwards', async () => {
+  const w = await wire();
+  const log = jest.fn();
+  const sync = { queuedSettings: async () => { throw new Error('db gone'); } };
+  await restoreQueuedSettings(w.prefs, sync, log);
+  expect(log).toHaveBeenCalledTimes(1);
+  expect(log.mock.calls[0][2]).toMatch(/^queued settings were not restored: /);
+  const forward = jest.fn(async () => ({ ok: true as const, value: undefined }));
+  w.svc.setForwarder(forward as never);
+  await w.prefs.patch({ theme: 'dark' });
+  expect(forward).toHaveBeenCalledTimes(1);
+});
+
+it('a forwarded prefs:patch with a device key leaves the leader\'s prefs.json unchanged', async () => {
+  const w = await wire(false);
+  w.svc.setRunners({ ui: jest.fn(), core: w.coreRunner as never, commit: jest.fn() });
+  const file = path.join(w.dir, 'prefs', 'prefs.json');
+  await w.prefs.patch({ theme: 'dark' });
+  const before = fs.readFileSync(file, 'utf8');
+  const launch = w.prefs.get().launchAtLogin;
+  const r = await w.svc.runForwarded({ kind: 'core', name: 'prefs:patch', payload: { launchAtLogin: !launch } } as never);
+  expect(r.ok).toBe(true);
+  expect(w.prefs.get().launchAtLogin).toBe(launch);
+  expect(fs.readFileSync(file, 'utf8')).toBe(before);
+  await w.svc.runForwarded({ kind: 'core', name: 'prefs:patch', payload: { theme: 'light' } } as never);
+  expect(w.prefs.get().theme).toBe('light');
 });
