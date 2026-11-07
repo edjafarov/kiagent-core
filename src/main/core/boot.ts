@@ -550,6 +550,7 @@ export async function bootCore(deps: BootDeps): Promise<CorePlatform> {
         archiveSweep: startArchiveSweep,
         ledgerRekey: () => void ledgerRekey.then((r) => r.kick()),
         attachHeld: gate.attachHeld,
+        release: gate.release,
       }),
     sync,
     startLedgerRekey: () => {
@@ -713,25 +714,27 @@ export async function promoteCore(
     archiveSweep(): void;
     ledgerRekey(): void;
     attachHeld(): Promise<void>;
+    /** Ends the gate's hold, so the account runs below start. */
+    release?(): void;
   },
 ): Promise<void> {
-  // One re-drive body: `resumeHeld` resumes the accounts, then attaches through
-  // this gate, which runs the leader-only maintenance before the held workers.
-  await resumeHeld(platform, {
-    attachHeld: async () => {
-      hooks.archiveSweep();
-      hooks.ledgerRekey();
-      await hooks.attachHeld();
-    },
+  hooks.release?.();
+  await resumeAccounts(platform, {
+    skip: (a) => notMineToRun(a, platform.sync.deviceId()),
   });
+  hooks.archiveSweep();
+  hooks.ledgerRekey();
+  await hooks.attachHeld();
 }
 
 /** The one re-drive body: accounts that are mine to run, then the held
  *  workers. Not `promote()`: no archive sweep, no ledger re-key. */
 export async function resumeHeld(
   platform: CorePlatform,
-  gate: { attachHeld(): Promise<void> },
+  gate: { attachHeld(): Promise<void>; release?(): void },
 ): Promise<void> {
+  // The hold ends first: a run started while it holds is an unstarted proxy.
+  gate.release?.();
   const me = platform.sync.deviceId();
   await resumeAccounts(platform, { skip: (a) => notMineToRun(a, me) });
   await gate.attachHeld();

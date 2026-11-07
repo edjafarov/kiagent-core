@@ -30,7 +30,8 @@ afterEach(async () => {
 
 const svc = (readOnly = false) =>
   createSyncService({
-    db, store, dbPath: db._conn!.name, workerFile: '', deviceId: () => 'seedseed-9999', readOnly: () => readOnly,
+    db, store, dbPath: db._conn!.name, workerFile: '', deviceId: () => 'seedseed-9999',
+    ...(readOnly ? { bootGate: { role: 'follower' as const, joining: false, joined: true, tracking: false } } : {}),
   });
 const offer = { prefs: { 'a.b': 1 }, extensions: { 'kia.x': { enabled: true, ref: 'github:kia-plugins/x@v1' } } };
 

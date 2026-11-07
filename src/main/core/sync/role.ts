@@ -1,6 +1,6 @@
 /** A follower reads, and applies what the master sends, and writes nothing
- *  else (spec 7.6). The role is set by the swap at boot and read once, so no
- *  device changes role while running. */
+ *  else (spec 7.6). The role flips while the app runs (lease loss, promotion);
+ *  the gate follows it and the running work is held or resumed with it. */
 import type BetterSqlite3 from 'better-sqlite3';
 
 import type { Handle, LeaseSnapshot, SyncRoleWire } from '@shared/contracts';
@@ -11,6 +11,7 @@ import { isDeviceOwned } from './sources';
 export type SyncRole = 'normal' | 'follower';
 
 export class SyncReadOnly extends Error {
+  readonly code = 'SYNC_READ_ONLY';
   constructor(what: string) {
     super(`this device is a read-only copy: ${what}`);
     this.name = 'SyncReadOnly';
@@ -211,6 +212,8 @@ export function gateEngine(
 ): {
   attachHeld(): Promise<void>;
   closeWriter(): Promise<void>;
+  /** Ends the hold, so a resume's account runs start. `attachHeld` calls it. */
+  release(): void;
   holding(): boolean;
 } {
   const e = engine as Record<string, (...a: unknown[]) => unknown>;
@@ -302,8 +305,13 @@ export function gateEngine(
         );
       }
     },
+    release() {
+      holding = false;
+    },
     async attachHeld() {
       holding = false;
+      // Still read-only (a cancelled join on a follower): keep them held.
+      if (readOnly()) return;
       for (const p of held.splice(0)) {
         if (p.stopped) continue;
         start(p, () => real.attach.call(engine, p.worker));

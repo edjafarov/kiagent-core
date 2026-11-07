@@ -575,7 +575,7 @@ describe('importSources', () => {
     conn().prepare(`UPDATE sync_state SET joining = 1`).run();
     sync = createSyncService({
       db, store, dbPath: conn().name, workerFile: '', deviceId: () => SEED,
-      encryptStrict: (s) => Buffer.from(s), keystoreAvailable: () => true, readOnly: () => true,
+      encryptStrict: (s) => Buffer.from(s), keystoreAvailable: () => true, bootGate: { role: 'normal', joining: true, joined: false, tracking: false },
     });
     expect(sync.canAcceptSources()).toBe(false);
     await expect(sync.importSources('o1', [offer()] as never, JOINER)).rejects.toThrow();
@@ -612,19 +612,6 @@ describe('the archive a join leaves behind', () => {
     await sync.deleteArchive();
     expect(readSyncStatus(conn()).archiveBytes).toBe(0);
     expect(fs.existsSync(conn().name)).toBe(true);
-  });
-});
-
-describe('readOnly is read at each call', () => {
-  it('a promotion needs no new wiring', async () => {
-    let ro = true;
-    const sync = createSyncService({
-      db, store, dbPath: conn().name, workerFile: '', deviceId: () => 'seedseed-9999',
-      encryptStrict: (x) => Buffer.from(x), keystoreAvailable: () => true, readOnly: () => ro,
-    });
-    expect(sync.canAcceptSources()).toBe(false);
-    ro = false;
-    expect(sync.canAcceptSources()).toBe(true);
   });
 });
 

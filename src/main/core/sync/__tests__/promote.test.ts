@@ -9,7 +9,7 @@ import { openDbInWorker } from '@main/db/worker-client';
 import type { AppDb } from '@main/db/app-db';
 import type { Account, LeaseSnapshot } from '@shared/contracts';
 
-import { promoteCore, resumeAccounts, type CorePlatform } from '../../boot';
+import { promoteCore, resumeAccounts, resumeHeld, type CorePlatform } from '../../boot';
 import { openStore, type CoreStore } from '../../store/store';
 import { notMineToRun } from '../sources';
 import { readSyncGate } from '../role';
@@ -25,6 +25,8 @@ let store: CoreStore;
 let sync: SyncService;
 let execArgv: string[];
 let promoted = 0;
+let holdWork: (() => Promise<void>) | undefined;
+let resumeWork: (() => Promise<void>) | undefined;
 
 const open = async () => {
   db = await openDbInWorker(dbPath, entry, { execArgv });
@@ -42,12 +44,16 @@ const open = async () => {
     execArgv,
     bootGate: await readSyncGate(db),
     onOpen: async () => void (promoted += 1),
+    holdWork: () => (holdWork ? holdWork() : Promise.resolve()),
+    resumeWork: () => (resumeWork ? resumeWork() : Promise.resolve()),
   });
   await sync.setDeviceId('me-device');
 };
 
 beforeEach(async () => {
   promoted = 0;
+  holdWork = undefined;
+  resumeWork = undefined;
   dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sync-promote-'));
   dbPath = path.join(dir, 'kiagent.db');
   const preload = path.join(dir, 'preload.js');
@@ -264,6 +270,80 @@ describe('promote', () => {
       after_seq: head.s,
       after_cursor: head.c,
     });
+  });
+});
+
+describe('one order for the held work', () => {
+  it('beginJoin stops an attached worker before joining flips, holds it, and logs no SyncReadOnly', async () => {
+    const seen: string[] = [];
+    holdWork = async () => {
+      // Joining has not flipped yet, so a worker finishing its write is fine.
+      seen.push(`hold readOnly=${sync.readOnly()}`);
+      await expect(write()).resolves.toBeTruthy();
+    };
+    await sync.beginJoin();
+    expect(seen).toEqual(['hold readOnly=false']);
+    expect(sync.readOnly()).toBe(true);
+  });
+
+  it('leaveJoin reattaches once and a stopped live-source account run resumes', async () => {
+    const runs: string[] = [];
+    let attached = 0;
+    const p = {
+      store: {
+        read: {
+          accounts: async () => [
+            { id: 'live', source: 'gmail', identifier: 'x', status: 'live', cursor: { c: 1 }, config: {}, ownerDeviceId: null },
+          ],
+        },
+      },
+      sources: { get: (id: string) => ({ descriptor: { id } }) },
+      logSink: { log: () => undefined },
+      engine: { run: (a: Account) => (runs.push(a.id), {}), isRunning: () => false },
+      scheduler: { register: jest.fn() },
+      sync: { deviceId: () => 'me-device' },
+    } as unknown as CorePlatform;
+    resumeWork = () => resumeHeld(p, { attachHeld: async () => void (attached += 1) });
+    await sync.beginJoin();
+    await sync.leaveJoin();
+    expect(attached).toBe(1);
+    expect(runs).toEqual(['live']);
+  });
+
+  it('open() does not resume the work', async () => {
+    let resumed = 0;
+    resumeWork = async () => void (resumed += 1);
+    await sync.lead({ epoch: 1 });
+    await sync.open('head-acked');
+    expect(resumed).toBe(0);
+  });
+
+  it('fence-on: the worker observes the fence before any stop resolves, and the quiesced handles are held', async () => {
+    await sync.lead({ epoch: 1 });
+    await sync.open('head-acked');
+    const seen: string[] = [];
+    holdWork = async () => {
+      seen.push(`readOnly=${sync.readOnly()}`);
+      await expect(write()).rejects.toThrow(/read-only/);
+      seen.push('stopped');
+    };
+    await sync.setLease(lease({ isMaster: false, reason: 'follower' }));
+    expect(seen).toEqual(['readOnly=true', 'stopped']);
+    seen.length = 0;
+    await sync.open('lease');
+    await sync.demote('m1');
+    expect(seen).toEqual(['readOnly=true', 'stopped']);
+  });
+
+  it('a holdWork rejection leaves the fence on and setLease resolved', async () => {
+    await sync.lead({ epoch: 1 });
+    await sync.open('head-acked');
+    holdWork = () => Promise.reject(new Error('stuck'));
+    await expect(
+      sync.setLease(lease({ isMaster: false, reason: 'follower' })),
+    ).resolves.toBeUndefined();
+    expect(sync.readOnly()).toBe(true);
+    await expect(write()).rejects.toThrow(/read-only/);
   });
 });
 

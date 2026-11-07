@@ -6,6 +6,7 @@ import path from 'path';
 
 import Database from 'better-sqlite3';
 
+import { resumeHeld } from '../../boot';
 import { migrate } from '../../store/schema';
 import { createWriteTx } from '../../store/write-tx';
 import { followerLookup, gateEngine, readRoleSync, SyncReadOnly } from '../role';
@@ -179,6 +180,54 @@ describe('closeWriter', () => {
     stops.forEach((r) => r());
     await closing;
     expect(real.run).toHaveBeenCalledTimes(2);
+  });
+
+  it('D1: a resume after closeWriter re-drives the account runs and re-attaches the held workers', async () => {
+    const { e, stops } = mk();
+    const real = { run: e.run, attach: e.attach };
+    const g = gateEngine(e as never, () => false);
+    eng(e).attach({ id: 'a1' });
+    const closing = g.closeWriter();
+    stops.forEach((r) => r());
+    await closing;
+    (real.attach as jest.Mock).mockClear();
+    const platform = {
+      store: {
+        read: {
+          accounts: async () => [
+            { id: 'acc', source: 'gmail', identifier: 'x', status: 'live', cursor: { c: 1 }, config: {}, ownerDeviceId: null },
+          ],
+        },
+      },
+      sources: { get: (id: string) => ({ descriptor: { id } }) },
+      logSink: { log: () => undefined },
+      engine: { run: (a: unknown) => eng(e).run(a), isRunning: () => false },
+      scheduler: { register: jest.fn() },
+      sync: { deviceId: () => 'me' },
+    };
+    await resumeHeld(platform as never, g);
+    expect(real.run).toHaveBeenCalledTimes(1);
+    expect(real.run).toHaveBeenCalledWith(expect.objectContaining({ id: 'acc' }));
+    expect(real.attach).toHaveBeenCalledTimes(1);
+  });
+
+  it('D2: attachHeld on a read-only device keeps the workers held until it can write', async () => {
+    const { e, stops } = mk();
+    const real = { run: e.run, attach: e.attach };
+    let ro = true;
+    const g = gateEngine(e as never, () => ro);
+    const h = eng(e).attach({ id: 'a1' });
+    expect(real.attach).not.toHaveBeenCalled();
+    const closing = g.closeWriter();
+    stops.forEach((r) => r());
+    await closing;
+    await g.attachHeld();
+    expect(real.attach).not.toHaveBeenCalled();
+    expect(g.holding()).toBe(false);
+    ro = false;
+    await g.attachHeld();
+    expect(real.attach).toHaveBeenCalledTimes(1);
+    expect(h.status).toBe('running');
   });
 
   it('a caller that stopped its handle while held is not reattached', async () => {

@@ -696,8 +696,7 @@ export function createEngine(deps: EngineDeps): Engine & {
     if (!wasRunning) return;
     try {
       const now = await store.account(accountId);
-      if (now && !isResting(now.status))
-        engine.run(now);
+      if (now && !isResting(now.status)) engine.run(now);
     } catch {
       // Swallowed on purpose — see above.
     }
@@ -933,118 +932,129 @@ export function createEngine(deps: EngineDeps): Engine & {
     const h0 = await store.consumerCursor(consumer);
     const reads = deps.reads ?? store.read;
     const pageSize = deps.seedPageSize ?? SEED_PAGE;
-    for (;;) {
-      if (signal.aborted) return false;
-      // eslint-disable-next-line no-await-in-loop
-      const page = await reads.seedPage!({
-        afterSeq: after,
-        throughSeq: h0,
-        limit: pageSize,
-      });
-      if (page.length === 0) break;
-      let emitted: DocumentInput[] = [];
-      let enrich: EnrichInput[] = [];
-      let clear: string[] = [];
-      let ledger: LedgerEntry[] = [];
-      let staged = 0;
-      const worked: string[] = [];
-      // As attach's dropBatch: nothing crashed, so clear the session.bump
-      // counters of what returned. The seed cursor stays put and the
-      // unflushed ledger entries are discarded with their outputs. No
-      // consumer cursor: the real row stays at h0 (#147 §4 contract).
-      const dropPage = () =>
-        worked.length
-          ? store.commit({ consumer, clearAttempts: worked }).catch(() => {})
-          : undefined;
-      /** One bounded seed write: an admitted `convert` unit like every
-       *  consumer flush (#147 §4). It carries the outputs and the ledger
-       *  outcomes worked so far in ONE transaction, under the REAL consumer
-       *  (its synthetic worker account), and never a consumer `cursor` — the
-       *  real row stays at h0 (#59 §3a). Only the page's last flush carries
-       *  `seedCursor`: a crash after an intermediate flush re-works the page
-       *  from the old seed cursor (idempotent: emissions key on
-       *  (consumer, seq), the ledger upserts). */
-      const flush = async (seedCursor?: Seq): Promise<void> => {
-        const hasOutput =
-          emitted.length > 0 ||
-          enrich.length > 0 ||
-          clear.length > 0 ||
-          ledger.length > 0;
-        if (!hasOutput && seedCursor === undefined) return;
-        let release: () => void;
-        try {
-          release = await admission.acquire('convert', signal);
-        } catch (err) {
-          if (signal.aborted) await dropPage();
-          throw err;
-        }
-        try {
-          await store.commit({
-            consumer,
-            ...(seedCursor !== undefined ? { seedCursor } : {}),
-            ledger: ledger.length ? ledger : undefined,
-            documents: emitted.length ? emitted : undefined,
-            enrich: enrich.length ? enrich : undefined,
-            clearAttempts: clear.length ? clear : undefined,
-          });
-        } finally {
-          release();
-        }
-        emitted = [];
-        enrich = [];
-        clear = [];
-        ledger = [];
-        staged = 0;
-      };
-      for (const document of page) {
-        if (signal.aborted) {
-          // eslint-disable-next-line no-await-in-loop
-          await dropPage();
-          return false;
-        }
-        const change: Change = {
-          seq: document.seq,
-          kind: 'document',
-          document,
-        };
-        let matched = false;
-        try {
-          matched = worker.matches(change);
-        } catch (err) {
-          logs.log(
-            `worker:${worker.name}`,
-            'warn',
-            `matches() threw on seq ${change.seq} — treated as non-match: ${String(err)}`,
-          );
-        }
-        if (!matched) continue;
+    let gateClosed = false;
+    try {
+      for (;;) {
+        if (signal.aborted) return false;
         // eslint-disable-next-line no-await-in-loop
-        const r = await workOne(worker, change, signal, 'convert');
-        worked.push(document.id);
-        ledger.push({
-          seq: change.seq,
-          attempts: r.attempts,
-          outcome: r.outcome,
+        const page = await reads.seedPage!({
+          afterSeq: after,
+          throughSeq: h0,
+          limit: pageSize,
         });
-        emitted.push(...r.docs);
-        enrich.push(...r.enrich);
-        if (r.outcome === 'done') clear.push(document.id);
-        staged +=
-          r.docs.reduce((n, d) => n + textBytes(d), 0) +
-          r.enrich.reduce((n, e) => n + textBytes(e), 0);
+        if (page.length === 0) break;
+        let emitted: DocumentInput[] = [];
+        let enrich: EnrichInput[] = [];
+        let clear: string[] = [];
+        let ledger: LedgerEntry[] = [];
+        let staged = 0;
+        const worked: string[] = [];
+        // As attach's dropBatch: nothing crashed, so clear the session.bump
+        // counters of what returned. The seed cursor stays put and the
+        // unflushed ledger entries are discarded with their outputs. No
+        // consumer cursor: the real row stays at h0 (#147 §4 contract).
+        const dropPage = () =>
+          worked.length
+            ? store.commit({ consumer, clearAttempts: worked }).catch(() => {})
+            : undefined;
+        /** One bounded seed write: an admitted `convert` unit like every
+         *  consumer flush (#147 §4). It carries the outputs and the ledger
+         *  outcomes worked so far in ONE transaction, under the REAL consumer
+         *  (its synthetic worker account), and never a consumer `cursor` — the
+         *  real row stays at h0 (#59 §3a). Only the page's last flush carries
+         *  `seedCursor`: a crash after an intermediate flush re-works the page
+         *  from the old seed cursor (idempotent: emissions key on
+         *  (consumer, seq), the ledger upserts). */
+        const flush = async (seedCursor?: Seq): Promise<void> => {
+          const hasOutput =
+            emitted.length > 0 ||
+            enrich.length > 0 ||
+            clear.length > 0 ||
+            ledger.length > 0;
+          if (!hasOutput && seedCursor === undefined) return;
+          let release: () => void;
+          try {
+            release = await admission.acquire('convert', signal);
+          } catch (err) {
+            if (signal.aborted) await dropPage();
+            throw err;
+          }
+          try {
+            await store.commit({
+              consumer,
+              ...(seedCursor !== undefined ? { seedCursor } : {}),
+              ledger: ledger.length ? ledger : undefined,
+              documents: emitted.length ? emitted : undefined,
+              enrich: enrich.length ? enrich : undefined,
+              clearAttempts: clear.length ? clear : undefined,
+            });
+          } catch (err) {
+            // A closed role gate mid-commit: seedConsumer stops silently.
+            if ((err as { code?: unknown })?.code === 'SYNC_READ_ONLY')
+              gateClosed = true;
+            throw err;
+          } finally {
+            release();
+          }
+          emitted = [];
+          enrich = [];
+          clear = [];
+          ledger = [];
+          staged = 0;
+        };
+        for (const document of page) {
+          if (signal.aborted) {
+            // eslint-disable-next-line no-await-in-loop
+            await dropPage();
+            return false;
+          }
+          const change: Change = {
+            seq: document.seq,
+            kind: 'document',
+            document,
+          };
+          let matched = false;
+          try {
+            matched = worker.matches(change);
+          } catch (err) {
+            logs.log(
+              `worker:${worker.name}`,
+              'warn',
+              `matches() threw on seq ${change.seq} — treated as non-match: ${String(err)}`,
+            );
+          }
+          if (!matched) continue;
+          // eslint-disable-next-line no-await-in-loop
+          const r = await workOne(worker, change, signal, 'convert');
+          worked.push(document.id);
+          ledger.push({
+            seq: change.seq,
+            attempts: r.attempts,
+            outcome: r.outcome,
+          });
+          emitted.push(...r.docs);
+          enrich.push(...r.enrich);
+          if (r.outcome === 'done') clear.push(document.id);
+          staged +=
+            r.docs.reduce((n, d) => n + textBytes(d), 0) +
+            r.enrich.reduce((n, e) => n + textBytes(e), 0);
+          // eslint-disable-next-line no-await-in-loop
+          if (staged >= SUB_COMMIT_BYTES) await flush();
+        }
+        after = page[page.length - 1].seq;
+        // The page's last flush: its remaining outputs and ledger outcomes
+        // plus the seed progress, in one transaction. A crash before it
+        // re-works the page from the old seed cursor; after it, every deferral
+        // behind the seed cursor already has its retry row.
         // eslint-disable-next-line no-await-in-loop
-        if (staged >= SUB_COMMIT_BYTES) await flush();
+        await flush(after);
       }
-      after = page[page.length - 1].seq;
-      // The page's last flush: its remaining outputs and ledger outcomes
-      // plus the seed progress, in one transaction. A crash before it
-      // re-works the page from the old seed cursor; after it, every deferral
-      // behind the seed cursor already has its retry row.
-      // eslint-disable-next-line no-await-in-loop
-      await flush(after);
+      await store.endSeed(consumer);
+      return true;
+    } catch (err) {
+      if (gateClosed) return false;
+      throw err;
     }
-    await store.endSeed(consumer);
-    return true;
   };
 
   const engine = {
@@ -1485,6 +1495,10 @@ export function createEngine(deps: EngineDeps): Engine & {
             } catch (err) {
               await reconciling;
               if (abort.signal.aborted) return;
+              // The role gate closed mid-commit (a lease loss fenced this
+              // device): the hold stops this run next; it is not a failure.
+              if ((err as { code?: unknown })?.code === 'SYNC_READ_ONLY')
+                return;
               const msg = String(err instanceof Error ? err.message : err);
               // Taxonomy branch — keyed on the `code` PROPERTY, never
               // instanceof (extension-proxied errors are rehydrated plain
@@ -2033,8 +2047,7 @@ export function createEngine(deps: EngineDeps): Engine & {
       // resumeAccounts).
       if (!running.has(`account:${accountId}`)) return;
       const fresh = await store.account(accountId);
-      if (fresh && !isResting(fresh.status))
-        engine.run(fresh);
+      if (fresh && !isResting(fresh.status)) engine.run(fresh);
     },
 
     async setOption(
@@ -2064,8 +2077,7 @@ export function createEngine(deps: EngineDeps): Engine & {
       // Restart gate mirrors updateConfig's.
       if (!running.has(`account:${accountId}`)) return;
       const fresh = await store.account(accountId);
-      if (fresh && !isResting(fresh.status))
-        engine.run(fresh);
+      if (fresh && !isResting(fresh.status)) engine.run(fresh);
     },
 
     attach(worker: Worker): Handle {

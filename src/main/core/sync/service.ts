@@ -273,9 +273,6 @@ export interface SyncServiceDeps {
   start?: (accountId: string) => void | Promise<void>;
   /** The busy registry's first reason, or null. */
   busy?: () => string | null;
-  /** This device is a follower or joining: it takes no offers. An extra hold
-   *  on top of what `sync_state` says; the service tracks that itself. */
-  readOnly?: () => boolean;
   /** Quiesces the running work (the gate's `closeWriter`). */
   holdWork?: () => Promise<void>;
   /** Starts it again (`resumeHeld`). */
@@ -326,8 +323,7 @@ export function createSyncService(deps: SyncServiceDeps): SyncService {
   // tell a lease arrived meanwhile.
   let leaseSeq = 0;
   const phase = (): SyncPhase => phaseOf({ ...row, fenced });
-  const readOnly = (): boolean =>
-    !canWrite(phase()) || (deps.readOnly?.() ?? false);
+  const readOnly = (): boolean => !canWrite(phase());
   const roleNow = (): SyncRoleWire => ({
     ...roleOf({ phase: phase(), lease: leaseNow }),
     multiDevice: leaseNow?.multiDevice ?? false,
@@ -358,6 +354,19 @@ export function createSyncService(deps: SyncServiceDeps): SyncService {
     // sent after this call.
     void deps.db.proc?.('syncFence', { on })?.catch(() => undefined);
   };
+  const holdRunningWork = (): Promise<void> =>
+    Promise.resolve(deps.holdWork?.()).catch((err) =>
+      log('warn', `sync: holding the running work failed: ${String(err)}`),
+    );
+  // A non-master lease arrived since `seq` that setLease exempted (the device
+  // was a seed then): true when this unfenced normal device must close now.
+  const overtakenSeed = (seq: number, needsTracking: boolean): boolean =>
+    leaseSeq !== seq &&
+    !fenced &&
+    row.role === 'normal' &&
+    (!needsTracking || !!row.tracking) &&
+    !!leaseNow &&
+    (leaseNow.reason === 'fenced' || !leaseNow.isMaster);
   const refreshGate = async (): Promise<void> => {
     const rows = await deps.db.all(
       `SELECT role, joining, joined, tracking, head_pending, epoch FROM sync_state`,
@@ -790,6 +799,9 @@ export function createSyncService(deps: SyncServiceDeps): SyncService {
     masterName: () =>
       masterId ? (names.get(masterId) ?? masterId.slice(0, 8)) : null,
     beginJoin: async () => {
+      // Hold first: the running work stops before joining flips, so nothing
+      // is cut mid-write and no SyncReadOnly is logged.
+      await deps.holdWork?.();
       await deps.db.run(`UPDATE sync_state SET joining = 1`);
       await refreshGate();
     },
@@ -842,6 +854,7 @@ export function createSyncService(deps: SyncServiceDeps): SyncService {
       await deps.db.run(`UPDATE sync_state SET joining = 0`);
       await refreshGate();
       await deps.db.run(PAUSE_MOVED_SQL);
+      await deps.resumeWork?.();
     },
     forgetMoved: async () => {
       await deps.db.run(
@@ -978,6 +991,8 @@ export function createSyncService(deps: SyncServiceDeps): SyncService {
       await refreshGate();
       if (!fenced && closes()) setFence(true);
       publishRole();
+      // The worker has the fence (syncFence is posted); now quiesce the work.
+      if (fenced) await holdRunningWork();
     },
     lead: async (o) => {
       const seq = leaseSeq;
@@ -1000,27 +1015,12 @@ export function createSyncService(deps: SyncServiceDeps): SyncService {
       // A seed overtaken while tracking turned on is fenced before the row
       // can report it as a tracking leader (refreshGate awaits after it
       // assigns `row`).
-      if (
-        leaseSeq !== seq &&
-        !fenced &&
-        row.role === 'normal' &&
-        leaseNow &&
-        (leaseNow.reason === 'fenced' || !leaseNow.isMaster)
-      )
-        setFence(true);
+      if (overtakenSeed(seq, false)) setFence(true);
       await refreshGate();
       // A seed is never fenced; a seed that becomes a tracking leader while a
       // non-master lease arrived (setLease exempted it, tracking was 0) is
       // fenced at the moment tracking turns on.
-      if (
-        leaseSeq !== seq &&
-        !fenced &&
-        row.role === 'normal' &&
-        row.tracking &&
-        leaseNow &&
-        (leaseNow.reason === 'fenced' || !leaseNow.isMaster)
-      )
-        setFence(true);
+      if (overtakenSeed(seq, true)) setFence(true);
       publishRole();
     },
     open: async (kind) => {
@@ -1076,6 +1076,7 @@ export function createSyncService(deps: SyncServiceDeps): SyncService {
       await deps.db.proc!('syncDemote', { masterDeviceId });
       await refreshGate();
       publishRole();
+      await holdRunningWork();
     },
     role: roleNow,
     onRole: (cb) => void roleListeners.push(cb),
