@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.120.3](https://github.com/edjafarov/kiagent-core/compare/v0.120.2...v0.120.3) (2026-11-07)
+
+### Bug Fixes
+
+* **core:** the overtaken-seed fence does not fire on a follower's takeover; lead() keeps the rig's lease sequence ([8bed6fc](https://github.com/edjafarov/kiagent-core/commit/8bed6fcd1340bc96850d625da1470b801df2d5fc))
+
 ## [0.120.2](https://github.com/edjafarov/kiagent-core/compare/v0.120.1...v0.120.2) (2026-11-07)
 
 ### Bug Fixes
