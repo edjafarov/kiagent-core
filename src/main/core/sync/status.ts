@@ -110,15 +110,41 @@ export function readSyncStatus(conn: BetterSqlite3.Database): DeviceSyncStatus {
 export const swapOutcomePath = (dbPath: string): string =>
   `${dbPath}.swap-outcome`;
 
-export function readSwapOutcome(
-  dbPath: string,
-): 'swapped' | 'abandoned' | null {
+/** The swap's recorded result. `markId` and `attempt` are set only by a
+ *  keep-archive swap; a legacy bare-string file reads as both null. */
+export interface SwapRecord {
+  outcome: 'swapped' | 'abandoned';
+  markId: string | null;
+  attempt: number | null;
+}
+
+export function readSwapRecord(dbPath: string): SwapRecord | null {
+  let v: string;
   try {
-    const v = fs.readFileSync(swapOutcomePath(dbPath), 'utf8');
-    return v === 'swapped' || v === 'abandoned' ? v : null;
+    v = fs.readFileSync(swapOutcomePath(dbPath), 'utf8');
   } catch {
     return null;
   }
+  if (v === 'swapped' || v === 'abandoned') {
+    return { outcome: v, markId: null, attempt: null };
+  }
+  try {
+    const j = JSON.parse(v) as Partial<SwapRecord>;
+    if (j.outcome !== 'swapped' && j.outcome !== 'abandoned') return null;
+    return {
+      outcome: j.outcome,
+      markId: typeof j.markId === 'string' ? j.markId : null,
+      attempt: typeof j.attempt === 'number' ? j.attempt : null,
+    };
+  } catch {
+    return null;
+  }
+}
+
+export function readSwapOutcome(
+  dbPath: string,
+): 'swapped' | 'abandoned' | null {
+  return readSwapRecord(dbPath)?.outcome ?? null;
 }
 
 /** The old database a join set aside, with its WAL and SHM files. */

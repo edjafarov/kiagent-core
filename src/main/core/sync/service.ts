@@ -49,7 +49,12 @@ import {
   type SyncRole,
 } from './role';
 import { archiveFiles, swapOutcomePath } from './status';
-import { dropPendingSwap } from './swap';
+import {
+  clearSwapStatus,
+  dropPendingSwap,
+  findPassedOverArchive,
+  swapStatus,
+} from './swap';
 
 export type Secret = SecretWire;
 export type ForwardRequest = ForwardRequestWire;
@@ -109,11 +114,25 @@ export interface SyncService {
   /** Tells `cb` which copied tables each applied delta touched, so extensions
    *  can refresh (platform bus event `sync.applied`). Core-internal. */
   onApplied(cb: (tables: string[], meta: AppliedMeta) => void): void;
+  /** `opts.keepArchive`: the old file always becomes a tagged archive (never
+   *  restorable) and the outcome carries `markId` and `attempt`. */
   prepareSwap(
     file: string,
     sha256: string,
     masterDeviceId: string,
+    opts?: { keepArchive: true; markId: string; attempt: number },
   ): Promise<'ready' | 'no-disk' | 'invalid'>;
+  /** Read-only: a swap waiting for the next boot, and the last one's result. */
+  swapStatus(): Promise<{
+    pending: boolean;
+    outcome: 'ok' | 'failed' | null;
+    markId: string | null;
+    attempt: number | null;
+  }>;
+  /** Clears the swap outcome only when it is for this `markId` and `attempt`. */
+  clearSwapStatus(markId: string, attempt: number): Promise<void>;
+  /** True when an archive's sidecar names this `markId` and `attempt`. */
+  findPassedOverArchive(markId: string, attempt: number): Promise<boolean>;
   /** Next boot, this device goes back to its archived data. */
   prepareRestore(): Promise<'ready' | 'no-archive'>;
   /** Hands a write to the leader through the forwarder `remote-mcp` installed.
@@ -637,8 +656,13 @@ export function createSyncService(deps: SyncServiceDeps): SyncService {
     onApplied: (cb) => {
       appliedListeners.push(cb);
     },
-    prepareSwap: (file, sha256, masterDeviceId) =>
-      onWorker('prepareSwap', { file, sha256, masterDeviceId }),
+    prepareSwap: (file, sha256, masterDeviceId, opts) =>
+      onWorker('prepareSwap', { file, sha256, masterDeviceId, opts }),
+    swapStatus: async () => swapStatus(deps.dbPath),
+    clearSwapStatus: (markId, attempt) =>
+      clearSwapStatus(deps.dbPath, markId, attempt),
+    findPassedOverArchive: (markId, attempt) =>
+      findPassedOverArchive(deps.dbPath, markId, attempt),
     prepareRestore: () => onWorker('prepareRestore'),
     forward,
     setForwarder: (f) => {

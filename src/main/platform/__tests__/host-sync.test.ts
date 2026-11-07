@@ -97,6 +97,9 @@ describe('through an in-memory extension host (messages cloned across the hop)',
         applyDelta: note('applyDelta', { applied: 2 }),
         prepareSwap: note('prepareSwap', 'ready'),
         prepareRestore: note('prepareRestore', 'no-archive'),
+        swapStatus: note('swapStatus', { pending: false, outcome: null, markId: null, attempt: null }),
+        clearSwapStatus: note('clearSwapStatus', undefined),
+        findPassedOverArchive: note('findPassedOverArchive', false),
         setDeviceId: note('setDeviceId', undefined),
         beginJoin: note('beginJoin', undefined),
         exportSources: note('exportSources', [{ source: 'gmail' }]),
@@ -218,7 +221,9 @@ describe('through an in-memory extension host (messages cloned across the hop)',
       { prefs: { 'a.b': 1 }, extensions: {} },
     ]);
     expect(seen.buildDelta).toEqual([{ seq: 1, cursor: 2 }, 'out', 5, 3]);
-    expect(seen.prepareSwap).toEqual(['f', 'h', 'm']);
+    expect(seen.prepareSwap).toEqual(['f', 'h', 'm', { keepArchive: true, markId: 'k', attempt: 1 }]);
+    expect(seen.clearSwapStatus).toEqual(['k', 1]);
+    expect(seen.findPassedOverArchive).toEqual(['k', 1]);
     expect(Object.keys(seen).sort()).toEqual([...SYNC_SURFACE_METHODS].sort());
   });
 });

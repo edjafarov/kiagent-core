@@ -2048,7 +2048,16 @@ export interface CapSurfaces {
         file: string,
         sha256: string,
         masterDeviceId: string,
+        opts?: { keepArchive: true; markId: string; attempt: number },
       ): Promise<'ready' | 'no-disk' | 'invalid'>;
+      swapStatus(): Promise<{
+        pending: boolean;
+        outcome: 'ok' | 'failed' | null;
+        markId: string | null;
+        attempt: number | null;
+      }>;
+      clearSwapStatus(markId: string, attempt: number): Promise<void>;
+      findPassedOverArchive(markId: string, attempt: number): Promise<boolean>;
       prepareRestore(): Promise<'ready' | 'no-archive'>;
       /** Stores the id and, once on a device that never joined, claims its
        *  device-owned accounts under `<identifier>#<id8>`. */
@@ -2144,6 +2153,9 @@ export const SYNC_SURFACE_METHODS = [
   'applyDelta',
   'prepareSwap',
   'prepareRestore',
+  'swapStatus',
+  'clearSwapStatus',
+  'findPassedOverArchive',
   'setDeviceId',
   'setDeviceNames',
   'beginJoin',

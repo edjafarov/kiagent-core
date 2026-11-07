@@ -342,16 +342,16 @@ describe('swap', () => {
         if (s === 'outcome') throw new Error('crash');
       }),
     ).toThrow('crash');
-    expect(fs.readFileSync(`${receiver}.swap-outcome`, 'utf8')).toBe('swapped');
+    expect(JSON.parse(fs.readFileSync(`${receiver}.swap-outcome`, 'utf8')).outcome).toBe('swapped');
     expect(applyPendingSwap(receiver)).toBe('swapped');
-    expect(fs.readFileSync(`${receiver}.swap-outcome`, 'utf8')).toBe('swapped');
+    expect(JSON.parse(fs.readFileSync(`${receiver}.swap-outcome`, 'utf8')).outcome).toBe('swapped');
   });
 
   it('an abandoned swap leaves an outcome too, and the next prepareSwap clears the old one', async () => {
     await ready();
     fs.writeFileSync(`${receiver}.swap-incoming`, 'not a database');
     expect(applyPendingSwap(receiver)).toBe('abandoned');
-    expect(fs.readFileSync(`${receiver}.swap-outcome`, 'utf8')).toBe('abandoned');
+    expect(JSON.parse(fs.readFileSync(`${receiver}.swap-outcome`, 'utf8')).outcome).toBe('abandoned');
     const r = snapshot();
     expect(prepareSwap(receiver, snap, r.sha256, MASTER_ID)).toBe('ready');
     expect(fs.existsSync(`${receiver}.swap-outcome`)).toBe(false);

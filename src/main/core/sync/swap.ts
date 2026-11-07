@@ -9,7 +9,7 @@ import Database from 'better-sqlite3';
 
 import { hashFile, SNAPSHOT_META } from './snapshot';
 import { pauseMovedAccounts } from './sources';
-import { swapOutcomePath } from './status';
+import { readSwapRecord, swapOutcomePath } from './status';
 import {
   COPIED_CORE_TABLES,
   isDerivedTable,
@@ -19,7 +19,11 @@ import {
 } from './tables';
 
 export const SWAP_STEPS = ['committed', 'merged', 'archived', 'replaced', 'outcome'] as const;
-type SwapStep = (typeof SWAP_STEPS)[number] | 'restore-merged' | 'restore-moved';
+type SwapStep =
+  | (typeof SWAP_STEPS)[number]
+  | 'incoming-renamed'
+  | 'restore-merged'
+  | 'restore-moved';
 
 interface Journal {
   masterDeviceId: string;
@@ -27,6 +31,18 @@ interface Journal {
   merged: boolean;
   replacesCopy?: boolean;
   archive: string;
+  /** Set by a keep-archive swap: the old file always becomes a tagged archive. */
+  keepArchive?: boolean;
+  markId?: string;
+  attempt?: number;
+  /** When the swap was prepared; the sidecar carries it. */
+  at?: string;
+}
+
+export interface KeepArchiveOpts {
+  keepArchive: true;
+  markId: string;
+  attempt: number;
 }
 
 const journalPath = (db: string) => `${db}.swap.json`;
@@ -35,9 +51,12 @@ const mergedPath = (db: string) => `${db}.swap-merged`;
 
 /** The swap's result, durable before the journal goes: the join reads it at
  *  boot and must never be told nothing happened when it did. */
-const writeOutcome = (db: string, v: 'swapped' | 'abandoned'): void => {
+const writeOutcome = (db: string, v: 'swapped' | 'abandoned', j: Journal): void => {
   const tmp = `${swapOutcomePath(db)}.tmp`;
-  fs.writeFileSync(tmp, v);
+  fs.writeFileSync(
+    tmp,
+    JSON.stringify({ outcome: v, markId: j.markId ?? null, attempt: j.attempt ?? null }),
+  );
   fs.renameSync(tmp, swapOutcomePath(db));
 };
 
@@ -56,16 +75,36 @@ const roleOf = (dbPath: string): string | undefined => {
   }
 };
 
+const sidecarPath = (archive: string) => `${archive}.passed-over.json`;
+
+/** Written from the journal, tmp + rename, before the archive moves, so no
+ *  crash point leaves a tagged history looking plain. Idempotent. */
+function ensureSidecar(j: Journal): void {
+  if (!j.keepArchive || fs.existsSync(sidecarPath(j.archive))) return;
+  const tmp = `${sidecarPath(j.archive)}.tmp`;
+  fs.writeFileSync(
+    tmp,
+    JSON.stringify({ markId: j.markId, holder: j.masterDeviceId, at: j.at, attempt: j.attempt }),
+  );
+  fs.renameSync(tmp, sidecarPath(j.archive));
+}
+
+const defaultFree = (dbPath: string) => () => {
+  const s = fs.statfsSync(path.dirname(dbPath));
+  return Number(s.bavail) * Number(s.bsize);
+};
+
+/** `opts` may stand in the fifth place when `freeBytes` is not needed. */
 export function prepareSwap(
   dbPath: string,
   file: string,
   sha256: string,
   masterDeviceId: string,
-  freeBytes: () => number = () => {
-    const s = fs.statfsSync(path.dirname(dbPath));
-    return Number(s.bavail) * Number(s.bsize);
-  },
+  freeOrOpts?: (() => number) | KeepArchiveOpts,
+  maybeOpts?: KeepArchiveOpts,
 ): 'ready' | 'no-disk' | 'invalid' {
+  const freeBytes = typeof freeOrOpts === 'function' ? freeOrOpts : defaultFree(dbPath);
+  const opts = typeof freeOrOpts === 'function' || freeOrOpts === undefined ? maybeOpts : freeOrOpts;
   if (hashFile(file) !== sha256) return 'invalid';
   // The file was already downloaded here, so only the local tables are new.
   // They can't outgrow the database they come from.
@@ -74,18 +113,82 @@ export function prepareSwap(
   if (freeBytes() < needed) return 'no-disk';
   fs.renameSync(file, incomingPath(dbPath));
   fs.rmSync(swapOutcomePath(dbPath), { force: true });
-  const stamp = new Date().toISOString().replace(/\D/g, '').slice(0, 14);
+  const now = new Date();
+  const stamp = now.toISOString().replace(/\D/g, '').slice(0, 14);
+  // A second archive within the same second must not replace the first.
+  let archive = `${dbPath}.archive-${stamp}`;
+  for (let i = 1; fs.existsSync(archive) || fs.existsSync(sidecarPath(archive)); i++) {
+    archive = `${dbPath}.archive-${stamp}-${i}`;
+  }
   writeJournal(dbPath, {
     masterDeviceId,
     merged: false,
-    replacesCopy: roleOf(dbPath) === 'follower',
-    archive: `${dbPath}.archive-${stamp}`,
+    replacesCopy: opts?.keepArchive ? false : roleOf(dbPath) === 'follower',
+    archive,
+    ...(opts?.keepArchive
+      ? { keepArchive: true, markId: opts.markId, attempt: opts.attempt, at: now.toISOString() }
+      : {}),
   });
   return 'ready';
 }
 
+/** A downloaded snapshot with no journal is debris from a crash between the
+ *  two writes in `prepareSwap`; delete it. True when something was removed. */
+export function dropOrphanIncoming(dbPath: string): boolean {
+  if (fs.existsSync(journalPath(dbPath)) || !fs.existsSync(incomingPath(dbPath))) return false;
+  fs.rmSync(incomingPath(dbPath), { force: true });
+  return true;
+}
+
+/** Whether a swap is waiting, and what the last one decided (spec D4). */
+export function swapStatus(dbPath: string): {
+  pending: boolean;
+  outcome: 'ok' | 'failed' | null;
+  markId: string | null;
+  attempt: number | null;
+} {
+  const r = readSwapRecord(dbPath);
+  return {
+    pending: fs.existsSync(journalPath(dbPath)) || fs.existsSync(restorePath(dbPath)),
+    outcome: r ? (r.outcome === 'swapped' ? 'ok' : 'failed') : null,
+    markId: r?.markId ?? null,
+    attempt: r?.attempt ?? null,
+  };
+}
+
+/** Removes the outcome only when it is the one for this mark and attempt. */
+export async function clearSwapStatus(dbPath: string, markId: string, attempt: number): Promise<void> {
+  const r = readSwapRecord(dbPath);
+  if (r && r.markId === markId && r.attempt === attempt) {
+    fs.rmSync(swapOutcomePath(dbPath), { force: true });
+  }
+}
+
+/** Proof that a keep-archive swap for this mark and attempt moved the old file. */
+export async function findPassedOverArchive(
+  dbPath: string,
+  markId: string,
+  attempt: number,
+): Promise<boolean> {
+  const dir = path.dirname(dbPath);
+  const prefix = `${path.basename(dbPath)}.archive-`;
+  for (const f of fs.readdirSync(dir)) {
+    if (!f.startsWith(prefix) || !f.endsWith('.passed-over.json')) continue;
+    try {
+      const s = JSON.parse(fs.readFileSync(path.join(dir, f), 'utf8')) as {
+        markId?: string;
+        attempt?: number;
+      };
+      if (s.markId === markId && s.attempt === attempt) return true;
+    } catch {
+      /* unreadable sidecar: not proof */
+    }
+  }
+  return false;
+}
+
 /** Adds every local table of `old` to the snapshot at `file`. */
-function mergeLocalTables(file: string, old: string, masterDeviceId: string): void {
+function mergeLocalTables(file: string, old: string, masterDeviceId: string, keepArchive = false): void {
   const db = new Database(file);
   try {
     db.pragma('foreign_keys = OFF');
@@ -129,9 +232,13 @@ function mergeLocalTables(file: string, old: string, masterDeviceId: string): vo
         (d) => d.type === 'table' && !copied(d.name) && !shadow.has(d.name),
       );
       const isVirtual = (sql: string) => /^CREATE\s+VIRTUAL/i.test(sql);
+      // A keep-archive swap takes the snapshot's join state: the old file's
+      // published rows stay in the archive, so a later promote can't publish
+      // a key or a delete that exists only there.
+      const dropsRows = (name: string) => keepArchive && name === 'sync_rows';
       for (const t of localTables) db.exec(t.sql);
       for (const t of localTables) {
-        if (isVirtual(t.sql)) continue;
+        if (isVirtual(t.sql) || dropsRows(t.name)) continue;
         db.exec(`INSERT INTO main."${t.name}" SELECT * FROM old."${t.name}"`);
       }
       for (const s of shadow) {
@@ -162,8 +269,14 @@ function mergeLocalTables(file: string, old: string, masterDeviceId: string): vo
       }
       db.exec(
         `DELETE FROM main.sqlite_sequence;
-         INSERT INTO main.sqlite_sequence(name, seq) SELECT name, seq FROM old.sqlite_sequence;`,
+         INSERT INTO main.sqlite_sequence(name, seq) SELECT name, seq FROM old.sqlite_sequence
+          WHERE ${keepArchive ? `name <> 'sync_rows'` : '1'};`,
       );
+      if (keepArchive) {
+        db.prepare(`INSERT INTO main.sqlite_sequence(name, seq) VALUES('sync_rows', ?)`).run(
+          meta.after_cursor,
+        );
+      }
       // Followers read `changes` through headSeq and the feed. Delete rather
       // than drop, so sqlite_sequence keeps numbers from being reused.
       const now = new Date().toISOString();
@@ -175,7 +288,7 @@ function mergeLocalTables(file: string, old: string, masterDeviceId: string): vo
       db.prepare(
         `UPDATE main.sync_state SET role = 'follower', tracking = 0, joining = 0,
            after_seq = ?, after_cursor = ?, history_id = ?, master_device_id = ?, epoch = ?,
-           pre_demote_epoch = NULL`,
+           pre_demote_epoch = NULL${keepArchive ? ', joined = 1' : ''}`,
       ).run(meta.after_seq, meta.after_cursor, meta.history_id, masterDeviceId, meta.epoch);
       db.exec(`DROP TABLE main.${SNAPSHOT_META}`);
     })();
@@ -199,7 +312,8 @@ export function prepareRestore(dbPath: string): 'ready' | 'no-archive' {
   const prefix = `${path.basename(dbPath)}.archive-`;
   const newest = fs
     .readdirSync(dir)
-    .filter((f) => f.startsWith(prefix) && /\d$/.test(f))
+    // An archive with a sidecar is a history the account abandoned: never restored.
+    .filter((f) => f.startsWith(prefix) && /\d$/.test(f) && !fs.existsSync(sidecarPath(path.join(dir, f))))
     .sort()
     .pop();
   if (!newest) return 'no-archive';
@@ -362,11 +476,16 @@ export function applyPendingSwap(
   crashAt: (step: SwapStep) => void = () => undefined,
 ): 'none' | 'swapped' | 'abandoned' | 'restored' {
   if (fs.existsSync(restorePath(dbPath))) return applyRestore(dbPath, crashAt);
-  if (!fs.existsSync(journalPath(dbPath))) return 'none';
+  if (!fs.existsSync(journalPath(dbPath))) {
+    dropOrphanIncoming(dbPath);
+    return 'none';
+  }
   const j = JSON.parse(fs.readFileSync(journalPath(dbPath), 'utf8')) as Journal;
   const merged = mergedPath(dbPath);
 
   if (!j.merged) {
+    // A crash injected inside the try is a crash, not a failed merge.
+    let injected: { e: unknown } | null = null;
     try {
       // Fold the old WAL in first, so the archive is one standalone file.
       const old = new Database(dbPath);
@@ -376,23 +495,33 @@ export function applyPendingSwap(
       // a crash during it leaves this file as it arrived.
       if (fs.existsSync(incomingPath(dbPath))) {
         fs.renameSync(incomingPath(dbPath), merged);
+        try {
+          crashAt('incoming-renamed');
+        } catch (e) {
+          injected = { e };
+          throw e;
+        }
       }
-      mergeLocalTables(merged, dbPath, j.masterDeviceId);
+      mergeLocalTables(merged, dbPath, j.masterDeviceId, j.keepArchive === true);
     } catch {
+      if (injected) throw (injected as { e: unknown }).e;
       // Nothing has touched the old database, so it stays this device's data.
       // Retrying would fail the same way at every boot.
       fs.rmSync(incomingPath(dbPath), { force: true });
       fs.rmSync(merged, { force: true });
       fs.rmSync(`${merged}-wal`, { force: true });
       fs.rmSync(`${merged}-shm`, { force: true });
-      writeOutcome(dbPath, 'abandoned');
+      writeOutcome(dbPath, 'abandoned', j);
       fs.rmSync(journalPath(dbPath), { force: true });
       return 'abandoned';
     }
     crashAt('committed');
     writeJournal(dbPath, { ...j, merged: true });
+    ensureSidecar(j);
     crashAt('merged');
   }
+  // After a crash between the journal and the sidecar, before the archive moves.
+  ensureSidecar(j);
   // Each rename is checked, so a retry after a crash skips what already moved.
   if (j.replacesCopy && fs.existsSync(merged)) {
     // A copy being copied again holds nothing of its own, and the user's real
@@ -409,7 +538,7 @@ export function applyPendingSwap(
     fs.renameSync(merged, dbPath);
     crashAt('replaced');
   }
-  writeOutcome(dbPath, 'swapped');
+  writeOutcome(dbPath, 'swapped', j);
   crashAt('outcome');
   fs.rmSync(journalPath(dbPath), { force: true });
   return 'swapped';
