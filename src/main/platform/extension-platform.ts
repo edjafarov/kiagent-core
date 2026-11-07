@@ -1171,8 +1171,9 @@ export function createExtensionPlatform(
               createNetworkService({
                 owner: serviceOwner,
                 signal: context?.signal,
-                // Compiled test builds only, the product-named extension only, one literal
-                // 127.0.0.1:<port>; undefined (default guard) otherwise.
+                // Compiled test builds only, and only for the extension product.json
+                // names (`testNetExtensionId`): one loopback port from the env.
+                // Undefined (the default guard) otherwise.
                 fetch: scopedTestNetFetch(
                   e.manifest.id,
                   deps.testNetExtensionId,
@@ -2174,7 +2175,9 @@ export function createExtensionPlatform(
     );
   };
   full.uninstall = (id) => {
-    let origin: 'marketplace' | 'dev' | 'bundled' = 'marketplace';
+    // Fail closed: an id with no entry is recorded as 'dev', which writes no
+    // tombstone, never as a marketplace connector.
+    let origin: 'marketplace' | 'dev' | 'bundled' = 'dev';
     return setSync.act(
       () => {
         origin = entries.get(id)?.origin ?? origin;

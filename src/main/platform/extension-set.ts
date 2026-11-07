@@ -139,7 +139,9 @@ export function createExtensionSync(d: {
       if (want.removed) {
         if (have?.origin !== 'marketplace') continue;
         const u = await ops.uninstall(id);
-        if (!u.ok) {
+        // Refused (this device has the connector's accounts): keep it, disabled.
+        // Already disabled means it was kept and reported by an earlier pass.
+        if (!u.ok && have.enabled) {
           const s = await ops.setEnabled(id, false);
           if (!s.ok) fail(id, s.error);
           else fail(id, 'kept: this device has its accounts');
