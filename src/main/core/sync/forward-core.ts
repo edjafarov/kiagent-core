@@ -2,6 +2,8 @@
  *  its r16 correction): the attention action, the outbox channels and the
  *  calendar-out channels. Each is idempotent by id on the leader, so a retry
  *  after a lost reply changes nothing twice. */
+import type { InvokeHandlers } from '@shared/ipc';
+
 import type { SyncService } from './service';
 
 export type ForwardedChannel = (typeof FORWARDED_CHANNELS)[number];
@@ -23,6 +25,13 @@ export const FORWARDED_CHANNELS = [
   'extension:install',
   'extension:uninstall',
 ] as const;
+
+/** Compile-time: every forwarded channel but `prefs:set-ext` (a core-runner
+ *  verb, not an IPC channel) has a handler in main's `InvokeHandlers` table. */
+export type ForwardedHaveHandlers = Exclude<ForwardedChannel, 'prefs:set-ext'> extends keyof InvokeHandlers
+  ? true
+  : never;
+export const forwardedHaveHandlers: ForwardedHaveHandlers = true;
 
 /** Forwarded verbs that are not forwarded whole: the handler splits its own
  *  request and forwards only the part that belongs to the leader (a mixed

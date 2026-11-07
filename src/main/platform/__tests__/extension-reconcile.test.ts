@@ -16,6 +16,7 @@ import { createInMemoryHostPair } from '../transport';
 
 import {
   createExtensionSync,
+  needsInstall,
   type ExtensionOps,
   type ExtensionSetStore,
   type ExtensionsSet,
@@ -85,6 +86,24 @@ function fakeOps(initial: LocalExtension[]) {
 
 const mk = (store: ExtensionSetStore, ops: ExtensionOps) =>
   createExtensionSync({ store, ops, log: () => {} });
+
+describe('needsInstall', () => {
+  const ref = 'github:kia-plugins/x@2';
+  it('installs what is missing only when the set carries a ref', () => {
+    expect(needsInstall(undefined, { ref })).toBe(true);
+    expect(needsInstall(undefined, {})).toBe(false);
+  });
+  it('reinstalls a marketplace extension only when the pinned ref differs', () => {
+    const mp = (r?: string): LocalExtension => ({ id: 'x', origin: 'marketplace', enabled: true, ref: r });
+    expect(needsInstall(mp('github:kia-plugins/x@1'), { ref })).toBe(true);
+    expect(needsInstall(mp(ref), { ref })).toBe(false);
+    expect(needsInstall(mp('github:kia-plugins/x@1'), {})).toBe(false);
+  });
+  it('never reinstalls a bundled or dev extension', () => {
+    for (const origin of ['bundled', 'dev'] as const)
+      expect(needsInstall({ id: 'x', origin, enabled: true, ref: 'a' }, { ref })).toBe(false);
+  });
+});
 
 describe('reconcile', () => {
   it('installs a connector from its ref with consent granted, no prompt', async () => {

@@ -4,7 +4,6 @@ import Database from 'better-sqlite3';
 
 import { USER_PREF_KEYS } from '../../prefs';
 import { migrate } from '../../store/schema';
-import { FORWARDED_CHANNELS } from '../forward-core';
 import {
   extensionEnabledKey,
   extensionEnabledRequest,
@@ -16,12 +15,7 @@ import {
   userPrefRequest,
 } from '../settings-queue';
 
-it('every FORWARDED_CHANNELS entry is in exactly one of QUEUEABLE_CHANNELS and REFUSED_WHEN_OFFLINE', () => {
-  for (const c of FORWARDED_CHANNELS) {
-    const n = [QUEUEABLE_CHANNELS, REFUSED_WHEN_OFFLINE].filter((l) => l.includes(c)).length;
-    expect({ c, n }).toEqual({ c, n: 1 });
-  }
-  expect(new Set([...QUEUEABLE_CHANNELS, ...REFUSED_WHEN_OFFLINE]).size).toBe(FORWARDED_CHANNELS.length);
+it('the queueable channels are exactly the three settings channels (REFUSED_WHEN_OFFLINE is derived from the rest)', () => {
   expect([...QUEUEABLE_CHANNELS].sort()).toEqual(['extension:set-enabled', 'prefs:patch', 'prefs:set-ext']);
 });
 

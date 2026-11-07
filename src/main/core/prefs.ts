@@ -9,6 +9,7 @@ import type {
 } from '@shared/contracts';
 
 import type { AppDb } from '../db/app-db';
+import { USER_PREF_KEYS, type UserPrefKey } from '@shared/user-pref-keys';
 import { SyncNoMaster } from './sync/forward-core';
 import { forwardOrQueue } from './sync/settings-sync';
 import type { ForwardRequest } from './sync/service';
@@ -146,8 +147,7 @@ function sanitize(raw: unknown): AppPrefs {
 /** Preferences that belong to the user and follow them to every device (spec
  *  7.9). They live in the copied table `user_prefs` under `core.<key>`; the
  *  rest stay in `prefs.json` on this machine. */
-export const USER_PREF_KEYS = ['outbound', 'calendar', 'features', 'theme'] as const;
-export type UserPrefKey = (typeof USER_PREF_KEYS)[number];
+export { USER_PREF_KEYS, type UserPrefKey } from '@shared/user-pref-keys';
 
 const USER_KEY_SET: ReadonlySet<string> = new Set(USER_PREF_KEYS);
 const tableKey = (k: string): string => `core.${k}`;

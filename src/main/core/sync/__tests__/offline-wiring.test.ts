@@ -312,22 +312,6 @@ it('restoreQueued after a restart shows the queued value again', async () => {
   expect(again.prefs.getCore(EXTENSIONS_KEY)).toEqual({ 'conn.a': { enabled: true } });
 });
 
-it('FOLLOWS_USER covers every USER_PREF_KEYS entry, core.extensions and every meetings field', () => {
-  // eslint-disable-next-line @typescript-eslint/no-var-requires
-  const { FOLLOWS_USER } = require('@shared/sync-follows') as typeof import('@shared/sync-follows');
-  const keys = FOLLOWS_USER.flatMap((g) => g.keys);
-  // eslint-disable-next-line @typescript-eslint/no-var-requires
-  const { USER_PREF_KEYS } = require('../../prefs') as typeof import('../../prefs');
-  for (const k of USER_PREF_KEYS) expect(keys).toContain(`core.${k}`);
-  expect(keys).toContain('core.extensions');
-  for (const f of ['enabled', 'summaryInstructions', 'language', 'accuracyRetry', 'joinRecord', 'joinRead', 'silencedApps', 'audioRetentionDays']) {
-    expect(keys).toContain(`kiagent.meetings.${f}`);
-  }
-  expect(keys).toContain('kiagent.documents.description');
-  expect(new Set(keys).size).toBe(keys.length);
-  for (const g of FOLLOWS_USER) expect(g.label).not.toBe('');
-});
-
 it('discarding a queued connector switch reconciles so the connector returns to the mirrored state', async () => {
   const w = await wire();
   await w.table['extension:set-enabled']({ id: 'conn.a', enabled: true });

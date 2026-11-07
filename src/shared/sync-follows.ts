@@ -1,10 +1,16 @@
 /** What follows the user to every device (alpha-cent spec 7.9), as the Devices
  *  page lists it. Pure data: the renderer imports it as `@shared/sync-follows`. */
+import { USER_PREF_KEYS, type UserPrefKey } from './user-pref-keys';
+
+const CORE_LABELS: Record<UserPrefKey, string> = {
+  theme: 'Theme',
+  outbound: 'Outbound mode',
+  calendar: 'Calendar defaults',
+  features: 'Feature switches',
+};
+
 export const FOLLOWS_USER: readonly { label: string; keys: string[] }[] = [
-  { label: 'Theme', keys: ['core.theme'] },
-  { label: 'Outbound mode', keys: ['core.outbound'] },
-  { label: 'Calendar defaults', keys: ['core.calendar'] },
-  { label: 'Feature switches', keys: ['core.features'] },
+  ...USER_PREF_KEYS.map((k) => ({ label: CORE_LABELS[k], keys: [`core.${k}`] })),
   { label: 'Connectors on/off', keys: ['core.extensions'] },
   {
     label: 'Meetings settings',

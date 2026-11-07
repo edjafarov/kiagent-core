@@ -81,6 +81,13 @@ function offerable(e: unknown): e is { enabled: boolean; ref?: string } {
   return typeof ref === 'string' && ref.length > 0 && !/^([./\\~]|[A-Za-z]:|file:)/.test(ref);
 }
 
+/** Does `want` call for an install on this device? A missing connector installs
+ *  from its ref (none: a bundled one this build doesn't ship); a marketplace one
+ *  reinstalls when the pinned ref differs from the local one. */
+export function needsInstall(have: LocalExtension | undefined, want: { ref?: string }): boolean {
+  return !have ? !!want.ref : have.origin === 'marketplace' && !!want.ref && have.ref !== want.ref;
+}
+
 export function createExtensionSync(d: {
   store: ExtensionSetStore;
   ops: ExtensionOps;
@@ -118,28 +125,16 @@ export function createExtensionSync(d: {
       // A user action here not yet in the set must not be reverted.
       if (pending.has(id)) continue;
       const have = local.get(id);
-      if (!have) {
-        if (!want.ref) continue; // a bundled extension this build doesn't ship
-        const r = await ops.installFromRef(want.ref, { grantConsent: true });
+      if (needsInstall(have, want)) {
+        const r = await ops.installFromRef(want.ref!, { grantConsent: true });
         if (!r.ok) {
           fail(id, r.error);
           continue;
         }
         installed.push(id);
         await applyEnabled(id, want.enabled);
-      } else if (
-        have.origin === 'marketplace' &&
-        want.ref &&
-        have.ref !== want.ref
-      ) {
-        const r = await ops.installFromRef(want.ref, { grantConsent: true });
-        if (!r.ok) {
-          fail(id, r.error);
-          continue;
-        }
-        installed.push(id);
-        await applyEnabled(id, want.enabled);
-      } else if (have.enabled !== want.enabled) {
+      } else if (have && have.enabled !== want.enabled) {
+        // (no `have`: a bundled extension this build doesn't ship)
         const s = await ops.setEnabled(id, want.enabled);
         if (!s.ok) fail(id, s.error);
       }
