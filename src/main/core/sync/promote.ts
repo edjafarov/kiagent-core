@@ -1,6 +1,9 @@
 /** Role changes in a running app (alpha-cent spec 7.8, step 2). Both run as
  *  one transaction on the writer connection. Promotion never restarts the app;
- *  demotion is followed by one. */
+ *  demotion is followed by one.
+ *
+ *  Rule of the module (D2): an extension uninstall travels as a tombstone in
+ *  `core.extensions` (`removed: true`), never as a row deletion. */
 import type BetterSqlite3 from 'better-sqlite3';
 
 import { SyncEpochBehind } from './role';
@@ -9,8 +12,6 @@ import { enableTracking } from './tracking';
 /** Numbers are never reused: a new master counts from `epoch x 10^10`. */
 export const EPOCH_GAP = 10_000_000_000;
 
-// (D2) An extension uninstall travels as a tombstone in `core.extensions`
-// (`removed: true`), never as a row deletion.
 const COUNTERS = ['changes', 'sync_rows'] as const;
 
 export interface PromoteOptions {

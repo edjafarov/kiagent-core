@@ -28,10 +28,12 @@ export const FORWARDED_CHANNELS = [
 
 /** Compile-time: every forwarded channel but `prefs:set-ext` (a core-runner
  *  verb, not an IPC channel) has a handler in main's `InvokeHandlers` table. */
-export type ForwardedHaveHandlers = Exclude<ForwardedChannel, 'prefs:set-ext'> extends keyof InvokeHandlers
+type ChannelsHaveHandlers = Exclude<ForwardedChannel, 'prefs:set-ext'> extends keyof InvokeHandlers
   ? true
-  : never;
-export const forwardedHaveHandlers: ForwardedHaveHandlers = true;
+  : false;
+type MustBeTrue<T extends true> = T;
+/** Instantiating this is the check: it does not compile when a channel is missing. */
+export type ForwardedHaveHandlers = MustBeTrue<ChannelsHaveHandlers>;
 
 /** Forwarded verbs that are not forwarded whole: the handler splits its own
  *  request and forwards only the part that belongs to the leader (a mixed
