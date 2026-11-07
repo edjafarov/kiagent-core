@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.122.1](https://github.com/edjafarov/kiagent-core/compare/v0.122.0...v0.122.1) (2026-11-07)
+
+### Features
+
+* **sync:** discard a foreign pending swap or restore before recovery ([812e30b](https://github.com/edjafarov/kiagent-core/commit/812e30b69375a9861616e16fd2dae712f5171156))
+
 ## [0.122.0](https://github.com/edjafarov/kiagent-core/compare/v0.121.1...v0.122.0) (2026-11-07)
 
 ### Features
