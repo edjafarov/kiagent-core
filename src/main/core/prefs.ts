@@ -504,7 +504,8 @@ export function createPrefs(dir: string, user?: UserPrefsStore): CorePrefs {
             await forwardOrQueue({
               keys: [...byKey.keys()],
               isHeld: (k) => overlay.has(k),
-              forward: () => forwardUser!(userPart),
+              // A refusal throws out of forwardCore; reaching here is the leader's yes.
+              forward: async () => (await forwardUser!(userPart), { ok: true }),
               enqueue: (key) => {
                 const k = byKey.get(key)!;
                 return queue!.enqueue(userPrefRequest(k, next[k]), { coalesceKey: key });
@@ -633,7 +634,7 @@ export function createPrefs(dir: string, user?: UserPrefsStore): CorePrefs {
             await forwardOrQueue({
               keys: [key],
               isHeld: (k) => overlay.has(k),
-              forward: () => forwardExt!(key, stored),
+              forward: async () => (await forwardExt!(key, stored), { ok: true }),
               enqueue: (k) => queue!.enqueue(extPrefRequest(k, stored), { coalesceKey: k }),
               apply: {
                 forwarded: ackForwarded,

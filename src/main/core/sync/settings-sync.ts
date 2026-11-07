@@ -22,7 +22,9 @@ import type { ForwardRunners, SyncService } from './service';
 export interface ForwardOrQueueOp {
   keys: string[];
   isHeld: (key: string) => boolean;
-  forward: () => Promise<void>;
+  /** Asks the leader. Its answer is the channel's own `{ ok }` value: a
+   *  refusal (`ok: false`) is the leader's answer, not a transport failure. */
+  forward: () => Promise<{ ok: boolean }>;
   /** A change that must also run on this device (a connector switch); a
    *  failed run queues nothing. */
   runLocal?: () => Promise<{ ok: boolean }>;
@@ -35,10 +37,12 @@ const isNoMasterError = (err: unknown): boolean =>
 
 export async function forwardOrQueue(
   op: ForwardOrQueueOp,
-): Promise<'forwarded' | 'queued' | 'local-failed'> {
+): Promise<'forwarded' | 'forward-refused' | 'queued' | 'local-failed'> {
   if (!op.keys.some(op.isHeld)) {
     try {
-      await op.forward();
+      const r = await op.forward();
+      // A value the leader refused is never recorded as the setting.
+      if (!r.ok) return 'forward-refused';
       op.apply.forwarded();
       return 'forwarded';
     } catch (err) {
@@ -132,6 +136,7 @@ function installOfflineSettings(
       isHeld: (k) => prefs.hasQueued(k),
       forward: async () => {
         out = await forward();
+        return out as { ok: boolean };
       },
       runLocal: async () => {
         local = await runLocal();
@@ -140,7 +145,7 @@ function installOfflineSettings(
       enqueue: () => prefs.queueExtensionEnabled(id, enabled),
       apply: { forwarded: () => prefs.ackForwarded(key, enabled), queued: () => undefined },
     });
-    return how === 'forwarded' ? out : local;
+    return how === 'forwarded' || how === 'forward-refused' ? out : local;
   };
   return { 'extension:set-enabled': setEnabled };
 }

@@ -147,12 +147,20 @@ describe('forwardOrQueue', () => {
   });
 
   it('a successful forward applies forwarded; any other error rethrows', async () => {
-    const ok = op({ forward: async () => undefined });
+    const ok = op({ forward: async () => ({ ok: true }) });
     expect(await forwardOrQueue(ok.o)).toBe('forwarded');
     expect(ok.calls.forwarded).toBe(1);
     const bad = op({ forward: async () => { throw new Error('refused'); } });
     await expect(forwardOrQueue(bad.o)).rejects.toThrow('refused');
     expect(bad.calls.enqueue).toEqual([]);
+  });
+
+  it('a forward the leader answers with a refusal value is not acknowledged and not queued', async () => {
+    const refused = op({ forward: async () => ({ ok: false, error: 'x' }) });
+    expect(await forwardOrQueue(refused.o)).toBe('forward-refused');
+    expect(refused.calls.forwarded).toBe(0);
+    expect(refused.calls.queued).toEqual([]);
+    expect(refused.calls.enqueue).toEqual([]);
   });
 });
 
