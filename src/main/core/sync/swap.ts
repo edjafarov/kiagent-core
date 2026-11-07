@@ -127,6 +127,25 @@ const defaultFree = (dbPath: string) => () => {
   return Number(s.bavail) * Number(s.bsize);
 };
 
+const readJournalLoose = (dbPath: string): Partial<Journal> | null => {
+  if (!fs.existsSync(journalPath(dbPath))) return null;
+  try {
+    return JSON.parse(fs.readFileSync(journalPath(dbPath), 'utf8')) as Journal;
+  } catch {
+    return {}; // unreadable: pending, and nobody's own
+  }
+};
+
+const isOwnJournal = (j: Partial<Journal>, markId: string, attempt: number): boolean =>
+  j.keepArchive === true && j.markId === markId && j.attempt === attempt;
+
+/** A pending swap or restore that this mark and attempt did not prepare. */
+const foreignPending = (dbPath: string, markId: string, attempt: number): boolean => {
+  if (fs.existsSync(restorePath(dbPath))) return true;
+  const j = readJournalLoose(dbPath);
+  return j !== null && !isOwnJournal(j, markId, attempt);
+};
+
 /** `opts` may stand in the fifth place when `freeBytes` is not needed. */
 export function prepareSwap(
   dbPath: string,
@@ -135,9 +154,12 @@ export function prepareSwap(
   masterDeviceId: string,
   freeOrOpts?: (() => number) | KeepArchiveOpts,
   maybeOpts?: KeepArchiveOpts,
-): 'ready' | 'no-disk' | 'invalid' {
+): 'ready' | 'no-disk' | 'invalid' | 'pending' {
   const freeBytes = typeof freeOrOpts === 'function' ? freeOrOpts : defaultFree(dbPath);
   const opts = typeof freeOrOpts === 'function' || freeOrOpts === undefined ? maybeOpts : freeOrOpts;
+  // A keep-archive swap never replaces a journal that is not its own: that
+  // one is another swap (or a restore) the caller must discard on purpose.
+  if (opts?.keepArchive && foreignPending(dbPath, opts.markId, opts.attempt)) return 'pending';
   if (hashFile(file) !== sha256) return 'invalid';
   // The file was already downloaded here, so only the local tables are new.
   // They can't outgrow the database they come from.
@@ -533,6 +555,35 @@ export function dropPendingSwap(dbPath: string): void {
   ]) {
     fs.rmSync(f, { force: true });
   }
+}
+
+/** Drops a pending swap or restore that recovery did not prepare, so its own
+ *  keep-archive swap can take its place. The journal goes first, then the
+ *  payload files: a crash between leaves either the journal (applied as
+ *  before) or orphan files that boot's `dropOrphanIncoming` removes. It never
+ *  touches an archive, a sidecar, the outcome record or the live database.
+ *  `'own'`: the pending journal is this mark and attempt's; nothing is touched. */
+export function discardForeignPending(
+  dbPath: string,
+  markId: string,
+  attempt: number,
+): 'dropped-swap' | 'dropped-restore' | 'none' | 'own' {
+  const j = readJournalLoose(dbPath);
+  if (j && isOwnJournal(j, markId, attempt)) return 'own';
+  let result: 'dropped-swap' | 'dropped-restore' | 'none' = 'none';
+  if (fs.existsSync(restorePath(dbPath))) {
+    fs.rmSync(restorePath(dbPath), { force: true });
+    result = 'dropped-restore';
+  }
+  fs.rmSync(`${restorePath(dbPath)}.tmp`, { force: true });
+  if (j) {
+    fs.rmSync(journalPath(dbPath), { force: true });
+    if (result === 'none') result = 'dropped-swap';
+  }
+  fs.rmSync(`${journalPath(dbPath)}.tmp`, { force: true });
+  // Journal gone: the payload is debris whichever kind was pending.
+  dropOrphanIncoming(dbPath);
+  return result;
 }
 
 /** `crashAt` exists for the crash tests: it runs after each named step. */

@@ -18,6 +18,7 @@ import { readSwapOutcome } from '../status';
 import {
   applyPendingSwap,
   clearSwapStatus,
+  discardForeignPending,
   dropOrphanIncoming,
   findPassedOverArchive,
   prepareRestore,
@@ -443,4 +444,118 @@ describe('a merged file counts only with positive evidence', () => {
       swappedRight();
     });
   }
+});
+
+describe('discardForeignPending', () => {
+  const files = () => fs.readdirSync(path.dirname(receiver)).sort();
+  const debris = () => files().filter((f) => /swap|restore/.test(f));
+
+  it('drops a pending ordinary swap: journal, incoming and merged files', async () => {
+    await prepare(null);
+    fs.writeFileSync(`${receiver}.swap-merged`, 'x');
+    fs.writeFileSync(`${receiver}.swap.json.tmp`, 'x');
+    expect(discardForeignPending(receiver, 'mark-1', 2)).toBe('dropped-swap');
+    expect(debris()).toEqual([]);
+    expect(swapStatus(receiver).pending).toBeNull();
+  });
+
+  it('drops a pending keep-archive swap of another mark or attempt', async () => {
+    await prepare({ keepArchive: true, markId: 'other', attempt: 1 });
+    expect(discardForeignPending(receiver, 'mark-1', 2)).toBe('dropped-swap');
+    expect(debris()).toEqual([]);
+    await prepare({ keepArchive: true, markId: 'mark-1', attempt: 1 });
+    expect(discardForeignPending(receiver, 'mark-1', 2)).toBe('dropped-swap');
+    expect(debris()).toEqual([]);
+  });
+
+  it('drops a pending restore journal and its tmp, leaving archives and sidecars', async () => {
+    makeNormalReceiver(receiver);
+    await prepare(null);
+    applyPendingSwap(receiver);
+    expect(prepareRestore(receiver)).toBe('ready');
+    fs.writeFileSync(`${receiver}.restore.json.tmp`, 'x');
+    const before = archives();
+    expect(discardForeignPending(receiver, 'mark-1', 2)).toBe('dropped-restore');
+    expect(fs.existsSync(`${receiver}.restore.json`)).toBe(false);
+    expect(fs.existsSync(`${receiver}.restore.json.tmp`)).toBe(false);
+    expect(archives()).toEqual(before);
+    expect(swapStatus(receiver).pending).toBeNull();
+  });
+
+  it('says none when nothing is pending and touches no archive or sidecar', async () => {
+    await prepare();
+    applyPendingSwap(receiver);
+    const before = files();
+    expect(discardForeignPending(receiver, 'mark-9', 1)).toBe('none');
+    expect(files()).toEqual(before);
+  });
+
+  it('refuses its own journal and touches nothing', async () => {
+    await prepare();
+    const before = files();
+    expect(discardForeignPending(receiver, 'mark-1', 2)).toBe('own');
+    expect(files()).toEqual(before);
+    expect(applyPendingSwap(receiver)).toBe('swapped');
+  });
+
+  it('a crash after the journal is gone leaves orphans that boot drops', async () => {
+    await prepare(null);
+    fs.rmSync(`${receiver}.swap.json`);
+    expect(fs.existsSync(`${receiver}.swap-incoming`)).toBe(true);
+    expect(applyPendingSwap(receiver)).toBe('none');
+    expect(debris()).toEqual([]);
+  });
+
+  it('never touches the live database', async () => {
+    await prepare(null);
+    const h = sha(receiver);
+    discardForeignPending(receiver, 'mark-1', 2);
+    expect(sha(receiver)).toBe(h);
+  });
+});
+
+describe('prepareSwap keepArchive over a pending journal', () => {
+  it('refuses over a foreign pending ordinary swap and leaves it intact', async () => {
+    await prepare(null);
+    const j = fs.readFileSync(`${receiver}.swap.json`, 'utf8');
+    expect(await prepare()).toBe('pending');
+    expect(fs.readFileSync(`${receiver}.swap.json`, 'utf8')).toBe(j);
+  });
+
+  it('refuses over a pending restore', async () => {
+    makeNormalReceiver(receiver);
+    await prepare(null);
+    applyPendingSwap(receiver);
+    prepareRestore(receiver);
+    expect(await prepare()).toBe('pending');
+    expect(fs.existsSync(`${receiver}.restore.json`)).toBe(true);
+    expect(fs.existsSync(`${receiver}.swap.json`)).toBe(false);
+  });
+
+  it('refuses over another mark, but retries its own', async () => {
+    await prepare({ keepArchive: true, markId: 'other', attempt: 1 });
+    expect(await prepare()).toBe('pending');
+    discardForeignPending(receiver, 'mark-1', 2);
+    expect(await prepare()).toBe('ready');
+    expect(await prepare()).toBe('ready');
+  });
+
+  it('after a discard the keep-archive swap archives the current (divergent) database', async () => {
+    await prepare(null); // a prepared ordinary follower re-copy
+    const d = open();
+    d.exec(`INSERT INTO vault(account_id, blob) VALUES('divergent', x'01')`);
+    d.close();
+    expect(await prepare()).toBe('pending');
+    expect(discardForeignPending(receiver, 'mark-1', 2)).toBe('dropped-swap');
+    expect(await prepare()).toBe('ready');
+    expect(applyPendingSwap(receiver)).toBe('swapped');
+    expect(archives()).toHaveLength(1);
+    expect(sidecar(archives()[0]).markId).toBe('mark-1');
+    const arch = new Database(path.join(path.dirname(receiver), archives()[0]), { readonly: true });
+    expect(arch.prepare(`SELECT account_id FROM vault ORDER BY 1`).all()).toEqual([
+      { account_id: 'divergent' },
+      { account_id: 'mine' },
+    ]);
+    arch.close();
+  });
 });

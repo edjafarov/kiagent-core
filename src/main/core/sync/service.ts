@@ -51,6 +51,7 @@ import {
 import { archiveFiles, swapOutcomePath } from './status';
 import {
   clearSwapStatus,
+  discardForeignPending,
   dropPendingSwap,
   findPassedOverArchive,
   swapStatus,
@@ -121,7 +122,14 @@ export interface SyncService {
     sha256: string,
     masterDeviceId: string,
     opts?: { keepArchive: true; markId: string; attempt: number },
-  ): Promise<'ready' | 'no-disk' | 'invalid'>;
+  ): Promise<'ready' | 'no-disk' | 'invalid' | 'pending'>;
+  /** Drops a pending ordinary swap or restore that is not this `markId` and
+   *  `attempt`'s own journal (`'own'`: nothing touched). Never touches an
+   *  archive, a sidecar or the live database. */
+  discardForeignPending(
+    markId: string,
+    attempt: number,
+  ): Promise<'dropped-swap' | 'dropped-restore' | 'none' | 'own'>;
   /** Read-only: a swap waiting for the next boot, and the last one's result. */
   swapStatus(): Promise<{
     pending: 'swap' | 'restore' | null;
@@ -659,6 +667,8 @@ export function createSyncService(deps: SyncServiceDeps): SyncService {
     prepareSwap: (file, sha256, masterDeviceId, opts) =>
       onWorker('prepareSwap', { file, sha256, masterDeviceId, opts }),
     swapStatus: async () => swapStatus(deps.dbPath),
+    discardForeignPending: async (markId, attempt) =>
+      discardForeignPending(deps.dbPath, markId, attempt),
     clearSwapStatus: (markId, attempt) =>
       clearSwapStatus(deps.dbPath, markId, attempt),
     findPassedOverArchive: (markId, attempt) =>

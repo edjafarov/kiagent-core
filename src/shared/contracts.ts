@@ -2049,7 +2049,11 @@ export interface CapSurfaces {
         sha256: string,
         masterDeviceId: string,
         opts?: { keepArchive: true; markId: string; attempt: number },
-      ): Promise<'ready' | 'no-disk' | 'invalid'>;
+      ): Promise<'ready' | 'no-disk' | 'invalid' | 'pending'>;
+      discardForeignPending(
+        markId: string,
+        attempt: number,
+      ): Promise<'dropped-swap' | 'dropped-restore' | 'none' | 'own'>;
       swapStatus(): Promise<{
         pending: 'swap' | 'restore' | null;
         outcome: 'ok' | 'failed' | null;
@@ -2154,6 +2158,7 @@ export const SYNC_SURFACE_METHODS = [
   'prepareSwap',
   'prepareRestore',
   'swapStatus',
+  'discardForeignPending',
   'clearSwapStatus',
   'findPassedOverArchive',
   'setDeviceId',

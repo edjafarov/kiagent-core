@@ -98,6 +98,7 @@ describe('through an in-memory extension host (messages cloned across the hop)',
         prepareSwap: note('prepareSwap', 'ready'),
         prepareRestore: note('prepareRestore', 'no-archive'),
         swapStatus: note('swapStatus', { pending: null, outcome: null, markId: null, attempt: null }),
+        discardForeignPending: note('discardForeignPending', 'none'),
         clearSwapStatus: note('clearSwapStatus', undefined),
         findPassedOverArchive: note('findPassedOverArchive', false),
         setDeviceId: note('setDeviceId', undefined),
@@ -222,6 +223,7 @@ describe('through an in-memory extension host (messages cloned across the hop)',
     ]);
     expect(seen.buildDelta).toEqual([{ seq: 1, cursor: 2 }, 'out', 5, 3]);
     expect(seen.prepareSwap).toEqual(['f', 'h', 'm', { keepArchive: true, markId: 'k', attempt: 1 }]);
+    expect(seen.discardForeignPending).toEqual(['k', 1]);
     expect(seen.clearSwapStatus).toEqual(['k', 1]);
     expect(seen.findPassedOverArchive).toEqual(['k', 1]);
     expect(Object.keys(seen).sort()).toEqual([...SYNC_SURFACE_METHODS].sort());

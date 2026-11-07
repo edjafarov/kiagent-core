@@ -21,6 +21,7 @@ module.exports = {
       prepareSwap: await host.sync.prepareSwap('f', 'h', 'm', { keepArchive: true, markId: 'k', attempt: 1 }),
       prepareRestore: await host.sync.prepareRestore(),
       swapStatus: await host.sync.swapStatus(),
+      discardForeignPending: await host.sync.discardForeignPending('k', 1),
       clearSwapStatus: await host.sync.clearSwapStatus('k', 1),
       findPassedOverArchive: await host.sync.findPassedOverArchive('k', 1),
       setDeviceId: await host.sync.setDeviceId('dev'),
