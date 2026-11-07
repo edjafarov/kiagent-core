@@ -236,7 +236,7 @@ describe('user prefs', () => {
     expect(p.get().theme).toBe('dark');
     expect(seen).toEqual(['dark']);
     store.rows['core.theme'] = 'light';
-    await p.refreshUser();
+    await p.refreshUser({ prefKeys: ['core.theme'], pullStartedAt: Date.now() + 1000 });
     expect(p.get().theme).toBe('light');
   });
 });

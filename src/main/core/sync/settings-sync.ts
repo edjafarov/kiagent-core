@@ -15,6 +15,47 @@ import {
 import { extensionEnabledKey } from './settings-queue';
 import type { ForwardRunners, SyncService } from './service';
 
+/** One decision for a setting changed on a read-only copy: a key with a row
+ *  still waiting goes through the queue (the row is replaced, so the older
+ *  value cannot be delivered after the newer); otherwise the leader is asked
+ *  once, and with no leader the change is applied here and queued. */
+export interface ForwardOrQueueOp {
+  keys: string[];
+  isHeld: (key: string) => boolean;
+  forward: () => Promise<void>;
+  /** A change that must also run on this device (a connector switch); a
+   *  failed run queues nothing. */
+  runLocal?: () => Promise<{ ok: boolean }>;
+  enqueue: (key: string) => Promise<number>;
+  apply: { forwarded(): void; queued(key: string, rowId: number): void };
+}
+
+const isNoMasterError = (err: unknown): boolean =>
+  !!err && typeof err === 'object' && (err as { code?: unknown }).code === 'EXT_SYNC_NO_MASTER';
+
+export async function forwardOrQueue(
+  op: ForwardOrQueueOp,
+): Promise<'forwarded' | 'queued' | 'local-failed'> {
+  if (!op.keys.some(op.isHeld)) {
+    try {
+      await op.forward();
+      op.apply.forwarded();
+      return 'forwarded';
+    } catch (err) {
+      if (!isNoMasterError(err)) throw err;
+    }
+  }
+  if (op.runLocal) {
+    const r = await op.runLocal();
+    if (!r.ok) return 'local-failed';
+  }
+  for (const key of op.keys) {
+    const rowId = await op.enqueue(key);
+    op.apply.queued(key, rowId);
+  }
+  return 'queued';
+}
+
 export interface SettingsSyncDeps {
   prefs: CorePrefs;
   sync: Pick<
@@ -44,6 +85,8 @@ export interface SettingsSyncDeps {
    *  ('extensions' here) exactly as main logged it. */
   log: (category: string, level: 'warn', msg: string) => void;
   retryEveryMs: number;
+  /** Stamps an acknowledged setting; main passes `Date.now`. */
+  nowMs: () => number;
   setInterval: typeof globalThis.setInterval;
 }
 
@@ -51,16 +94,17 @@ function installOfflineSettings(
   prefs: CorePrefs,
   sync: Pick<SyncService, 'forward' | 'enqueue' | 'onQueueChange' | 'discardQueued'>,
   opts: {
+    nowMs: () => number;
     /** Brings the running connectors in line with the mirrored extension set.
      *  Called after a queued connector switch is discarded: the switch had
      *  already been applied here, and discarding it must undo that. */
     reconcile?: () => Promise<unknown>;
-  } = {},
+  },
 ): OfflineHandlers {
   prefs.setOfflineQueue({
     enqueue: (r, o) => sync.enqueue(r, o),
     discard: (id) => sync.discardQueued(id),
-    nowMs: Date.now,
+    nowMs: opts.nowMs,
   });
   // No `onNoMaster`: a setting the queue took shows no refusal. A rejection of
   // the queue itself reaches the caller as an ordinary error.
@@ -78,14 +122,26 @@ function installOfflineSettings(
         .catch(() => undefined);
     }
   });
-  const setEnabled: OfflineHandler = async (req, runLocal) => {
+  const setEnabled: OfflineHandler = async (req, runLocal, forward) => {
     const { id, enabled } = req as { id: string; enabled: boolean };
-    const r = (await runLocal()) as { ok: boolean };
-    if (r.ok) await prefs.queueExtensionEnabled(id, enabled);
-    return r;
+    const key = extensionEnabledKey(id);
+    let out: unknown;
+    let local: unknown;
+    const how = await forwardOrQueue({
+      keys: [key],
+      isHeld: (k) => prefs.hasQueued(k),
+      forward: async () => {
+        out = await forward();
+      },
+      runLocal: async () => {
+        local = await runLocal();
+        return local as { ok: boolean };
+      },
+      enqueue: () => prefs.queueExtensionEnabled(id, enabled),
+      apply: { forwarded: () => prefs.dropOptimistic(key), queued: () => undefined },
+    });
+    return how === 'forwarded' ? out : local;
   };
-  setEnabled.held = (req) => prefs.hasQueued(extensionEnabledKey((req as { id: string }).id));
-  setEnabled.forwarded = (req) => prefs.dropOptimistic(extensionEnabledKey((req as { id: string }).id));
   return { 'extension:set-enabled': setEnabled };
 }
 
@@ -102,6 +158,7 @@ export function installSettingsSync(d: SettingsSyncDeps): {
         d.log('extensions', 'warn', `extension reconcile failed: ${String(err)}`),
       );
   const offlineHandlers = installOfflineSettings(prefs, sync, {
+    nowMs: d.nowMs,
     reconcile: reconcileLogged,
   });
   const forwardedLocal = wrapForwardedChannels(

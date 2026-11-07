@@ -99,6 +99,7 @@ async function wire(follower = true, existingDir?: string): Promise<Wired> {
     onNoMaster: (m) => refusals.push(m),
     log: () => undefined,
     retryEveryMs: 3_600_000,
+    nowMs: Date.now,
     setInterval: ((..._a: unknown[]) => ({ unref() {} })) as never,
   });
   const local = settings.forwardedLocal;

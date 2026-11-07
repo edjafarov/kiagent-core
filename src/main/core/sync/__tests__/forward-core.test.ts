@@ -89,7 +89,7 @@ describe('an offline handler for a setting channel', () => {
   });
 
   it('a reachable leader gets the request; a refusal rethrows; the leader runs it here', async () => {
-    const offline = jest.fn();
+    const offline = jest.fn(async (_req: unknown, _run: () => unknown, forwardIt: () => Promise<unknown>) => forwardIt());
     const local = jest.fn(async () => 'local');
     const table: Record<string, (r: unknown) => unknown> = { 'extension:set-enabled': local };
     const forward = jest.fn(async () => ({ ok: true as const, value: 'leader' }));
@@ -100,6 +100,6 @@ describe('an offline handler for a setting channel', () => {
     await expect(Promise.resolve(table['extension:set-enabled']({}))).rejects.toThrow('refused');
     readOnly = false;
     await expect(table['extension:set-enabled']({})).resolves.toBe('local');
-    expect(offline).not.toHaveBeenCalled();
+    expect(offline).toHaveBeenCalledTimes(2);
   });
 });

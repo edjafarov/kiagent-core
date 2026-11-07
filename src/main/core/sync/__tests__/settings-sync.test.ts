@@ -10,7 +10,7 @@ import { openStore } from '../../store/store';
 import { leadProc } from './lead-proc';
 import { readGateSync } from '../role';
 import { createSyncService } from '../service';
-import { installSettingsSync } from '../settings-sync';
+import { forwardOrQueue, installSettingsSync, type ForwardOrQueueOp } from '../settings-sync';
 
 let db: AppDb | undefined;
 let dir = '';
@@ -69,6 +69,7 @@ it('installSettingsSync wires the same things main did', async () => {
     onNoMaster: () => undefined,
     log: () => undefined,
     retryEveryMs: 1000,
+    nowMs: Date.now,
     setInterval: setInterval,
   });
 
@@ -92,4 +93,63 @@ it('installSettingsSync wires the same things main did', async () => {
   const setExt = jest.spyOn(prefs, 'setExt');
   await settings.coreRunner('prefs:set-ext', { key: 'kiagent.x.y', value: 1 });
   expect(setExt).toHaveBeenCalledWith('kiagent.x.y', 1, { notify: true });
+});
+
+describe('forwardOrQueue', () => {
+  function op(over: Partial<ForwardOrQueueOp> = {}) {
+    const rows = new Map<string, { id: number; n: number }>();
+    let id = 0;
+    const calls = { forward: 0, enqueue: [] as string[], forwarded: 0, queued: [] as string[] };
+    const o: ForwardOrQueueOp = {
+      keys: ['a'],
+      isHeld: () => false,
+      forward: async () => {
+        calls.forward += 1;
+        const e = new Error('no master') as Error & { code: string };
+        e.code = 'EXT_SYNC_NO_MASTER';
+        throw e;
+      },
+      enqueue: async (k) => {
+        calls.enqueue.push(k);
+        id += 1;
+        rows.set(k, { id, n: (rows.get(k)?.n ?? 0) + 1 });
+        return id;
+      },
+      apply: { forwarded: () => void (calls.forwarded += 1), queued: (k) => void calls.queued.push(k) },
+      ...over,
+    };
+    return { o, calls, rows };
+  }
+
+  it('a multi-key patch with one held key queues every touched key with its complete merged value and forwards nothing', async () => {
+    const { o, calls } = op({ keys: ['core.theme', 'core.outbound'], isHeld: (k) => k === 'core.outbound' });
+    expect(await forwardOrQueue(o)).toBe('queued');
+    expect(calls.forward).toBe(0);
+    expect(calls.enqueue).toEqual(['core.theme', 'core.outbound']);
+    expect(calls.queued).toEqual(['core.theme', 'core.outbound']);
+  });
+
+  it('a switch whose local op fails is not queued', async () => {
+    const { o, calls } = op({ runLocal: async () => ({ ok: false }) });
+    expect(await forwardOrQueue(o)).toBe('local-failed');
+    expect(calls.enqueue).toEqual([]);
+    expect(calls.queued).toEqual([]);
+  });
+
+  it('a held ext key replaces its row', async () => {
+    const { o, calls, rows } = op({ keys: ['kiagent.x'], isHeld: (k) => rows.has(k) });
+    expect(await forwardOrQueue(o)).toBe('queued');
+    expect(await forwardOrQueue(o)).toBe('queued');
+    expect(calls.forward).toBe(1);
+    expect(rows.get('kiagent.x')).toEqual({ id: 2, n: 2 });
+  });
+
+  it('a successful forward applies forwarded; any other error rethrows', async () => {
+    const ok = op({ forward: async () => undefined });
+    expect(await forwardOrQueue(ok.o)).toBe('forwarded');
+    expect(ok.calls.forwarded).toBe(1);
+    const bad = op({ forward: async () => { throw new Error('refused'); } });
+    await expect(forwardOrQueue(bad.o)).rejects.toThrow('refused');
+    expect(bad.calls.enqueue).toEqual([]);
+  });
 });

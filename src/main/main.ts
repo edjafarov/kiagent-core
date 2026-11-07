@@ -922,6 +922,7 @@ function registerIpc(
       broadcast('ext:push', { ...SYNC_REFUSED_PUSH, payload: { message } }),
     log: (category, level, msg) => p.logSink.log(category, level, msg),
     retryEveryMs: EXTENSION_RETRY_MS,
+    nowMs: Date.now,
     setInterval,
   });
   // What was queued before the last quit shows again.

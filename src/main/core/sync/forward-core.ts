@@ -71,14 +71,12 @@ export async function forwardCore(
 
 /** What a channel does when no leader is reachable instead of refusing:
  *  `runLocal` is the channel's own handler on this device. */
-export type OfflineHandler = ((req: unknown, runLocal: () => unknown) => Promise<unknown>) & {
-  /** True when a row for this request already waits in the queue: the request
-   *  then goes through the queue without asking the leader, so it replaces
-   *  that row instead of racing it. */
-  held?: (req: unknown) => boolean;
-  /** Called after the leader took the request directly. */
-  forwarded?: (req: unknown) => void;
-};
+export type OfflineHandler = (
+  req: unknown,
+  runLocal: () => unknown,
+  /** Asks the leader; the handler decides between this and the queue. */
+  forward: () => Promise<unknown>,
+) => Promise<unknown>;
 export type OfflineHandlers = Partial<Record<ForwardedChannel, OfflineHandler>>;
 
 /** Wraps the forwarded entries of the channel-handler map in place (the app
@@ -105,15 +103,7 @@ export function wrapForwardedChannels(
       // case (applied here and queued), and the refusal sentence is not shown.
       table[channel] = async (req) => {
         if (!sync.readOnly()) return fn(req);
-        if (whenOffline.held?.(req)) return whenOffline(req, () => fn(req));
-        try {
-          const out = await forwardCore(sync, channel, req);
-          whenOffline.forwarded?.(req);
-          return out;
-        } catch (err) {
-          if (err instanceof SyncNoMaster) return whenOffline(req, () => fn(req));
-          throw err;
-        }
+        return whenOffline(req, () => fn(req), () => forwardCore(sync, channel, req));
       };
       continue;
     }

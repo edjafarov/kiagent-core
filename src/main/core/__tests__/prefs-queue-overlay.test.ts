@@ -465,4 +465,34 @@ describe('the offline queue overlay', () => {
     expect(leader.get().theme).toBe('light');
     expect(leader.get().outbound.defaultMode).toBe('chat');
   });
+
+  it('a pull that started before the forward and applies after it does not flip the control back', async () => {
+    const { p, store, queue } = await follower({ 'core.theme': 'light' });
+    p.setForwardUser(async () => undefined);
+    queue.clock.now = 100;
+    await p.patch({ theme: 'dark' });
+    expect(p.get().theme).toBe('dark');
+    await p.refreshUser({ prefKeys: ['core.theme'], pullStartedAt: 50 });
+    expect(p.get().theme).toBe('dark');
+    store.rows['core.theme'] = 'light';
+    await p.refreshUser({ prefKeys: ['core.theme'], pullStartedAt: 150 });
+    expect(p.get().theme).toBe('light');
+  });
+
+  it('a stored null is shown (presence)', async () => {
+    const { p } = await follower();
+    p.setForwardExt(async () => undefined);
+    await p.setExt('a.b', null);
+    expect(p.getExt('a.b')).toBeNull();
+  });
+
+  it('M3: a restart between an ack and its pull drops the ack', async () => {
+    const { p, store } = await follower({ 'core.theme': 'light' });
+    p.setForwardUser(async () => undefined);
+    await p.patch({ theme: 'dark' });
+    expect(p.get().theme).toBe('dark');
+    const p2 = createPrefs(dir, store);
+    await p2.ready;
+    expect(p2.get().theme).toBe('light');
+  });
 });

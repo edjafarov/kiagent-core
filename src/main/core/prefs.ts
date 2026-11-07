@@ -10,6 +10,7 @@ import type {
 
 import type { AppDb } from '../db/app-db';
 import { SyncNoMaster } from './sync/forward-core';
+import { forwardOrQueue } from './sync/settings-sync';
 import type { ForwardRequest } from './sync/service';
 import {
   extensionEnabledKey,
@@ -207,7 +208,7 @@ export interface CorePrefs extends Prefs {
   dropOptimistic(key: string): void;
   /** An extension switch changed with no leader: queued under
    *  `core.extensions.<id>` and shown by `getCore('core.extensions')`. */
-  queueExtensionEnabled(id: string, enabled: boolean): Promise<void>;
+  queueExtensionEnabled(id: string, enabled: boolean): Promise<number>;
   /** The queue delivered or discarded a keyed row. */
   onQueueChange(e: {
     kind: 'delivered' | 'discarded';
@@ -307,8 +308,7 @@ export function createPrefs(dir: string, user?: UserPrefsStore): CorePrefs {
       : optimistic.has(key)
         ? optimistic.get(key)!.value
         : mirror[key];
-  const isNoMaster = (err: unknown): boolean =>
-    !!err && typeof err === 'object' && (err as { code?: unknown }).code === 'EXT_SYNC_NO_MASTER';
+  const nowMs = (): number => queue?.nowMs() ?? Date.now();
   /** This device writes the table: a write of its own replaces whatever waited
    *  in the queue for these keys, so the older value is neither shown over it
    *  nor delivered after it. */
@@ -474,34 +474,37 @@ export function createPrefs(dir: string, user?: UserPrefsStore): CorePrefs {
           emit();
         } else if (forwardUser) {
           // The leader writes it and it comes back by the feed; until then the
-          // local mirror shows the change (the feed's value overwrites it).
-          // A key with a row still waiting goes through the queue as well: the
-          // row is replaced, so the older value cannot be delivered after this.
-          let viaQueue = !!queue && touched.some((k) => overlay.has(userPrefKey(k)));
-          if (!viaQueue) {
-            try {
-              await forwardUser(userPart);
-            } catch (err) {
-              if (!queue || !isNoMaster(err)) throw err;
-              viaQueue = true;
-            }
-          }
-          if (viaQueue && queue) {
-            // Each key waits in the queue with its COMPLETE merged value (a
-            // nested pref merges right whichever edit arrives last).
+          // value shows as acknowledged. A key with a row still waiting goes
+          // through the queue as well: the row is replaced, so the older value
+          // cannot be delivered after this. Each queued key carries its
+          // COMPLETE merged value (a nested pref merges right whichever edit
+          // arrives last).
+          const ackForwarded = (): void => {
             for (const k of touched) {
-              const key = userPrefKey(k);
-              const rowId = await queue.enqueue(userPrefRequest(k, next[k]), { coalesceKey: key });
-              overlay.set(key, { value: next[k], rowId });
-              optimistic.delete(key);
+              optimistic.set(tableKey(k), { value: next[k], ackedAt: nowMs() });
             }
-            recompute();
-            emit();
-            return;
-          }
-          for (const k of touched) {
-            mirror[tableKey(k)] = next[k];
-            optimistic.delete(tableKey(k));
+          };
+          if (!queue) {
+            await forwardUser(userPart);
+            ackForwarded();
+          } else {
+            await forwardOrQueue({
+              keys: touched.map((k) => userPrefKey(k)),
+              isHeld: (k) => overlay.has(k),
+              forward: () => forwardUser!(userPart),
+              enqueue: (key) => {
+                const k = key.slice('core.'.length) as UserPrefKey;
+                return queue!.enqueue(userPrefRequest(k, next[k]), { coalesceKey: key });
+              },
+              apply: {
+                forwarded: ackForwarded,
+                queued: (key, rowId) => {
+                  const k = key.slice('core.'.length) as UserPrefKey;
+                  overlay.set(key, { value: next[k], rowId });
+                  optimistic.delete(key);
+                },
+              },
+            });
           }
           recompute();
           emit();
@@ -560,6 +563,7 @@ export function createPrefs(dir: string, user?: UserPrefsStore): CorePrefs {
         const rowId = await queue.enqueue(extensionEnabledRequest(id, enabled), { coalesceKey: key });
         overlay.set(key, { value: enabled, rowId });
         optimistic.delete(key);
+        return rowId;
       }),
     onQueueChange(e) {
       const key = e.coalesceKey;
@@ -573,7 +577,7 @@ export function createPrefs(dir: string, user?: UserPrefsStore): CorePrefs {
         // A follower keeps showing the delivered value until a delta that was
         // requested after this moment brings the leader's own.
         if (store && !store.canWrite()) {
-          optimistic.set(key, { value: entry.value, ackedAt: queue?.nowMs() ?? Date.now() });
+          optimistic.set(key, { value: entry.value, ackedAt: nowMs() });
         }
       } else {
         optimistic.delete(key);
@@ -596,23 +600,27 @@ export function createPrefs(dir: string, user?: UserPrefsStore): CorePrefs {
           if (opts?.notify) fireExt(key, stored);
         } else if (forwardExt) {
           // The leader writes it and it comes back by the feed.
-          let viaQueue = !!queue && overlay.has(key);
-          if (!viaQueue) {
-            try {
-              await forwardExt(key, stored);
-            } catch (err) {
-              if (!queue || !isNoMaster(err)) throw err;
-              viaQueue = true;
-            }
+          const ackForwarded = (): void => {
+            optimistic.set(key, { value: stored, ackedAt: nowMs() });
+          };
+          if (!queue) {
+            await forwardExt(key, stored);
+            ackForwarded();
+          } else {
+            await forwardOrQueue({
+              keys: [key],
+              isHeld: (k) => overlay.has(k),
+              forward: () => forwardExt!(key, stored),
+              enqueue: (k) => queue!.enqueue(extPrefRequest(k, stored), { coalesceKey: k }),
+              apply: {
+                forwarded: ackForwarded,
+                queued: (k, rowId) => {
+                  overlay.set(k, { value: stored, rowId });
+                  optimistic.delete(k);
+                },
+              },
+            });
           }
-          if (viaQueue && queue) {
-            const rowId = await queue.enqueue(extPrefRequest(key, stored), { coalesceKey: key });
-            overlay.set(key, { value: stored, rowId });
-            optimistic.delete(key);
-            return;
-          }
-          mirror[key] = stored;
-          optimistic.delete(key);
         } else {
           throw new Error('this device is a read-only copy: it cannot change this setting');
         }
