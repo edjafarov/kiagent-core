@@ -209,6 +209,46 @@ describe('one order for the held work', () => {
     expect(runs).toEqual(['live']);
   });
 
+  it('a join cancelled while the hold is in flight stays cancelled', async () => {
+    let release!: () => void;
+    let holds = 0;
+    let resumes = 0;
+    let holding = false;
+    holdWork = async () => {
+      holds += 1;
+      holding = true;
+      await new Promise<void>((r) => (release = r));
+    };
+    resumeWork = async () => {
+      resumes += 1;
+      holding = false;
+    };
+    const begun = sync.beginJoin();
+    await sync.leaveJoin();
+    release();
+    await begun;
+    expect(sync.readOnly()).toBe(false);
+    expect(holds).toBe(1);
+    expect(resumes).toBe(1);
+    expect(holding).toBe(false);
+    const row = (await db.all(`SELECT joining FROM sync_state`))[0] as { joining: number };
+    expect(row.joining).toBe(0);
+  });
+
+  it('a join begun after a cancelled one still joins', async () => {
+    let release!: () => void;
+    holdWork = () => new Promise<void>((r) => (release = r));
+    const first = sync.beginJoin();
+    await sync.leaveJoin();
+    const firstRelease = release;
+    const second = sync.beginJoin();
+    release();
+    await second;
+    firstRelease();
+    await first;
+    expect(sync.readOnly()).toBe(true);
+  });
+
   it('open() does not resume the work', async () => {
     let resumed = 0;
     resumeWork = async () => void (resumed += 1);

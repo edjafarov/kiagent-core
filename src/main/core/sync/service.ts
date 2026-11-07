@@ -307,6 +307,9 @@ export function createSyncService(deps: SyncServiceDeps): SyncService {
     tracking: false,
   };
   let gated = gateFrom(boot);
+  // Bumped by every beginJoin and leaveJoin: a beginJoin whose hold was still
+  // in flight when a leaveJoin ran finds the number moved and gives up.
+  let joinSeq = 0;
   // Invariant: `fenced` flips only in `setFence`; every close bumps `fenceGen`,
   // and only `open` (through `setFence(false)`) lifts it.
   let fenced = bootPhase(boot) === 'leader-fenced';
@@ -801,7 +804,10 @@ export function createSyncService(deps: SyncServiceDeps): SyncService {
     beginJoin: async () => {
       // Hold first: the running work stops before joining flips, so nothing
       // is cut mid-write and no SyncReadOnly is logged.
+      const seq = ++joinSeq;
       await deps.holdWork?.();
+      // A leaveJoin ran during the hold and already resumed the work.
+      if (joinSeq !== seq) return;
       await deps.db.run(`UPDATE sync_state SET joining = 1`);
       await refreshGate();
     },
@@ -850,6 +856,7 @@ export function createSyncService(deps: SyncServiceDeps): SyncService {
       fs.rmSync(swapOutcomePath(deps.dbPath), { force: true });
     },
     leaveJoin: async () => {
+      joinSeq += 1;
       dropPendingSwap(deps.dbPath);
       await deps.db.run(`UPDATE sync_state SET joining = 0`);
       await refreshGate();
