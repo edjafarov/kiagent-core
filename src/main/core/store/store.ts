@@ -39,6 +39,7 @@ import {
   ACTIONABLE_VISUAL_SIZE_WHERE,
   EXTRACTED_DOCS_WHERE,
   PENDING_VISUAL_WHERE,
+  repairSearchIndex,
   repopulateSearchIndex,
 } from './schema';
 import { toAccount, toDocument, type AccountRow, type DocRow } from './rows';
@@ -213,6 +214,9 @@ export interface CoreStore extends Store {
   /** Takes an offer of accounts and logins from another device in one
    *  transaction (alpha-cent spec 7.7), and wakes what a commit wakes. */
   importSyncSources(input: ImportSourcesInput): Promise<ImportSourcesResult>;
+  /** Rebuilds a damaged search index after an apply failed on it (`code ===
+   *  'search-index'`); at most once a day, `'skipped'` otherwise. */
+  repairSyncSearchIndex(): Promise<'repaired' | 'skipped'>;
   /** Takes versioned logins from the leader in one transaction: a value is
    *  written only where its `(epoch, n)` is newer than the one held. */
   importSyncSecrets(entries: ImportSecretEntry[]): Promise<{ applied: number }>;
@@ -788,6 +792,14 @@ export function openStore(db: AppDb, deps: StoreDeps): CoreStore {
       outboxChanged.emit('change');
       eventDraftsChanged.emit('change');
       return r;
+    },
+
+    async repairSyncSearchIndex() {
+      return db._conn
+        ? repairSearchIndex(db._conn, Date.now())
+        : ((await db.proc!('syncRepairSearchIndex', null)) as
+            | 'repaired'
+            | 'skipped');
     },
 
     async importSyncSecrets(entries) {

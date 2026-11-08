@@ -52,6 +52,32 @@ import type { AccountRow, DocRow } from './store';
 
 /** Injected so the write path stays testable and Electron-free. Mirrors the
  *  slice of StoreDeps the transaction actually touches. */
+/** SQLite errors an apply can only get from the full-text index: every copied
+ *  table is written with ON CONFLICT, so a primary-key clash comes from an FTS5
+ *  shadow table (a segment id the structure record lost). FTS5 buffers its
+ *  writes and flushes them at the next statement savepoint, so the error can
+ *  surface on any statement of the apply: it is classed by code, not by site.
+ *  The caller matches on `code === 'search-index'` (it crosses the worker
+ *  bridge as `{message, code}`) and may run `repairSearchIndex`. */
+const SEARCH_INDEX_CODES = new Set([
+  'SQLITE_CORRUPT',
+  'SQLITE_CORRUPT_VTAB',
+  'SQLITE_CONSTRAINT_PRIMARYKEY',
+]);
+export function asSearchIndexError(e: unknown): unknown {
+  const code = (e as { code?: unknown } | null)?.code;
+  if (typeof code !== 'string' || !SEARCH_INDEX_CODES.has(code)) return e;
+  const err = new Error(
+    `search index: ${(e as Error).message} (${code})`,
+  ) as Error & {
+    code: string;
+    sqliteCode: string;
+  };
+  err.code = 'search-index';
+  err.sqliteCode = code;
+  return err;
+}
+
 export interface WriteTxDeps {
   /** Cheap language detection for search stemming (ISO-639-3). */
   detectLanguages(text: string): string[];
@@ -1836,7 +1862,11 @@ export function createWriteTx(
   const tx: WriteTx = {
     applyDelta: (stagePath) => {
       const { target, epoch, rows } = validateStage(stagePath);
-      applyDeltaTx(stageEntries(stagePath, rows), target, epoch);
+      try {
+        applyDeltaTx(stageEntries(stagePath, rows), target, epoch);
+      } catch (e) {
+        throw asSearchIndexError(e);
+      }
       // One big apply leaves a big WAL (2.7 GB at the 250 MB cap, measured).
       const wal = `${conn.name}-wal`;
       if (fs.existsSync(wal) && fs.statSync(wal).size > 256 * 1024 * 1024) {

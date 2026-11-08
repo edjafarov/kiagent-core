@@ -18,6 +18,7 @@ module.exports = {
       buildDelta: await host.sync.buildDelta(c, 'out', 5, 3),
       buildSnapshot: await host.sync.buildSnapshot('snap'),
       applyDelta: await host.sync.applyDelta('stage', { pullStartedAt: 5 }),
+      repairSearchIndex: await host.sync.repairSearchIndex(),
       prepareSwap: await host.sync.prepareSwap('f', 'h', 'm', { keepArchive: true, markId: 'k', attempt: 1 }),
       prepareRestore: await host.sync.prepareRestore(),
       swapStatus: await host.sync.swapStatus(),

@@ -1426,6 +1426,61 @@ const MIGRATIONS: Migration[] = [
  * connection, so a chunked `.all()` loop is the shape that avoids
  * materializing the whole corpus in memory at once.
  */
+/** At most one search-index repair per window: a damage `rebuild` does not
+ *  cure must not loop a job that takes ~20 minutes on a 12 GB corpus. */
+export const SEARCH_INDEX_REPAIR_WINDOW_MS = 24 * 60 * 60_000;
+const SEARCH_TABLES = ['documents_fts', 'documents_tri'] as const;
+
+const searchTableOk = (db: BetterSqlite3.Database, t: string): boolean => {
+  try {
+    db.prepare(`INSERT INTO ${t}(${t}) VALUES('integrity-check')`).run();
+    return true;
+  } catch {
+    return false;
+  }
+};
+
+/**
+ * Repairs a damaged full-text index in place (a follower whose apply failed
+ * on it). FTS5 `rebuild` re-reads each table's own `_content`, so it works on
+ * a damaged index, unlike {@link repopulateSearchIndex}, whose `DELETE FROM`
+ * runs through it. Called only after an apply failed on the index, so it
+ * rebuilds without asking `integrity-check` first: stale `_idx` rows make the
+ * next segment write collide while the check still passes. `'skipped'`: inside
+ * the window (stamped before the rebuild starts). Throws when the rebuild did
+ * not leave both tables passing `integrity-check`.
+ */
+export function repairSearchIndex(
+  db: BetterSqlite3.Database,
+  now: number,
+): 'repaired' | 'skipped' {
+  const last = db
+    .prepare(`SELECT value FROM meta WHERE key = 'searchIndexRepairAt'`)
+    .get() as { value: string } | undefined;
+  const at = last ? Number(last.value) : NaN;
+  if (
+    Number.isFinite(at) &&
+    at <= now &&
+    now - at < SEARCH_INDEX_REPAIR_WINDOW_MS
+  ) {
+    return 'skipped';
+  }
+  db.prepare(
+    `INSERT INTO meta(key, value) VALUES('searchIndexRepairAt', ?)
+     ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
+  ).run(String(now));
+  db.transaction(() => {
+    for (const t of SEARCH_TABLES)
+      db.prepare(`INSERT INTO ${t}(${t}) VALUES('rebuild')`).run();
+  })();
+  const still = SEARCH_TABLES.filter((t) => !searchTableOk(db, t));
+  if (still.length > 0)
+    throw new Error(
+      `search index still damaged after rebuild: ${still.join(', ')}`,
+    );
+  return 'repaired';
+}
+
 export function repopulateSearchIndex(db: BetterSqlite3.Database): void {
   db.transaction(() => {
     db.exec(`DELETE FROM documents_fts; DELETE FROM documents_tri;`);

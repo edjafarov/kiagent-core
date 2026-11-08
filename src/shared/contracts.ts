@@ -1678,6 +1678,9 @@ export const LONE_ROLE: SyncRoleWire = {
 };
 
 export interface SyncStatusWire {
+  /** Set while a follower rebuilds its search index after an apply failed on
+   *  it (`repairSearchIndex`). Display only. */
+  repairing?: 'search-index';
   /** Device-owned accounts another device owns: they run, and send, there. */
   elsewhere: { source: string; identifier: string; ownerDeviceId: string }[];
   /** True while the lease head is not yet known (always false until Task 11). */
@@ -2044,6 +2047,9 @@ export interface CapSurfaces {
         /** The `user_prefs` keys the delta upserted or deleted. */
         prefKeys: string[];
       }>;
+      /** After `applyDelta` rejected with `code === 'search-index'`: rebuilds
+       *  the search index, at most once a day (`'skipped'` inside that). */
+      repairSearchIndex(): Promise<'repaired' | 'skipped'>;
       prepareSwap(
         file: string,
         sha256: string,
@@ -2155,6 +2161,7 @@ export const SYNC_SURFACE_METHODS = [
   'buildDelta',
   'buildSnapshot',
   'applyDelta',
+  'repairSearchIndex',
   'prepareSwap',
   'prepareRestore',
   'swapStatus',

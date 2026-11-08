@@ -14,7 +14,10 @@ import { parentPort, workerData } from 'node:worker_threads';
 import path from 'node:path';
 import type { CommitBatch, ExternalRef, Seq } from '@shared/contracts';
 import { detectLanguages } from '@main/core/language';
-import { repopulateSearchIndex } from '@main/core/store/schema';
+import {
+  repairSearchIndex,
+  repopulateSearchIndex,
+} from '@main/core/store/schema';
 import { ATTENTION_ACTION_POLICY } from '@main/attention/action-policy';
 import { createAttentionTx } from '@main/attention/attention-tx';
 import {
@@ -189,6 +192,7 @@ async function runSyncRole(): Promise<void> {
         accountWrite: (args) => writeTx.accountWrite(args as AccountWriteOp),
         syncApply: (args) =>
           writeTx.applyDelta((args as { stagePath: string }).stagePath),
+        syncRepairSearchIndex: () => repairSearchIndex(db._conn!, Date.now()),
         syncImportSources: (args) =>
           writeTx.importSources(args as ImportSourcesInput),
         syncImportSecrets: (args) =>

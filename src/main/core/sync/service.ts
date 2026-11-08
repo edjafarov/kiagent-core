@@ -115,6 +115,10 @@ export interface SyncService {
   /** Tells `cb` which copied tables each applied delta touched, so extensions
    *  can refresh (platform bus event `sync.applied`). Core-internal. */
   onApplied(cb: (tables: string[], meta: AppliedMeta) => void): void;
+  /** After an apply failed with `code === 'search-index'`: rebuilds the
+   *  search index (minutes on a large corpus), at most once a day. While it
+   *  runs `status().repairing` is `'search-index'`. */
+  repairSearchIndex(): Promise<'repaired' | 'skipped'>;
   /** `opts.keepArchive`: the old file always becomes a tagged archive (never
    *  restorable) and the outcome carries `markId` and `attempt`. */
   prepareSwap(
@@ -277,6 +281,7 @@ export interface SyncServiceDeps {
   store: Pick<
     CoreStore,
     | 'applySyncDelta'
+    | 'repairSyncSearchIndex'
     | 'importSyncSources'
     | 'importSyncSecrets'
     | 'read'
@@ -640,8 +645,22 @@ export function createSyncService(deps: SyncServiceDeps): SyncService {
     return draining;
   };
 
+  // Held here, not in a worker: status is served by the sync worker, the
+  // rebuild runs in the write worker, and neither sees the other.
+  let repairing = false;
   return {
-    status: () => onWorker('status'),
+    status: async () => {
+      const s = await onWorker<SyncStatusWire>('status');
+      return repairing ? { ...s, repairing: 'search-index' as const } : s;
+    },
+    repairSearchIndex: async () => {
+      repairing = true;
+      try {
+        return await deps.store.repairSyncSearchIndex();
+      } finally {
+        repairing = false;
+      }
+    },
     buildDelta: (after, out, capBytes, fromEpoch) =>
       onWorker('buildDelta', {
         after,
