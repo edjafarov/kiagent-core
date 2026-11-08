@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.123.0](https://github.com/edjafarov/kiagent-core/compare/v0.122.1...v0.123.0) (2026-11-08)
+
+### Bug Fixes
+
+* **sync:** a damaged search index fails the apply with code search-index; repairSearchIndex rebuilds it once a day ([9cbe721](https://github.com/edjafarov/kiagent-core/commit/9cbe721a3984567adf1d589e02b511bd0de7b0a5))
+
 ## [0.122.1](https://github.com/edjafarov/kiagent-core/compare/v0.122.0...v0.122.1) (2026-11-07)
 
 ### Features
