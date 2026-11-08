@@ -69,12 +69,8 @@ export function asSearchIndexError(e: unknown): unknown {
   if (typeof code !== 'string' || !SEARCH_INDEX_CODES.has(code)) return e;
   const err = new Error(
     `search index: ${(e as Error).message} (${code})`,
-  ) as Error & {
-    code: string;
-    sqliteCode: string;
-  };
+  ) as Error & { code: string };
   err.code = 'search-index';
-  err.sqliteCode = code;
   return err;
 }
 

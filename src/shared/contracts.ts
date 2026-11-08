@@ -1678,9 +1678,6 @@ export const LONE_ROLE: SyncRoleWire = {
 };
 
 export interface SyncStatusWire {
-  /** Set while a follower rebuilds its search index after an apply failed on
-   *  it (`repairSearchIndex`). Display only. */
-  repairing?: 'search-index';
   /** Device-owned accounts another device owns: they run, and send, there. */
   elsewhere: { source: string; identifier: string; ownerDeviceId: string }[];
   /** True while the lease head is not yet known (always false until Task 11). */
