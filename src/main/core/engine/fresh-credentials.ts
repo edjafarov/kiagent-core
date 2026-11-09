@@ -42,6 +42,13 @@ export async function freshCredentials(deps: {
     // in fact still work.
     if (sourceErrorCode(err) === 'auth') throw err;
     deps.warn(`token refresh failed: ${String(err)}`);
+    // A token already past its expiry can only bring a 401, which a source
+    // reads as a dead sign-in: the account showed "Signed out" after one
+    // network blip. Fail the pull as transient instead (uncoded: the engine
+    // backs off and retries the refresh).
+    if (Date.parse(creds.expiresAt!) <= Date.now()) {
+      throw new Error(`token refresh failed and the token has expired: ${String(err)}`);
+    }
   }
   return creds;
 }
