@@ -309,7 +309,7 @@ describe('source error taxonomy', () => {
     expect(fresh?.lastError).toContain('invalid_grant');
   });
 
-  it('a transient (un-coded) refresh failure degrades to the stale token', async () => {
+  it('a transient (un-coded) refresh failure degrades to a stale token that has not expired', async () => {
     const seenTokens: Array<string | undefined> = [];
     const source: Source = {
       descriptor: {
@@ -344,7 +344,8 @@ describe('source error taxonomy', () => {
     await store.vault.save(account.id, {
       accessToken: 'stale-but-usable',
       refreshToken: 'fine',
-      expiresAt: new Date(Date.now() - 1000).toISOString(),
+      // Inside the refresh margin but not yet expired: still usable.
+      expiresAt: new Date(Date.now() + 30_000).toISOString(),
     });
 
     const handle = engine.run(account) as ReturnType<typeof engine.run> & {
@@ -353,5 +354,48 @@ describe('source error taxonomy', () => {
     await waitUntil(() => !handle.active());
     expect(seenTokens).toEqual(['stale-but-usable']);
     expect((await store.account(account.id))?.status).toBe('live');
+  });
+
+  it('an EXPIRED token whose refresh failed transiently is never used and never signs the source out', async () => {
+    const seenTokens: Array<string | undefined> = [];
+    let refreshes = 0;
+    const source: Source = {
+      descriptor: {
+        id: 'oauthy',
+        name: 'OAuthy',
+        documentTypes: ['note'],
+        auth: 'oauth',
+      },
+      async connect() {
+        return { identifier: 'oauthy@test' };
+      },
+      async *pull(session) {
+        seenTokens.push((await session.credentials())?.accessToken);
+        yield { phase: 'live', items: [], cursor: 1 } as Batch<unknown, unknown>;
+      },
+      toDocument: () => null,
+    };
+    const refreshers = new Map([
+      [
+        'oauthy',
+        async () => {
+          refreshes += 1;
+          throw new TypeError('fetch failed'); // a network blip, not auth
+        },
+      ],
+    ]);
+    const engine = makeEngine(source, refreshers);
+    const account = await makeAccount(source);
+    await store.vault.save(account.id, {
+      accessToken: 'expired',
+      refreshToken: 'fine',
+      expiresAt: new Date(Date.now() - 1000).toISOString(),
+    });
+    const handle = engine.run(account);
+    await waitUntil(() => refreshes >= 1);
+    await new Promise((r) => setTimeout(r, 100));
+    await handle.stop();
+    expect(seenTokens).toEqual([]);
+    expect((await store.account(account.id))?.status).not.toBe('needsReauth');
   });
 });
