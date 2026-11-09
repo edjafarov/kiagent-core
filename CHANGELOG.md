@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.123.1](https://github.com/edjafarov/kiagent-core/compare/v0.123.0...v0.123.1) (2026-11-09)
+
+### Bug Fixes
+
+* **file-roots:** keep a grant when only the volume number changed ([982a20e](https://github.com/edjafarov/kiagent-core/commit/982a20ea401a45c69fc579bd17e198d867fb3356))
+
 ## [0.123.0](https://github.com/edjafarov/kiagent-core/compare/v0.122.1...v0.123.0) (2026-11-08)
 
 ### Bug Fixes
