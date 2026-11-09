@@ -13,6 +13,7 @@ import type {
   ExternalRef,
   FolderScopeUpdate,
   Handle,
+  ProjectionHandle,
   Inference,
   Lane,
   LogLevel,
@@ -2464,9 +2465,14 @@ export function createEngine(deps: EngineDeps): Engine & {
     project<S>(
       projection: Projection<S>,
       onDiff: (state: S, seq: Seq) => void,
-    ): Handle {
+    ): ProjectionHandle {
       const abort = new AbortController();
       let stopped = false;
+      // reinit(): bumps the generation and ends the running attempt; the loop
+      // below then reads the state again instead of returning. A bump during
+      // init() ends the attempt the moment it starts, so no call is lost.
+      let generation = 0;
+      let attemptNow: AbortController | null = null;
       // Same retry shell as attach's feed loop: this projection is the
       // renderer's ONE live-state channel (main.ts wires push:app-state
       // through it), so a single DB-worker crash mid-read must not freeze the
@@ -2483,6 +2489,7 @@ export function createEngine(deps: EngineDeps): Engine & {
         // guarantee that `done` never rejects.
         let retries = 0;
         for (;;) {
+          const gen = generation;
           try {
             const leadKinds = projection.leadKinds ?? [];
             // The lead starts from BEFORE init: an account created while
@@ -2507,6 +2514,8 @@ export function createEngine(deps: EngineDeps): Engine & {
             abort.signal.addEventListener('abort', endAttempt, { once: true });
             // stop() during init already fired its event.
             if (abort.signal.aborted) attempt.abort();
+            attemptNow = attempt;
+            if (generation !== gen) attempt.abort();
             // Last seq the lead applied. The main feed skips lead-kind
             // changes at or below it: it may have read such a row (current at
             // read time) before the lead read a newer one, and applying it
@@ -2565,9 +2574,11 @@ export function createEngine(deps: EngineDeps): Engine & {
             }
             if (abort.signal.aborted) return;
             if (leadErr !== undefined) throw leadErr;
+            if (generation !== gen) continue;
             return;
           } catch (err) {
             if (abort.signal.aborted) return;
+            if (generation !== gen) continue;
             if (!isDbWorkerTransientError(err) || retries >= FEED_RETRY_MAX) {
               logs.log('engine', 'error', `projection stopped: ${String(err)}`);
               return;
@@ -2590,7 +2601,7 @@ export function createEngine(deps: EngineDeps): Engine & {
         }
       })();
 
-      const handle: Handle = {
+      const handle: ProjectionHandle = {
         get status() {
           return stopped ? ('paused' as SyncStatus) : ('live' as SyncStatus);
         },
@@ -2601,6 +2612,11 @@ export function createEngine(deps: EngineDeps): Engine & {
           stopped = true;
           abort.abort();
           await done.catch(() => {});
+        },
+        reinit() {
+          if (stopped) return;
+          generation += 1;
+          attemptNow?.abort();
         },
       };
       return handle;

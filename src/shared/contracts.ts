@@ -2425,6 +2425,13 @@ export interface AppState {
 // 9. ENGINE & SCHEDULER
 // ─────────────────────────────────────────────────────────────────────────────
 
+/** A projection's handle: `reinit()` reads the state again from current rows.
+ *  For writes that never reach the feed, such as a follower applying a delta
+ *  from its leader. Calls while a read is pending fold into it. */
+export interface ProjectionHandle extends Handle {
+  reinit(): void;
+}
+
 export interface Handle {
   readonly status: SyncStatus;
   /** The per-consumer ledger — drives the processing UI. */
@@ -2450,7 +2457,7 @@ export interface Engine {
   project<S>(
     projection: Projection<S>,
     onDiff: (state: S, seq: Seq) => void,
-  ): Handle;
+  ): ProjectionHandle;
   readMessageEvidence(
     input: MessageEvidenceReadInput,
   ): Promise<MessageEvidenceReadResult>;

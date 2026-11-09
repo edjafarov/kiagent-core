@@ -40,3 +40,43 @@ describe('a delta applied on a follower refreshes the open pages', () => {
     expect(u.sent).toEqual([]);
   });
 });
+
+describe('a delta that touches accounts or documents reads the app state again', () => {
+  const setupTimed = () => {
+    let cb: (tables: string[]) => void = () => undefined;
+    const timers: (() => void)[] = [];
+    const reproject = jest.fn();
+    wireSyncAppliedPush(
+      { onApplied: (c) => void (cb = c) },
+      { attentionHint: () => undefined, broadcast: () => undefined, reproject },
+      { setTimeout: (fn) => void timers.push(fn) },
+    );
+    const tick = () => timers.shift()?.();
+    return { fire: (t: string[]) => cb(t), reproject, tick, timers };
+  };
+
+  it('accounts and documents read it again; other tables do not', () => {
+    const t = setupTimed();
+    t.fire(['outbox', 'sync_epochs']);
+    expect(t.reproject).not.toHaveBeenCalled();
+    t.fire(['accounts']);
+    expect(t.reproject).toHaveBeenCalledTimes(1);
+    t.tick();
+    t.fire(['documents']);
+    expect(t.reproject).toHaveBeenCalledTimes(2);
+  });
+
+  it('deltas inside the window fold into one read at its end', () => {
+    const t = setupTimed();
+    t.fire(['documents']);
+    t.fire(['documents']);
+    t.fire(['accounts']);
+    expect(t.reproject).toHaveBeenCalledTimes(1);
+    t.tick();
+    expect(t.reproject).toHaveBeenCalledTimes(2);
+    // Nothing new during the second window: no third read.
+    t.tick();
+    expect(t.reproject).toHaveBeenCalledTimes(2);
+    expect(t.timers).toHaveLength(0);
+  });
+});
