@@ -44,7 +44,11 @@ const ARGS = {
 };
 
 describe('runWhisperCli', () => {
-  it('a background run execs through taskpolicy with -t (darwin)', async () => {
+  // `taskpolicy -b` (PRIO_DARWIN_BG) made whisper's CPU-side silero VAD
+  // ~6000x slower (40 ms -> 242 s on a 13.7 s clip, M1 Max; 115 s on M4 Max),
+  // so a 1-minute voice note took ~20 min. The utility QoS clamp still yields
+  // to the user and keeps the VAD at full speed.
+  it('a background run execs through taskpolicy -c utility (never -b) with -t (darwin)', async () => {
     const { spawnFn, child, argv } = fakeSpawn();
     const p = runWhisperCli({
       ...ARGS,
@@ -56,11 +60,13 @@ describe('runWhisperCli', () => {
     });
     child.emit('close', 0, null);
     await p;
-    expect(argv[0].slice(0, 3)).toEqual([
+    expect(argv[0].slice(0, 4)).toEqual([
       '/usr/sbin/taskpolicy',
-      '-b',
+      '-c',
+      'utility',
       ARGS.binaryPath,
     ]);
+    expect(argv[0]).not.toContain('-b');
     expect(argv[0][argv[0].indexOf('-t') + 1]).toBe('2');
   });
 

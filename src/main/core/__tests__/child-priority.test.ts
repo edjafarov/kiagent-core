@@ -41,6 +41,35 @@ it('background on macOS execs through taskpolicy -b (same pid, no setPriority)',
   expect(h.setPriority).not.toHaveBeenCalled();
 });
 
+it('background with darwinQos utility execs through taskpolicy -c utility', () => {
+  const h = harness('darwin');
+  const child = launch('background', '/bin/x', ['-a'], h.start, h.deps, {
+    darwinQos: 'utility',
+  });
+  expect(h.started).toEqual([
+    { cmd: TASKPOLICY, args: ['-c', 'utility', '/bin/x', '-a'] },
+  ]);
+  expect(child.pid).toBe(4242);
+  expect(h.setPriority).not.toHaveBeenCalled();
+});
+
+it('darwinQos only changes the macOS wrapper — Windows still gets PRIORITY_LOW', () => {
+  const h = harness('win32');
+  launch('background', 'C:\\x.exe', [], h.start, h.deps, {
+    darwinQos: 'utility',
+  });
+  expect(h.started[0].cmd).toBe('C:\\x.exe');
+  expect(h.setPriority).toHaveBeenCalledWith(4242, LOW);
+});
+
+it('darwinQos is ignored for interactive children', () => {
+  const h = harness('darwin');
+  launch('interactive', '/bin/x', [], h.start, h.deps, {
+    darwinQos: 'utility',
+  });
+  expect(h.started).toEqual([{ cmd: '/bin/x', args: [] }]);
+});
+
 it('background on macOS without taskpolicy falls back to PRIORITY_LOW', () => {
   const h = harness('darwin', false);
   launch('background', '/bin/x', [], h.start, h.deps);

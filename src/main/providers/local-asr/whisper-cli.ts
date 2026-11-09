@@ -320,6 +320,9 @@ export function runWhisperCli(args: {
       argv,
       (cmd, a) => spawnFn(cmd, a, { stdio: ['ignore', 'pipe', 'pipe'] }),
       { platform: args.platform, exists: args.taskpolicyExists },
+      // Never `taskpolicy -b`: the silero VAD (CPU/Accelerate) runs ~6000x
+      // slower under PRIO_DARWIN_BG (child-priority.ts DarwinQos).
+      { darwinQos: 'utility' },
     );
 
     const out: Buffer[] = [];

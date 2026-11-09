@@ -12,6 +12,20 @@ export type ChildClass = 'interactive' | 'background';
 
 export const TASKPOLICY = '/usr/sbin/taskpolicy';
 
+/** How a macOS background child is demoted. `background` = `taskpolicy -b`
+ *  (PRIO_DARWIN_BG: efficiency cores only, throttled CPU, I/O and GPU).
+ *  `utility` = `taskpolicy -c utility` (QoS clamp: still below the user's
+ *  work, but not starved). Use `utility` for a child whose CPU-side math
+ *  collapses under DARWIN_BG — whisper-cli's silero VAD runs ~6000x slower
+ *  there (40 ms → 242 s on a 13.7 s clip, M1 Max), which turned a 1-minute
+ *  voice note into a 20-minute job. */
+export type DarwinQos = 'background' | 'utility';
+
+export interface LaunchOptions {
+  /** macOS only; ignored for `interactive` and on other platforms. */
+  darwinQos?: DarwinQos;
+}
+
 export interface PriorityDeps {
   platform?: NodeJS.Platform;
   exists?: (p: string) => boolean;
@@ -75,19 +89,24 @@ function demoteAndNote(
 /** Start a child in its class. `start` does the real spawn/execFile (so test
  *  fakes and each site's own options keep working); `launch` owns wrapping,
  *  demotion, fallback and logging. macOS background children exec through
- *  `taskpolicy -b`, which sets PRIO_DARWIN_BG then execs in place — same pid,
- *  so kill/abort/stdio behave as before. */
+ *  `taskpolicy -b` (or `-c utility`, see DarwinQos), which sets the policy
+ *  then execs in place — same pid, so kill/abort/stdio behave as before. */
 export function launch<C extends { pid?: number } | void>(
   cls: ChildClass,
   cmd: string,
   args: string[],
   start: (cmd: string, args: string[]) => C,
   deps: PriorityDeps = {},
+  opts: LaunchOptions = {},
 ): C {
   const platform = deps.platform ?? process.platform;
   if (cls === 'interactive') return start(cmd, args);
   const name = path.basename(cmd);
   if (platform === 'darwin' && (deps.exists ?? fs.existsSync)(TASKPOLICY)) {
+    if (opts.darwinQos === 'utility') {
+      note(name, cls, 'via taskpolicy -c utility');
+      return start(TASKPOLICY, ['-c', 'utility', cmd, ...args]);
+    }
     note(name, cls, 'via taskpolicy');
     return start(TASKPOLICY, ['-b', cmd, ...args]);
   }
