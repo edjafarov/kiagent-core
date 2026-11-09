@@ -2900,6 +2900,25 @@ describe('createExtensionPlatform', () => {
       });
     });
 
+    it('a refresh that fails on the network (expired token): provably not sent, Retry offered, sender never called', async () => {
+      const refresh = jest.fn(async () => {
+        throw new TypeError('fetch failed');
+      });
+      const { send } = await oauthSenderPlatform(refresh as never);
+      const err = await send().then(
+        () => null,
+        (e: Error) => e,
+      );
+      expect(err?.message).toMatch(/^not sent: /);
+      expect(shapeOutboundError(err!.message)).toMatchObject({
+        kind: 'transient',
+        canRetry: true,
+      });
+      await expect(tools.get('sender_last_ctx')!.call({})).resolves.toEqual({
+        ctx: null,
+      });
+    });
+
     it('refuses to register a sender from an extension without the send cap: warns, registers nothing, source still registers', async () => {
       await platform.start(); // empty dir — no-op
       await installSenderFixture(FIXTURE_SENDER_NOCAP, 'test.sender-nocap');
