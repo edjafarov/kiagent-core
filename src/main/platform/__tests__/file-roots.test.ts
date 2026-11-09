@@ -1,11 +1,13 @@
 /** @jest-environment node */
 import {
   chmod,
+  lstat,
   mkdtemp,
   mkdir,
   readFile,
   realpath,
   rm,
+  symlink,
   writeFile,
 } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -117,6 +119,71 @@ describe('file root registry', () => {
         writable: true,
       }),
     ).rejects.toThrow(/identity/i);
+  });
+
+  // macOS renumbers volumes across reboots (st_dev 16777233 → 16777230 on the
+  // same Data volume), so a device-number change alone is not a replacement.
+  it('restores a root whose volume was renumbered: same canonical path and inode', async () => {
+    const st = await lstat(rootPath, { bigint: true });
+    const canonical = await realpath(rootPath);
+    const restored = createFileRootRegistry();
+    await restored.restore([
+      {
+        pluginId: 'documents',
+        id: 'renumbered-root',
+        name: 'Incoming',
+        writable: true,
+        path: canonical,
+        dev: 'device-before-reboot',
+        ino: String(st.ino),
+      },
+    ]);
+    await expect(
+      restored.resolve('documents', 'renumbered-root'),
+    ).resolves.toMatchObject({ path: canonical, dev: String(st.dev) });
+    expect(restored.snapshot()[0]).toMatchObject({ dev: String(st.dev) });
+  });
+
+  it('still rejects a renumbered volume when the inode differs', async () => {
+    await expect(
+      registry.grant('documents', await realpath(rootPath), {
+        id: 'r',
+        identity: { dev: 'device-before-reboot', ino: '1' },
+        name: 'Incoming',
+        writable: true,
+      }),
+    ).rejects.toThrow(/identity/i);
+  });
+
+  it('still rejects a renumbered volume reached through a symlink', async () => {
+    const st = await lstat(rootPath, { bigint: true });
+    const link = `${rootPath}-link`;
+    const target = join(rootPath, 'inner');
+    await mkdir(target);
+    const inner = await lstat(target, { bigint: true });
+    await symlink(rootPath, link);
+    try {
+      await expect(
+        registry.grant('documents', join(link, 'inner'), {
+          id: 'r',
+          identity: { dev: 'device-before-reboot', ino: String(inner.ino) },
+          name: 'Incoming',
+          writable: true,
+        }),
+      ).rejects.toThrow(/identity/i);
+      // Same device: the exact identity still restores through any path.
+      await expect(
+        registry.grant('documents', join(link, 'inner'), {
+          id: 'r2',
+          identity: { dev: String(inner.dev), ino: String(inner.ino) },
+          name: 'Incoming',
+          writable: true,
+        }),
+      ).resolves.toMatchObject({ id: 'r2' });
+      expect(String(st.dev)).toBe(String(inner.dev));
+    } finally {
+      await rm(link, { force: true });
+    }
   });
 
   it('restores only the original bigint filesystem identity, not a replacement at the same path', async () => {

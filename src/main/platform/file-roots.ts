@@ -87,6 +87,22 @@ function opaqueId(): string {
   return `${process.pid.toString(36)}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
 }
 
+/** Whether a directory is the one a persisted grant recorded. The inode must
+ *  match. The device number may differ only when the path is already
+ *  canonical: macOS renumbers volumes across reboots (the same Data volume
+ *  came back as a different st_dev), so a device change alone is not a
+ *  replacement, while a path resolved through a symlink could reach another
+ *  volume whose inode happens to match. */
+function sameIdentity(
+  stat: { dev: bigint; ino: bigint },
+  identity: { dev: string; ino: string },
+  absolute: string,
+  canonical: string,
+): boolean {
+  if (String(stat.ino) !== identity.ino) return false;
+  return String(stat.dev) === identity.dev || canonical === absolute;
+}
+
 export function createFileRootRegistry(): FileRootRegistry {
   const grants = new Map<string, Map<string, FileRootGrant>>();
   const listeners = new Map<string, Map<string, Set<() => void>>>();
@@ -96,10 +112,10 @@ export function createFileRootRegistry(): FileRootRegistry {
       const stat = await fsp.lstat(absolute, { bigint: true });
       if (!stat.isDirectory() || stat.isSymbolicLink())
         throw new Error('file root must be a directory');
+      const canonical = await fsp.realpath(absolute);
       if (
         options.identity &&
-        (String(stat.dev) !== options.identity.dev ||
-          String(stat.ino) !== options.identity.ino)
+        !sameIdentity(stat, options.identity, absolute, canonical)
       )
         throw new Error('persisted file root identity changed');
       const id = options.id ?? opaqueId();
@@ -107,7 +123,7 @@ export function createFileRootRegistry(): FileRootRegistry {
         id,
         name: options.name,
         writable: options.writable,
-        path: await fsp.realpath(absolute),
+        path: canonical,
         dev: String(stat.dev),
         ino: String(stat.ino),
       };
