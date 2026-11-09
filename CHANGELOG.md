@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.123.2](https://github.com/edjafarov/kiagent-core/compare/v0.123.1...v0.123.2) (2026-11-09)
+
+### Bug Fixes
+
+* **engine:** a network blip during a token refresh no longer signs a source out ([ef9a846](https://github.com/edjafarov/kiagent-core/commit/ef9a846111c3e4fd5a96f94f2922059c32e56d75))
+* **engine:** an abandoned feed lets go at once; an unsent message says so ([ab38a44](https://github.com/edjafarov/kiagent-core/commit/ab38a44692aaee7cb1be87f24ac44043173e438d))
+* **sync:** a follower's screens show what its leader's deltas changed ([4946fc4](https://github.com/edjafarov/kiagent-core/commit/4946fc4622598f10864841bd466be526f3eb64e8))
+
 ## [0.123.1](https://github.com/edjafarov/kiagent-core/compare/v0.123.0...v0.123.1) (2026-11-09)
 
 ### Bug Fixes
