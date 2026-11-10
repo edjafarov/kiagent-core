@@ -1,5 +1,6 @@
 import type BetterSqlite3 from 'better-sqlite3';
 
+import { SHARED_FOLDERS_DDL } from '../shared-folders/schema';
 import { PDF_OCR_AFTER_STATUSES } from '@main/workers/convert/outcome';
 import { VISUAL_EXTS } from '@main/workers/vision/classify';
 import {
@@ -1411,6 +1412,10 @@ const MIGRATIONS: Migration[] = [
       .get();
     if (!have) db.exec(`ALTER TABLE sync_state ADD COLUMN head_pending INTEGER NOT NULL DEFAULT 0`);
   },
+  // v24: shared folders (phone phase 3). The leader's manifest of the Incoming
+  // and Sorted folders and the registered scan captures are copied; the mirror
+  // (what this Mac last had in agreement with the manifest) is local.
+  SHARED_FOLDERS_DDL,
 ];
 
 /**
