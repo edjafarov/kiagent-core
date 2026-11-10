@@ -9,6 +9,7 @@
  * back into the legacy `SearchHit` wire shape so existing client configs /
  * prompts keep working.
  */
+import { sourceUrlOf, type LocalPathOf } from './local-path';
 import type { Account, AccountId, Document, Query } from '@shared/contracts';
 import { DEFAULT_CONTEXT_LINES } from '../../store/line-window';
 import { parseOperators } from './search-operators';
@@ -105,7 +106,7 @@ function resolveContextLines(raw: unknown): number {
   return Math.min(Math.max(0, n), SNIPPET_MAX_CONTEXT_LINES);
 }
 
-export function makeSearchTool(query: Query) {
+export function makeSearchTool(query: Query, localPathOf?: LocalPathOf) {
   async function runOne(args: SearchArgs): Promise<SearchHit[]> {
     const limit = resolveLimit(args.limit);
     const contextLines = resolveContextLines(args.context_lines);
@@ -185,14 +186,14 @@ export function makeSearchTool(query: Query) {
       docs = docs.slice(0, limit);
     }
 
-    return docs.map((d, i) => ({
+    return Promise.all(docs.map(async (d, i) => ({
       id: d.id,
       title: d.title ?? '',
       source: sourceOf.get(d.accountId) ?? 'unknown',
       type: d.type,
       // 'snippet' projection: the store always sets it.
       snippet: d.snippet ?? '',
-      source_url: d.url ?? '',
+      source_url: (await sourceUrlOf(d, sourceOf.get(d.accountId), localPathOf)) ?? '',
       created_at: d.createdAt ?? d.ingestedAt,
       // Query.search doesn't expose its internal bm25 score; approximate a
       // monotonic "higher is better" rank so the field stays populated.
@@ -200,7 +201,7 @@ export function makeSearchTool(query: Query) {
         docs.length > 1
           ? Math.round(((docs.length - i) / docs.length) * 100) / 100
           : 1,
-    }));
+    })));
   }
 
   return async function search(

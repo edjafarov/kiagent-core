@@ -4,6 +4,7 @@
  * batch semantics: an array in, an order-preserving array out with `null`
  * per miss.
  */
+import { sourceUrlOf, type LocalPathOf } from './local-path';
 import type { Document, DocumentId, Query } from '@shared/contracts';
 
 export const getDescription = `Fetch a document by id; returns full markdown body, \`source_url\`, and metadata. Use after \`search\` when snippets aren't enough.
@@ -39,7 +40,11 @@ export interface McpDocument {
   created_at: string | null;
 }
 
-function toMcpDoc(d: Document, sourceOf: Map<string, string>): McpDocument {
+async function toMcpDoc(
+  d: Document,
+  sourceOf: Map<string, string>,
+  localPathOf?: LocalPathOf,
+): Promise<McpDocument> {
   return {
     id: d.id,
     source: sourceOf.get(d.accountId) ?? 'unknown',
@@ -47,14 +52,14 @@ function toMcpDoc(d: Document, sourceOf: Map<string, string>): McpDocument {
     title: d.title,
     markdown: d.markdown,
     metadata: d.metadata,
-    source_url: d.url ?? null,
+    source_url: await sourceUrlOf(d, sourceOf.get(d.accountId), localPathOf),
     content_hash: d.contentHash,
     parent_id: d.parentId,
     created_at: d.createdAt,
   };
 }
 
-export function makeGetTool(query: Query) {
+export function makeGetTool(query: Query, localPathOf?: LocalPathOf) {
   return async function get(args: Record<string, unknown>): Promise<unknown> {
     const a = args as { id?: string; ids?: string[] };
 
@@ -67,7 +72,7 @@ export function makeGetTool(query: Query) {
       const docs = await Promise.all(
         a.ids.map((id) => query.document(id as DocumentId)),
       );
-      return docs.map((d) => (d ? toMcpDoc(d, sourceOf) : null));
+      return Promise.all(docs.map((d) => (d ? toMcpDoc(d, sourceOf, localPathOf) : null)));
     }
 
     if (a.id == null) throw new Error('missing `id` (or `ids` for batch mode)');
@@ -77,6 +82,6 @@ export function makeGetTool(query: Query) {
     const sourceOf = new Map(
       accounts.map((acc) => [acc.id as string, acc.source]),
     );
-    return toMcpDoc(doc, sourceOf);
+    return toMcpDoc(doc, sourceOf, localPathOf);
   };
 }

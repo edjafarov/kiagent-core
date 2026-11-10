@@ -158,6 +158,12 @@ import type { LocalAsrProvider } from './providers/local-asr';
 import { CURATED_TIERS, modelTotalBytes } from './providers/local-llm/models';
 import type { LocalLlmProvider } from './providers/local-llm/provider';
 import { registerBundledSources } from './sources';
+import {
+  SHARED_IDENTIFIER,
+  SHARED_SOURCE_ID,
+  type SharedFolderHost,
+} from './sources/shared-folder';
+import { descriptor as sharedFolderDescriptor } from './sources/shared-folder/shared-folder-source';
 import { countFiles } from './sources/local-folder/scanner';
 import {
   listChildren,
@@ -1262,6 +1268,8 @@ app
         path.join(__dirname, 'sqlRunner.js'),
         path.join(__dirname, 'sqlRunner.bundle.dev.js'),
       ].find((f) => fs.existsSync(f)) ?? path.join(__dirname, 'sqlRunner.js');
+    // Late-bound: the shared-folders service is built further down.
+    let sharedSourceHost: SharedFolderHost | null = null;
     mcp = await startMcp({
       query: p.readsFor('mcp'),
       sqlExecutor: createSqlRunner({
@@ -1286,6 +1294,8 @@ app
         masterName: () => p.sync.masterName(),
       }),
       calendar: calendarOut,
+      localPathOf: async (doc) =>
+        (await sharedSourceHost?.sharedFolders.pathOf(doc)) ?? null,
       admission: p.admission,
     });
     bootTimer.mark('mcp');
@@ -1429,6 +1439,7 @@ app
       broker,
       p.converter,
       path.join(app.getPath('userData'), 'expand-tmp'),
+      () => sharedSourceHost,
     );
     for (const [sourceId, refresher] of bundledRefreshers)
       p.refreshers.set(sourceId, refresher);
@@ -1473,7 +1484,18 @@ app
       trash: (file) => shell.trashItem(file),
       now: () => Date.now(),
       log: (level, msg) => p.logSink.log('shared-folders', level, msg),
+      ensureAccount: async () => {
+        const account = await p.store.createAccount({
+          source: SHARED_SOURCE_ID,
+          identifier: SHARED_IDENTIFIER,
+          config: {},
+          status: 'connecting',
+          cadence: sharedFolderDescriptor.cadence,
+        });
+        runAccount(p, account);
+      },
     });
+    sharedSourceHost = { db: p.db, sharedFolders };
     extensionsPlatform = createExtensionPlatform({
       sync: p.sync,
       prefs: p.prefs,

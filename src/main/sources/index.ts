@@ -5,6 +5,7 @@ import type { Converter } from '../core/converter/converter';
 import { gmailSource, googleOAuthProfile, googleRefresher } from './gmail';
 import { createImapSource } from './imap';
 import { createLocalFolderSource } from './local-folder';
+import { createSharedFolderSource, type SharedFolderHost } from './shared-folder';
 
 /**
  * First-party sources. Each family registers its source; OAuth-backed
@@ -19,8 +20,11 @@ export function registerBundledSources(
   broker: ConnectBroker,
   converter: Pick<Converter, 'expandPage'>,
   scratchDir?: string,
+  /** The shared-folders service and database, once the host has built them. */
+  sharedHost?: () => SharedFolderHost | null,
 ): Map<string, (creds: Credentials) => Promise<Credentials | null>> {
   register(createLocalFolderSource({ converter, scratchDir }));
+  register(createSharedFolderSource(sharedHost ?? (() => null)));
   register(createImapSource());
   register(gmailSource);
   broker.registerOAuthProfile('gmail', googleOAuthProfile);

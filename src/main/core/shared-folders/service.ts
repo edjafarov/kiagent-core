@@ -77,6 +77,9 @@ export interface SharedFoldersDeps {
   watch?(rootAbs: string, onEvent: () => void): RootWatcher;
   /** How long a burst of file events is gathered before a pass. Default 750. */
   debounceMs?: number;
+  /** Creates the one `shared-folder` account and starts it (the host does
+   *  `store.createAccount` + `runAccount`). Absent in hosts without an engine. */
+  ensureAccount?(): Promise<void>;
   /** How often a copy tries again without being told to (a failed transport,
    *  a join that finished). Default 60 000. */
   retryMs?: number;
@@ -198,6 +201,13 @@ export async function createSharedFolders(deps: SharedFoldersDeps): Promise<Shar
     }
     if (mode() !== 'leader') return;
     await reconcileIfPending();
+    if (deps.ensureAccount && (roots.incoming || roots.sorted) && !(await accountId())) {
+      try {
+        await deps.ensureAccount();
+      } catch (err) {
+        deps.log('warn', `could not create the shared-folder account: ${String(err)}`);
+      }
+    }
     const before = await maxRev();
     for (const root of ['incoming', 'sorted'] as const) {
       const base = roots[root];
