@@ -77,6 +77,7 @@ import { createMarketplaceCatalog } from './marketplace/catalog';
 import type { MarketplaceCatalog } from './marketplace/catalog';
 import { buildMainApi } from './main-api';
 import { createSharedFolders, sha256File } from './core/shared-folders';
+import { ownLocalFolders } from './core/shared-folders/local-folder-access';
 import { createBusyRegistry } from './core/busy';
 import { wireOutboxPush } from './outbox-push';
 import { wireSyncAppliedPush } from './sync-applied-push';
@@ -1496,19 +1497,12 @@ app
         });
         runAccount(p, account);
       },
-      localFolders: {
-        accounts: async () =>
-          (await p.store.read.accounts())
-            .filter((a) => a.source === 'local-folder')
-            .flatMap((a) => {
-              try {
-                return [
-                  { id: a.id, roots: readFolderRoots(a).map((r) => r.id) },
-                ];
-              } catch {
-                return []; // a malformed config must not hide the others
-              }
-            }),
+      // Only this device's own local folders: the accounts table holds the
+      // other Macs' too, often with the very same absolute paths.
+      localFolders: ownLocalFolders({
+        accounts: () => p.store.read.accounts(),
+        deviceId: () => p.sync.deviceId(),
+        roots: (a) => readFolderRoots(a as never).map((r) => r.id),
         archive: async (accountId, refs) => {
           // Read fresh each page: the account's loop restarts after each one.
           const account = await p.store.account(accountId as AccountId);
@@ -1524,7 +1518,7 @@ app
             JSON.stringify(account.config),
           );
         },
-      },
+      }),
     });
     sharedSourceHost = { db: p.db, sharedFolders };
     extensionsPlatform = createExtensionPlatform({
