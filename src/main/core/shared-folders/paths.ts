@@ -1,3 +1,4 @@
+import fs from 'node:fs';
 import path from 'path';
 
 export type SharedRoot = 'incoming' | 'sorted';
@@ -26,4 +27,39 @@ export function toAbs(rootAbs: string, rel: string): string {
     throw new Error(`shared-folders: bad path ${JSON.stringify(rel)}`);
   }
   return path.join(rootAbs, ...segs.map((s) => s.normalize('NFC')));
+}
+
+/** `toAbs`, and the proof that nothing on the way is a symlink. A manifest
+ *  path comes from another device, so before it is read, written, removed or
+ *  moved: every segment that exists below the root is looked at with `lstat`
+ *  (a symlink or junction anywhere, the last segment included, is refused, also
+ *  one that points back inside), and the nearest existing directory above the
+ *  target must resolve to a place inside the root's own real path. The root
+ *  itself may be a symlink. A segment that does not exist yet is fine. */
+export async function safeAbs(rootAbs: string, rel: string): Promise<string> {
+  const abs = toAbs(rootAbs, rel);
+  const segs = path.relative(rootAbs, abs).split(path.sep);
+  let cur = rootAbs;
+  let deepest = rootAbs; // the last directory that exists on the way
+  for (const seg of segs) {
+    cur = path.join(cur, seg);
+    let st: fs.Stats;
+    try {
+      // eslint-disable-next-line no-await-in-loop
+      st = await fs.promises.lstat(cur);
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code;
+      if (code === 'ENOENT') break;
+      throw new Error(`shared-folders: cannot look at ${JSON.stringify(rel)} (${code ?? 'error'})`);
+    }
+    if (st.isSymbolicLink()) throw new Error(`shared-folders: ${JSON.stringify(rel)} goes through a symlink`);
+    if (!st.isDirectory()) break;
+    deepest = cur;
+  }
+  const realRoot = await fs.promises.realpath(rootAbs);
+  const realDeepest = await fs.promises.realpath(deepest);
+  const inside = path.relative(realRoot, realDeepest);
+  if (inside === '..' || inside.startsWith(`..${path.sep}`) || path.isAbsolute(inside))
+    throw new Error(`shared-folders: ${JSON.stringify(rel)} leaves the folder`);
+  return abs;
 }

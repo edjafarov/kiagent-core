@@ -8,7 +8,7 @@ import { migrateLocalFolders, type LocalFolderAccess } from './migrate';
 import { scanRoot } from './leader-scan';
 import { mirrorPass } from './mirror';
 import { listSortable, reconcileAtPromotion } from './promote';
-import { normalizeRel, toAbs, toRel, type SharedRoot } from './paths';
+import { normalizeRel, safeAbs, toRel, type SharedRoot } from './paths';
 import { loadRootSet, OWED_KEY, PAUSED_KEY, quickCheck, ROOT_NAMES, saveRootSet, SharedRootPaused } from './root-state';
 import { createServe } from './serve';
 import { watchRoot, type RootWatcher } from './watch';
@@ -393,7 +393,7 @@ export async function createSharedFolders(deps: SharedFoldersDeps): Promise<Shar
       const base = cut > 0 && isRoot(root) ? roots[root] : null;
       if (!base) return null;
       try {
-        return toAbs(base, normalizeRel(doc.externalId.slice(cut + 1)));
+        return await safeAbs(base, normalizeRel(doc.externalId.slice(cut + 1)));
       } catch {
         return null;
       }

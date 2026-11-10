@@ -12,7 +12,7 @@ import {
   type FileRow,
   type MirrorRow,
 } from './leader-scan';
-import { toAbs, type SharedRoot } from './paths';
+import { safeAbs, type SharedRoot } from './paths';
 import { judgeRoot, ROOT_NAMES, type GateDeps } from './root-state';
 import { NEXT_REV } from './schema';
 import type { Roots, SharedFoldersDeps } from './service';
@@ -111,6 +111,8 @@ async function reconcileRoot(d: PromoteDeps, root: SharedRoot, base: string): Pr
       if (!alive()) return 'owed';
       try {
         // eslint-disable-next-line no-await-in-loop
+        await safeAbs(base, rel);
+        // eslint-disable-next-line no-await-in-loop
         await d.trash(f.abs);
         dropMirror(rel);
       } catch (err) {
@@ -159,7 +161,8 @@ export async function listSortable(d: Pick<SharedFoldersDeps, 'db'>, incomingAbs
   const out: string[] = [];
   for (const r of rows) {
     try {
-      out.push(toAbs(incomingAbs, String(r.rel_path)));
+      // eslint-disable-next-line no-await-in-loop
+      out.push(await safeAbs(incomingAbs, String(r.rel_path)));
     } catch {
       // a row with a path that cannot be on disk
     }

@@ -1,4 +1,5 @@
 import fs from 'fs';
+import os from 'os';
 import path from 'path';
 
 import type { Batch, Document, DocumentInput, Session } from '@shared/contracts';
@@ -339,5 +340,30 @@ describe('a root that is owed its reconcile', () => {
     const doc = { accountId: 'x', externalId: 'sorted/a.txt' } as unknown as Document;
     await d.db.run(`INSERT INTO accounts(id, source, identifier, config, status, created_at) VALUES('x','shared-folder','shared','{}','connected','t')`).catch(() => {});
     expect(await source.fetchBytes!(session(), doc)).toBeNull();
+  });
+});
+
+describe('a path from another device through a symlinked directory', () => {
+  it('is neither parsed nor read', async () => {
+    const { d, sorted } = await leader();
+    await d.db.run(
+      `INSERT INTO accounts(id, source, identifier, config, status, created_at)
+       VALUES('acct-shared', 'shared-folder', 'shared', '{}', 'connecting', 'now')`,
+    );
+    const out = fs.mkdtempSync(path.join(os.tmpdir(), 'outside-'));
+    write(path.join(out, 'report.txt'), 'outside');
+    fs.symlinkSync(out, path.join(sorted, 'Tax'));
+    write(path.join(sorted, 'ok.txt'), 'inside');
+    await d.db.run(
+      `INSERT INTO shared_files(root, rel_path, sha256, bytes, mtime, rev) VALUES
+         ('sorted','Tax/report.txt',?,7,'t',90), ('sorted','ok.txt',?,6,'t',91)`,
+      [sha('outside'), sha('inside')],
+    );
+    const { docs } = await pullAll(d);
+    expect(ids(docs)).toEqual(['sorted/ok.txt']);
+    const source = createSharedFolderSource(() => hostOf(d));
+    const doc = { accountId: 'acct-shared', externalId: 'sorted/Tax/report.txt' } as never;
+    expect(await source.fetchBytes!(session(), doc)).toBeNull();
+    expect(await d.svc.pathOf(doc)).toBeNull();
   });
 });

@@ -2,7 +2,7 @@
  *  sorting has put the file. The note ("this file is that capture") lives on
  *  the local mirror entry and follows the file when it moves. */
 import { SyncReadOnly } from '../sync/role';
-import { toAbs, toRel, type SharedRoot } from './paths';
+import { safeAbs, toRel, type SharedRoot } from './paths';
 import type {
   Roots,
   SharedFoldersApi,
@@ -134,7 +134,7 @@ export function createCaptures(ctx: CaptureCtx): Captures {
       let absPath: string | null = null;
       if (!missingHere && base) {
         try {
-          absPath = toAbs(base, rel);
+          absPath = await safeAbs(base, rel);
         } catch {
           absPath = null;
         }

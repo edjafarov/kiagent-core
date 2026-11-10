@@ -17,7 +17,7 @@ import type {
 
 import type { AppDb } from '../../db/app-db';
 import { sha256File } from '../../core/shared-folders/hash';
-import { toAbs, type SharedRoot } from '../../core/shared-folders/paths';
+import { safeAbs, type SharedRoot } from '../../core/shared-folders/paths';
 import type { SharedFoldersApi } from '../../core/shared-folders/service';
 import { decideLocalFile } from '../local-folder/ingestible';
 import { resolvePathMime } from '../local-folder/mime';
@@ -77,7 +77,7 @@ const rootsSet = (host: SharedFolderHost): SharedRoot[] => {
 async function itemFor(host: SharedFolderHost, row: Row, base: string): Promise<SharedFileItem | null> {
   let abs: string;
   try {
-    abs = toAbs(base, row.rel_path);
+    abs = await safeAbs(base, row.rel_path);
   } catch {
     return null;
   }

@@ -15,7 +15,7 @@ import {
   type FileRow,
   type MirrorRow,
 } from './leader-scan';
-import { STAGING_DIR, toAbs, type SharedRoot } from './paths';
+import { safeAbs, STAGING_DIR, type SharedRoot } from './paths';
 import { judgeRoot, type GateDeps } from './root-state';
 import type { Roots, SharedFoldersDeps, SharedTransport } from './service';
 
@@ -240,7 +240,7 @@ async function mirrorRoot(
   for (const rel of trashes) {
     // eslint-disable-next-line no-await-in-loop
     await forPath(rel, async () => {
-      const abs = toAbs(base, rel);
+      const abs = await safeAbs(base, rel);
       const m = mirror.get(rel);
       // D = M proves the user did not touch it, also when this Mac missed an
       // edit before the deletion. Checked again just before it goes.
@@ -256,7 +256,7 @@ async function mirrorRoot(
     // eslint-disable-next-line no-await-in-loop
     await forPath(rel, async () => {
       const m = mirror.get(rel)!;
-      if ((await stillMirrored(d, toAbs(base, rel), m)) !== 'absent') return;
+      if ((await stillMirrored(d, await safeAbs(base, rel), m)) !== 'absent') return;
       check(d);
       await viaTransport(
         transport.remove({ root, relPath: rel, sha256: m.sha256 }),
@@ -282,7 +282,7 @@ async function fetchOne(
   m: MirrorRow | undefined,
   transport: SharedTransport,
 ): Promise<void> {
-  const dest = toAbs(base, rel);
+  const dest = await safeAbs(base, rel);
   const stage = path.join(base, STAGING_DIR);
   // Named by the hash, so a restart resumes at the length already there.
   const tmp = path.join(stage, `${r.sha256}.part`);
@@ -317,6 +317,7 @@ async function fetchOne(
   }
   check(d); // the last look before the downloaded file replaces anything
   await fs.promises.mkdir(path.dirname(dest), { recursive: true });
+  await safeAbs(base, rel); // again, now that the folders exist
   await fs.promises.rename(tmp, dest);
   const st = await fs.promises.stat(dest);
   await d.db.run(UPSERT_MIRROR, [

@@ -8,7 +8,7 @@ import path from 'node:path';
 import { SyncReadOnly } from '../sync/role';
 import { UPSERT_MIRROR } from './leader-scan';
 import { NEXT_REV } from './schema';
-import { normalizeRel, STAGING_DIR, toAbs, type SharedRoot } from './paths';
+import { normalizeRel, safeAbs, STAGING_DIR, toAbs, type SharedRoot } from './paths';
 import type { FileQuery, OfferAnswer, OfferMeta, Roots, SharedFoldersApi, SharedFoldersDeps } from './service';
 
 export interface ServeCtx {
@@ -37,7 +37,9 @@ type Serve = SharedFoldersApi['serve'];
 /** The root folder and the absolute path of a path from outside. Throws on
  *  anything else: an unknown root, `..`, an absolute path, an empty segment,
  *  the staging directory. */
-function locate(ctx: ServeCtx, root: unknown, relPath: unknown): { root: SharedRoot; base: string; rel: string; abs: string } {
+type Located = { root: SharedRoot; base: string; rel: string; abs: string };
+
+function locateLexical(ctx: ServeCtx, root: unknown, relPath: unknown): Located {
   if (root !== 'incoming' && root !== 'sorted') throw new Error(`shared-folders: unknown root ${JSON.stringify(root)}`);
   ctx.refuse(root);
   const base = ctx.roots()[root];
@@ -47,6 +49,14 @@ function locate(ctx: ServeCtx, root: unknown, relPath: unknown): { root: SharedR
   const abs = toAbs(base, rel);
   if (rel === STAGING_DIR || rel.startsWith(`${STAGING_DIR}/`)) throw new Error('shared-folders: bad path');
   return { root, base, rel, abs };
+}
+
+/** `locateLexical`, and the proof that no segment on the way is a symlink (a
+ *  path from another device must not reach a file outside the root). */
+async function locate(ctx: ServeCtx, root: unknown, relPath: unknown): Promise<Located> {
+  const at = locateLexical(ctx, root, relPath);
+  await safeAbs(at.base, at.rel);
+  return at;
 }
 
 /** The hash of the file at `abs`, or null when nothing is there. A folder or
@@ -92,8 +102,9 @@ export function createServe(ctx: ServeCtx): Serve {
     if (!still()) throw new SyncReadOnly(what);
   };
 
-  const place = async (tmp: string, dest: string): Promise<void> => {
+  const place = async (tmp: string, base: string, dest: string): Promise<void> => {
     await fs.promises.mkdir(path.dirname(dest), { recursive: true });
+    await safeAbs(base, path.relative(base, dest)); // again, now that the folders exist
     await fs.promises.rename(tmp, dest);
   };
 
@@ -103,7 +114,7 @@ export function createServe(ctx: ServeCtx): Serve {
       return ctx.run(async (still) => {
         stillLeader(still, 'serve.open');
         await ctx.ready();
-        const { root, rel, abs } = locate(ctx, q.root, q.relPath);
+        const { root, rel, abs } = await locate(ctx, q.root, q.relPath);
         await ctx.quick(root);
         if ((await shaAt(ctx, root, rel, abs)) !== q.sha256) return null;
         return { path: abs, bytes: (await fs.promises.stat(abs)).size };
@@ -126,9 +137,9 @@ export function createServe(ctx: ServeCtx): Serve {
       need('serve.offer');
       if (!inStaging(tmpFile)) throw new Error('shared-folders: an offer must be received into .kia-sync');
       const drop = (): Promise<void> => fs.promises.rm(tmpFile, { force: true });
-      let target: ReturnType<typeof locate>;
+      let target: Located;
       try {
-        target = locate(ctx, meta.root, meta.relPath);
+        target = await locate(ctx, meta.root, meta.relPath);
       } catch (err) {
         await drop();
         throw err;
@@ -162,9 +173,9 @@ export function createServe(ctx: ServeCtx): Serve {
         if (reg && String(reg.sha256) === meta.sha256) {
           for (const row of withSha) {
             if (row.missing_here) continue;
-            let held: ReturnType<typeof locate>;
+            let held: Located;
             try {
-              held = locate(ctx, row.root, row.rel_path);
+              held = await locate(ctx, row.root, row.rel_path);
             } catch {
               continue;
             }
@@ -179,9 +190,9 @@ export function createServe(ctx: ServeCtx): Serve {
 
       // 2. The leader lacks these bytes for a live row: the offer supplies them.
       for (const row of withSha.filter((r) => r.missing_here)) {
-        let held: ReturnType<typeof locate>;
+        let held: Located;
         try {
-          held = locate(ctx, row.root, row.rel_path);
+          held = await locate(ctx, row.root, row.rel_path);
         } catch {
           continue;
         }
@@ -196,7 +207,7 @@ export function createServe(ctx: ServeCtx): Serve {
         if (there !== null && there !== meta.sha256 && String(mirror?.sha256) !== there) continue;
         guard();
         // eslint-disable-next-line no-await-in-loop
-        await place(tmpFile, held.abs);
+        await place(tmpFile, held.base, held.abs);
         const st = await fs.promises.stat(held.abs);
         guard();
         await db.batch([
@@ -220,7 +231,7 @@ export function createServe(ctx: ServeCtx): Serve {
       // 4. The path is free, or still holds the version the offering Mac started from.
       if (here === null || (meta.base !== null && here === meta.base)) {
         guard();
-        await place(tmpFile, abs);
+        await place(tmpFile, target.base, abs);
         ctx.kick();
         return 'written';
       }
@@ -245,7 +256,7 @@ export function createServe(ctx: ServeCtx): Serve {
         if (taken || listed) continue;
         guard();
         // eslint-disable-next-line no-await-in-loop
-        await place(tmpFile, dest);
+        await place(tmpFile, ctx.roots()[root]!, dest);
         ctx.kick();
         return 'kept-both';
       }
@@ -257,7 +268,7 @@ export function createServe(ctx: ServeCtx): Serve {
       return ctx.run(async (still) => {
         stillLeader(still, 'serve.remove');
         await ctx.ready();
-        const { root, rel, abs } = locate(ctx, q.root, q.relPath);
+        const { root, rel, abs } = await locate(ctx, q.root, q.relPath);
         await ctx.quick(root);
         if ((await shaAt(ctx, root, rel, abs)) !== q.sha256) return false;
         stillLeader(still, 'serve.remove');
