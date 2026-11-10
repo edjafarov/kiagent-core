@@ -373,3 +373,59 @@ describe('a root that is not there is still owed its reconcile', () => {
     ]);
   });
 });
+
+describe('a reconcile that could not finish is still owed', () => {
+  const owed = async (d: Device) =>
+    (await d.db.all(`SELECT value FROM meta WHERE key = 'shared-folders:reconcile-pending'`)).map((r) => r.value);
+
+  it('a folder that cannot be listed keeps the root owed; the older file is not published when it opens', async () => {
+    const { d, incoming } = await setup();
+    const locked = path.join(incoming, 'locked');
+    write(path.join(locked, 'a.pdf'), 'old');
+    await putMirror(d, 'locked/a.pdf', 'old');
+    await putRow(d, 'locked/a.pdf', 'new');
+    fs.chmodSync(locked, 0o000);
+    try {
+      d.sync.set('leader');
+      await d.svc.settled();
+      expect(await owed(d)).toHaveLength(1);
+      expect(d.svc.usable('incoming')).toBe(false);
+      expect(await d.svc.listForSorting()).toEqual([]);
+    } finally {
+      fs.chmodSync(locked, 0o755);
+    }
+    d.svc.kick();
+    await d.svc.settled();
+    expect(await rows(d)).toMatchObject([{ rel_path: 'locked/a.pdf', sha256: sha('new'), missing_here: 1 }]);
+    expect(fs.readFileSync(path.join(locked, 'a.pdf'), 'utf8')).toBe('old');
+    expect(await owed(d)).toEqual([]);
+  });
+
+  it('a Trash that fails keeps the root owed; the tombstone is not revived and is applied on the next try', async () => {
+    let failing = true;
+    const d = await device('copy', {
+      trash: async (p) => {
+        if (failing) throw new Error('busy');
+        d.trashed.push(p);
+        fs.rmSync(p, { force: true });
+      },
+    });
+    const { incoming } = await withRoots(d);
+    const f = path.join(incoming, 'a.pdf');
+    write(f, 'bye');
+    await putMirror(d, 'a.pdf', 'bye');
+    await putRow(d, 'a.pdf', 'bye', { deleted: 1 });
+    d.sync.set('leader');
+    await d.svc.settled();
+    expect(fs.existsSync(f)).toBe(true);
+    expect(await rows(d)).toMatchObject([{ rel_path: 'a.pdf', deleted: 1, rev: 3 }]);
+    expect(await owed(d)).toHaveLength(1);
+    expect(d.svc.usable('incoming')).toBe(false);
+    failing = false;
+    d.svc.kick();
+    await d.svc.settled();
+    expect(d.trashed).toEqual([f]);
+    expect(await rows(d)).toMatchObject([{ deleted: 1 }]);
+    expect(await owed(d)).toEqual([]);
+  });
+});

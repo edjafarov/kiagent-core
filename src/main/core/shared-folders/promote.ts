@@ -28,9 +28,11 @@ export type PromoteDeps = Pick<SharedFoldersDeps, 'db' | 'hashFile' | 'trash' | 
   only?: ReadonlySet<SharedRoot>;
 };
 
-/** `done`: the root was reconciled. `owed`: it could not be trusted (unset,
- *  missing, unreadable, or empty while the manifest has live files and this
- *  Mac had files here); nothing was touched and the reconcile is still owed. */
+/** `done`: the root was reconciled completely. `owed`: it could not be trusted
+ *  (unset, missing, unreadable, or empty while the manifest has live files and
+ *  this Mac had files here), its listing was incomplete, or a required action
+ *  failed: the reconcile is still owed, and the root stays gated (no scan, no
+ *  sorting, no serving, no source) until a later try completes. */
 export type ReconcileResult = 'done' | 'owed';
 
 type Row = FileRow & { parked: number };
@@ -64,6 +66,10 @@ async function reconcileRoot(d: PromoteDeps, root: SharedRoot, base: string): Pr
   const steps: BatchStep[] = [];
   const alive = (): boolean => d.still?.() ?? true;
   const seenKeys = new Set([...disk.seen].map(key));
+  /** Something this try could not decide or do: the root is still owed, so the
+   *  ordinary scan never sees it half reconciled (it would publish an older
+   *  version over a newer row, or revive a tombstone). */
+  let unfinished = disk.incomplete;
 
   /** The leader's file now, under the manifest's spelling when it has one.
    *  `parked` is only for a new row: an existing row keeps its flag. */
@@ -113,7 +119,10 @@ async function reconcileRoot(d: PromoteDeps, root: SharedRoot, base: string): Pr
       // Unchanged since it was last in agreement: the tombstone applies.
       // eslint-disable-next-line no-await-in-loop
       const now = await fs.promises.stat(f.abs).catch(() => null);
-      if (!now || now.size !== f.stats.size || Math.floor(now.mtimeMs) !== f.mtimeMs) continue;
+      if (!now || now.size !== f.stats.size || Math.floor(now.mtimeMs) !== f.mtimeMs) {
+        unfinished = true; // changed while we looked: decided on the next try
+        continue;
+      }
       try {
         // eslint-disable-next-line no-await-in-loop
         await safeAbs(base, f.rel);
@@ -123,6 +132,7 @@ async function reconcileRoot(d: PromoteDeps, root: SharedRoot, base: string): Pr
         dropMirror(g);
       } catch (err) {
         d.log('warn', `could not move ${root}/${f.rel} to the Trash: ${String(err)}`);
+        unfinished = true;
       }
     } else if (!f) {
       // A file this device itself moved or removed is not "never fetched": the
@@ -147,7 +157,8 @@ async function reconcileRoot(d: PromoteDeps, root: SharedRoot, base: string): Pr
     // eslint-disable-next-line no-await-in-loop
     await d.db.batch(steps.slice(i, i + 400));
   }
-  return 'done';
+  if (unfinished) d.log('info', `the ${root} folder could not be reconciled completely; reconcile pending`);
+  return unfinished ? 'owed' : 'done';
 }
 
 export async function reconcileAtPromotion(d: PromoteDeps): Promise<Record<SharedRoot, ReconcileResult>> {
