@@ -75,6 +75,7 @@ import { parseGitHubRef, formatGitHubRef } from './marketplace/github-ref';
 import { createMarketplaceCatalog } from './marketplace/catalog';
 import type { MarketplaceCatalog } from './marketplace/catalog';
 import { buildMainApi } from './main-api';
+import { createSharedFolders, sha256File } from './core/shared-folders';
 import { createBusyRegistry } from './core/busy';
 import { wireOutboxPush } from './outbox-push';
 import { wireSyncAppliedPush } from './sync-applied-push';
@@ -1465,6 +1466,14 @@ app
     // through `outbound`, so having two instances is intentional, not a
     // duplication bug.
     const outboundRoutes = createOutboundRoutes(outbound, calendarOut);
+    const sharedFolders = await createSharedFolders({
+      db: p.db,
+      sync: p.sync,
+      hashFile: sha256File,
+      trash: (file) => shell.trashItem(file),
+      now: () => Date.now(),
+      log: (level, msg) => p.logSink.log('shared-folders', level, msg),
+    });
     extensionsPlatform = createExtensionPlatform({
       sync: p.sync,
       prefs: p.prefs,
@@ -1514,6 +1523,7 @@ app
           readMessageEvidence: (input) => p.engine.readMessageEvidence(input),
           ownerMail,
           documents: documentBytes,
+          sharedFolders,
           inference: p.inference,
           busy,
           runAccount: (account) => runAccount(p, account),
