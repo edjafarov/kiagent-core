@@ -83,6 +83,14 @@ export const CAP_CATALOG: Record<Cap, CapInfo> = {
     risk: 'normal',
     icon: 'info',
   },
+  secrets: {
+    label: 'Keep an account-wide secret (bundled features only)',
+    description:
+      'Can keep one secret for the whole account, so it follows you to your other devices. ' +
+      'Only extensions that ship with the app can use this.',
+    risk: 'elevated',
+    icon: 'info',
+  },
   sync: {
     label: 'Copy your data between your devices',
     description:

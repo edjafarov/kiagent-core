@@ -22,6 +22,8 @@ import type { LogSink } from '@main/core/engine/engine';
 import type { AttentionService } from '@main/attention/service';
 import type { SyncService } from '../core/sync/service';
 import type { CorePrefs } from '../core/prefs';
+import type { CoreStore } from '../core/store/store';
+import { SyncReadOnly } from '../core/sync/role';
 import { createNetworkService, type NetworkService } from './network-service';
 import { HostCallInTransactionError } from './host-call-context';
 import type { ManifestTier } from './manifest';
@@ -95,6 +97,9 @@ export function createEventBus(logSink?: LogSink): EventBus {
     },
   };
 }
+
+/** A `host.secrets` name: one word, no dots or colons (it sits inside the vault key). */
+const SECRET_NAME_RE = /^[a-z0-9-]{1,40}$/;
 
 export type Surfaces = Record<
   string,
@@ -219,6 +224,9 @@ export interface SurfaceDeps {
   /** Boot-owned store behind `host.prefs`; a surface built without it
    *  rejects every prefs call. */
   prefs?: Pick<CorePrefs, 'getExt' | 'setExt' | 'onExtChange'>;
+  /** Boot-owned store behind `host.secrets` (vault rows `secret:…`); a surface
+   *  built without it rejects every secrets call. */
+  secrets?: Pick<CoreStore['secrets'], 'save' | 'load'>;
   notify(msg: string, level?: LogLevel): void;
   bus: EventBus;
   /** Ships a host event to the child (endpoint.post({kind:'event',…})). */
@@ -272,6 +280,8 @@ export function buildSurfaces(deps: SurfaceDeps): {
 } {
   const eventSubs = new Map<string, () => void>();
   let prefsWatch: (() => void) | null = null;
+  let secretsWatching = false;
+  let secretsSubscribed = false;
   const remoteWatchers = new Map<number, { close(): Promise<void> }>();
   const uiRegistry = deps.uiRegistry ?? createUiRegistry();
   // ONE resolution of the default, reused by both the registry bind (which
@@ -711,6 +721,52 @@ export function buildSurfaces(deps: SurfaceDeps): {
         },
       };
     })(),
+    secrets: (() => {
+      const store = (): NonNullable<SurfaceDeps['secrets']> => {
+        if (!deps.secrets) throw new Error('secrets is not available');
+        return deps.secrets;
+      };
+      const prefix = `secret:${deps.extensionId}:`;
+      const keyOf = (name: unknown): string => {
+        if (typeof name !== 'string' || !SECRET_NAME_RE.test(name))
+          throw new TypeError('invalid secret name');
+        return `${prefix}${name}`;
+      };
+      const told = (name: string): void => {
+        if (!secretsWatching) return;
+        deps.deliverEvent(
+          'platform.secrets.change',
+          { name },
+          { from: 'platform', at: Date.now() },
+        );
+      };
+      return {
+        get: async (name: unknown) => store().load(keyOf(name)),
+        put: async (name: unknown, value: unknown) => {
+          const key = keyOf(name);
+          if (typeof value !== 'string')
+            throw new TypeError('a secret value is a string');
+          if (deps.sync?.readOnly())
+            throw new SyncReadOnly('account secrets are written on the leader');
+          await store().save(key, value);
+          told(key.slice(prefix.length));
+        },
+        watch: () => {
+          secretsWatching = true;
+          if (secretsSubscribed) return;
+          secretsSubscribed = true;
+          // The service has no unsubscribe: the flags above gate delivery.
+          deps.sync?.onSecret((key) => {
+            if (!key.startsWith(prefix)) return;
+            const name = key.slice(prefix.length);
+            if (SECRET_NAME_RE.test(name)) told(name);
+          });
+        },
+        unwatch: () => {
+          secretsWatching = false;
+        },
+      };
+    })(),
     attention: {
       publish: (items: unknown) =>
         deps.attention.publish(deps.extensionId, items),
@@ -784,6 +840,7 @@ export function buildSurfaces(deps: SurfaceDeps): {
       eventSubs.clear();
       prefsWatch?.();
       prefsWatch = null;
+      secretsWatching = false;
       await Promise.all(
         [...remoteWatchers.values()].map((watcher) =>
           watcher.close().catch(() => undefined),

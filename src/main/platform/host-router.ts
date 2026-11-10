@@ -24,6 +24,7 @@ export const NS_CAP: Record<string, Cap> = {
   events: 'events',
   attention: 'attention',
   prefs: 'prefs',
+  secrets: 'secrets',
   sync: 'sync',
 };
 

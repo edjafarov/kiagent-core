@@ -1468,6 +1468,7 @@ app
     extensionsPlatform = createExtensionPlatform({
       sync: p.sync,
       prefs: p.prefs,
+      secrets: p.store.secrets,
       // The user's extension set lives in user_prefs; only a device that can
       // write the table changes it.
       extensionSet: {
