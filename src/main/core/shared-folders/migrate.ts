@@ -14,6 +14,10 @@ import type { AppDb } from '../../db/app-db';
 export interface LocalFolderAccess {
   /** The Mac's `local-folder` accounts with the folders each tracks (absolute). */
   accounts(): Promise<{ id: string; roots: string[] }[]>;
+  /** Stops the account's running pull and starts it again, so that the
+   *  exclusions now in force are the ones it walks with and nothing built under
+   *  the old ones can commit afterwards. Resolves once the old pull is gone. */
+  quiesce(accountId: string): Promise<void>;
   /** Archives exactly `refs` of the account and nothing else (its scope and
    *  cursor stay as they are). */
   archive(accountId: string, refs: ExternalRef[]): Promise<void>;
@@ -42,6 +46,10 @@ export async function migrateLocalFolders(d: MigrateDeps, rootAbs: string): Prom
     // eslint-disable-next-line no-await-in-loop
     if ((await d.db.all(`SELECT 1 FROM meta WHERE key = ?`, [key])).length > 0) continue;
     try {
+      // First the pull: one under way with the old (empty) exclusions could
+      // otherwise commit a document under the root after it was looked for.
+      // eslint-disable-next-line no-await-in-loop
+      await d.localFolders.quiesce(account.id);
       // eslint-disable-next-line no-await-in-loop
       const archived = await archiveUnder(d, account.id, root);
       // eslint-disable-next-line no-await-in-loop

@@ -1503,8 +1503,25 @@ app
         accounts: () => p.store.read.accounts(),
         deviceId: () => p.sync.deviceId(),
         roots: (a) => readFolderRoots(a as never).map((r) => r.id),
+        // Read fresh each time: the account's loop restarts after each call.
+        // applyScope awaits the old loop's stop() (the pull and its reconcile),
+        // so nothing built under the old exclusions commits afterwards, then
+        // restarts the loop, whose walks read the exclusions anew.
+        quiesce: async (accountId) => {
+          const account = await p.store.account(accountId as AccountId);
+          if (!account) return;
+          await p.engine.applyScope(
+            account.id,
+            {
+              config: account.config as FolderScopeUpdate['config'],
+              cursor: account.cursor,
+              archiveScopeRootIds: [],
+              archiveRefs: [],
+            },
+            JSON.stringify(account.config),
+          );
+        },
         archive: async (accountId, refs) => {
-          // Read fresh each page: the account's loop restarts after each one.
           const account = await p.store.account(accountId as AccountId);
           if (!account) return;
           await p.engine.applyScope(

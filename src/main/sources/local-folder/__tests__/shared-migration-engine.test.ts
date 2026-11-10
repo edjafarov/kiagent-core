@@ -109,6 +109,7 @@ const access = (engine: ReturnType<typeof makeEngine>['engine']) => ({
     (await store.read.accounts())
       .filter((a) => a.source === 'local-folder')
       .map((a) => ({ id: a.id as string, roots: [parent] })),
+  quiesce: async () => {},
   archive: async (accountId: string, refs: { externalId: string; type: string }[]) => {
     const a = (await store.account(accountId as AccountId))!;
     await engine.applyScope(

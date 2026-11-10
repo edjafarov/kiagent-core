@@ -27,10 +27,12 @@ const live = async (d: Device, account: string) =>
   ).map((r) => r.external_id);
 
 async function withAccess(roots: string[], fail = false, extra: { id: string; roots: string[] }[] = []) {
-  const holder = { db: null as unknown as Device, calls: [] as { account: string; refs: ExternalRef[] }[], fail };
+  const holder = { db: null as unknown as Device, calls: [] as { account: string; refs: ExternalRef[] }[], order: [] as string[], fail };
   const lf: LocalFolderAccess = {
     accounts: async () => [{ id: 'lf', roots }, ...extra],
+    quiesce: async (id) => void holder.order.push(`quiesce:${id}`),
     archive: async (id, refs) => {
+      holder.order.push(`archive:${id}`);
       if (holder.fail) throw new Error('engine is busy');
       holder.calls.push({ account: id, refs });
       for (const r of refs)
@@ -139,4 +141,23 @@ it('both roots are migrated, each recorded on its own', async () => {
     '/Users/me/In/a.pdf',
     '/Users/me/Sorted/b.pdf',
   ]);
+});
+
+it('the local-folder loop is quiesced before anything is looked for, even with nothing under the root yet', async () => {
+  const root = '/Users/me/Sorted';
+  const { d, holder } = await withAccess(['/Users/me']);
+  const real = d.db.all.bind(d.db);
+  const spy = jest.spyOn(d.db, 'all').mockImplementation(async (sql: string, params?: unknown[]) => {
+    if (/FROM documents/.test(sql)) holder.order.push('query');
+    if (/FROM meta WHERE key/.test(sql)) holder.order.push('check');
+    return real(sql, params as never);
+  });
+  const run = d.db.run.bind(d.db);
+  jest.spyOn(d.db, 'run').mockImplementation(async (sql: string, params?: unknown[]) => {
+    if (/shared-folders:migrated|migrated/.test(String(params?.[0] ?? '')) || /INSERT OR IGNORE INTO meta/.test(sql)) holder.order.push('done');
+    return run(sql, params as never);
+  });
+  await d.svc.setRoots({ incoming: null, sorted: root });
+  spy.mockRestore();
+  expect(holder.order.filter((o) => o !== 'check')).toEqual(['quiesce:lf', 'query', 'done']);
 });

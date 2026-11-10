@@ -37,6 +37,7 @@ const host = (deviceId: string | null, calls: { id: string; refs: ExternalRef[] 
     if (a.id === 'broken') throw new Error('malformed');
     return ['/Users/me/Documents'];
   },
+  quiesce: async () => {},
   archive: async (id: string, refs: ExternalRef[]) => void calls.push({ id, refs }),
 });
 

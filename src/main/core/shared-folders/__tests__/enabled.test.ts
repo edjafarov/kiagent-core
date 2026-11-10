@@ -33,6 +33,7 @@ function wiring() {
         calls.ensure += 1;
       },
       localFolders: {
+        quiesce: async () => {},
         accounts: async () => [{ id: 'lf', roots: [] as string[] }],
         archive: async (_id: string, refs: { externalId: string }[]) => {
           calls.archived.push(...refs.map((r) => r.externalId));

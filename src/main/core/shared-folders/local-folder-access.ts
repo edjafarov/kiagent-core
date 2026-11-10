@@ -13,6 +13,8 @@ export interface LocalFolderHost {
   deviceId(): string | null;
   /** The folders an account tracks (absolute). Throws on a malformed config. */
   roots(account: { id: string; config?: unknown }): string[];
+  /** Stops the account's loop and starts it again with the exclusions now in force. */
+  quiesce(accountId: string): Promise<void>;
   archive(accountId: string, refs: ExternalRef[]): Promise<void>;
 }
 
@@ -33,6 +35,7 @@ export function ownLocalFolders(h: LocalFolderHost): LocalFolderAccess {
           }
         });
     },
+    quiesce: h.quiesce,
     archive: h.archive,
   };
 }
