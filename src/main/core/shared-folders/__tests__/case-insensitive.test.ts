@@ -211,3 +211,26 @@ describe('serve, kept-both names', () => {
     expect(fs.existsSync(path.join(sorted, 'doc (from Air) 2.txt'))).toBe(true);
   });
 });
+
+describe('a path on this Mac and the manifest row of the same file', () => {
+  it('resolve gives the row\'s identity and parked finds the row, whatever the spelling on disk', async () => {
+    const d = await device('leader', { platform: 'darwin' });
+    const { sorted, incoming } = await withRoots(d);
+    await d.svc.settled();
+    await d.db.run(
+      `INSERT INTO accounts(id, source, identifier, config, status, created_at)
+       VALUES('acct-shared', 'shared-folder', 'shared', '{}', 'connecting', 'now')`,
+    );
+    await row(d, 'Taxes/a.pdf', 'x');
+    await d.db.run(
+      `INSERT INTO shared_files(root, rel_path, sha256, bytes, mtime, parked, rev) VALUES('incoming','Scans/X.pdf',?,1,'t',1,2)`,
+      [sha('x')],
+    );
+    expect(await d.svc.resolve(path.join(sorted, 'taxes', 'a.pdf'))).toMatchObject({
+      externalId: 'sorted/Taxes/a.pdf',
+      relPath: 'Taxes/a.pdf',
+    });
+    expect(await d.svc.resolve(path.join(sorted, 'new', 'b.pdf'))).toMatchObject({ externalId: 'sorted/new/b.pdf' });
+    expect(await d.svc.parked(path.join(incoming, 'scans', 'x.pdf'))).toBe(true);
+  });
+});

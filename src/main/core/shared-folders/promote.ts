@@ -24,6 +24,8 @@ export type PromoteDeps = Pick<SharedFoldersDeps, 'db' | 'hashFile' | 'trash' | 
   roots: Roots;
   /** False once the role this pass started under has changed. */
   still?: () => boolean;
+  /** Only these roots are reconciled (the ones still owed); default both. */
+  only?: ReadonlySet<SharedRoot>;
 };
 
 /** `done`: the root was reconciled. `owed`: it could not be trusted (unset,
@@ -112,10 +114,10 @@ async function reconcileRoot(d: PromoteDeps, root: SharedRoot, base: string): Pr
       // eslint-disable-next-line no-await-in-loop
       const now = await fs.promises.stat(f.abs).catch(() => null);
       if (!now || now.size !== f.stats.size || Math.floor(now.mtimeMs) !== f.mtimeMs) continue;
-      if (!alive()) return 'owed';
       try {
         // eslint-disable-next-line no-await-in-loop
         await safeAbs(base, f.rel);
+        if (!alive()) return 'owed'; // the last look, right before the Trash
         // eslint-disable-next-line no-await-in-loop
         await d.trash(f.abs);
         dropMirror(g);
@@ -151,6 +153,10 @@ async function reconcileRoot(d: PromoteDeps, root: SharedRoot, base: string): Pr
 export async function reconcileAtPromotion(d: PromoteDeps): Promise<Record<SharedRoot, ReconcileResult>> {
   const out: Record<SharedRoot, ReconcileResult> = { incoming: 'owed', sorted: 'owed' };
   for (const root of ROOT_NAMES) {
+    if (d.only && !d.only.has(root)) {
+      out[root] = 'done'; // not owed: an ordinary root of a leader, the scan's business
+      continue;
+    }
     const base = d.roots[root];
     // eslint-disable-next-line no-await-in-loop
     if (base) out[root] = await reconcileRoot(d, root, base);

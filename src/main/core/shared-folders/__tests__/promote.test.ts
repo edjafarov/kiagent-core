@@ -344,9 +344,32 @@ describe('a root that is not there is still owed its reconcile', () => {
     ).rejects.toMatchObject({ code: 'SHARED_ROOT_PAUSED', root: 'sorted', reason: 'owed' });
     await d.svc.setRoots({ incoming, sorted: path.join(d.dir, 'sorted') });
     fs.mkdirSync(path.join(d.dir, 'sorted'));
-    write(path.join(d.dir, 'sorted', 'y.pdf'), 'y');
+    write(path.join(d.dir, 'sorted', 'x.pdf'), 'x'); // the row's file is back
     d.svc.kick();
     await d.svc.settled();
     expect(await owed(d)).toEqual([]);
+  });
+
+  it('only a root that is owed is reconciled: the other one is scanned like any root of a leader', async () => {
+    const d = await device('copy');
+    const incoming = path.join(d.dir, 'incoming');
+    fs.mkdirSync(incoming);
+    await d.svc.setRoots({ incoming, sorted: null }); // Sorted stays unset, so it stays owed
+    write(path.join(incoming, 'a.pdf'), 'a');
+    write(path.join(incoming, 'b.pdf'), 'b');
+    await putRow(d, 'a.pdf', 'a');
+    await putRow(d, 'b.pdf', 'b');
+    await putMirror(d, 'a.pdf', 'a');
+    await putMirror(d, 'b.pdf', 'b');
+    d.sync.set('leader');
+    await d.svc.settled();
+    expect(await owed(d)).toHaveLength(1); // still Sorted
+    fs.rmSync(path.join(incoming, 'a.pdf')); // the user deletes a file on the leader
+    d.svc.kick();
+    await d.svc.settled();
+    expect(await rows(d)).toMatchObject([
+      { rel_path: 'a.pdf', deleted: 1, missing_here: 0 },
+      { rel_path: 'b.pdf', deleted: 0 },
+    ]);
   });
 });

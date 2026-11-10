@@ -48,6 +48,25 @@ const missingRow = (d: Device, root: string, rel: string, text: string) =>
     [root, rel, sha(text), Buffer.byteLength(text)],
   );
 
+describe('serve.remove', () => {
+  it('records that it removes the file before the file goes, so a crash in between explains the gap', async () => {
+    const seen: number[] = [];
+    let dev!: Device;
+    dev = await device('leader', {
+      trash: async (p) => {
+        seen.push((await dev.db.all(`SELECT 1 FROM shared_pending WHERE kind = 'removed'`)).length);
+        fs.rmSync(p, { force: true });
+      },
+    });
+    const { sorted } = await withRoots(dev);
+    await dev.svc.settled();
+    write(path.join(sorted, 'a.txt'), 'one');
+    await scan(dev);
+    expect(await dev.svc.serve.remove({ root: 'sorted', relPath: 'a.txt', sha256: sha('one') })).toBe(true);
+    expect(seen).toEqual([1]);
+  });
+});
+
 describe('serve.open and the manifest', () => {
   it('serves only the version the live row names: not older bytes, not a missing_here or deleted row', async () => {
     const { d, sorted } = await leader();

@@ -48,8 +48,9 @@ it('a factory reset clears the manifest, the captures and the mirror', async () 
   conn.exec(`INSERT INTO shared_files(root, rel_path, sha256, bytes, mtime, rev) VALUES('incoming','a.jpg','h',1,'x',1)`);
   conn.exec(`INSERT INTO shared_capture_files(capture_id, sha256) VALUES('c1','h')`);
   conn.exec(`INSERT INTO shared_mirror(root, rel_path, sha256, bytes, mtime_ms) VALUES('incoming','a.jpg','h',1,1)`);
+  conn.exec(`INSERT INTO shared_pending(kind, root, rel_path) VALUES('moved','incoming','a.jpg')`);
   await resetCoreStoreTables(db, [], () => 'now');
-  for (const t of ['shared_files', 'shared_capture_files', 'shared_mirror'])
+  for (const t of ['shared_files', 'shared_capture_files', 'shared_mirror', 'shared_pending'])
     expect((conn.prepare(`SELECT count(*) n FROM ${t}`).get() as { n: number }).n).toBe(0);
   await db.close();
 });

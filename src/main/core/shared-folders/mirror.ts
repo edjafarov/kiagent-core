@@ -309,9 +309,9 @@ async function fetchOne(
     await fs.promises.rm(tmp, { force: true });
     return;
   }
-  check(d); // the last look before the downloaded file replaces anything
   await fs.promises.mkdir(path.dirname(dest), { recursive: true });
   await safeAbs(base, rel); // again, now that the folders exist
+  check(d); // the last look, right before the downloaded file replaces anything
   await fs.promises.rename(tmp, dest);
   const st = await fs.promises.stat(dest);
   await d.db.run(UPSERT_MIRROR, [

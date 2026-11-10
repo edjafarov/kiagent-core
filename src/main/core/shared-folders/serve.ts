@@ -9,6 +9,7 @@ import { SyncReadOnly } from '../sync/role';
 import { UPSERT_MIRROR } from './leader-scan';
 import { recordGone } from './pending';
 import { NEXT_REV } from './schema';
+import { rowAt as findRow } from './row-lookup';
 import { nameKey, normalizeRel, safeAbs, STAGING_DIR, toAbs, type SharedRoot } from './paths';
 import type { FileQuery, OfferAnswer, OfferMeta, Roots, SharedFoldersApi, SharedFoldersDeps } from './service';
 
@@ -98,33 +99,15 @@ export function createServe(ctx: ServeCtx): Serve {
       return rel !== '' && !rel.startsWith('..') && !path.isAbsolute(rel);
     });
   const key = nameKey(ctx.deps.platform);
-  const folds = key('Ab') !== 'Ab';
-  /** The manifest row of a path: that spelling, or on macOS and Windows any
-   *  spelling of the name (a live row before a tombstone). */
-  const rowAt = async (
-    root: SharedRoot,
-    rel: string,
-  ): Promise<{ rel_path: string; sha256: string; deleted: number; missing_here: number } | undefined> => {
-    const db = ctx.deps.db;
-    const exact = (await db.all(
-      `SELECT rel_path, sha256, deleted, missing_here FROM shared_files WHERE root = ? AND rel_path = ?`,
-      [root, rel],
-    ))[0];
-    if (!folds || (exact && !exact.deleted)) return exact as never;
-    const k = key(rel);
-    const all = (await db.all(`SELECT rel_path, sha256, deleted, missing_here FROM shared_files WHERE root = ?`, [
-      root,
-    ])) as unknown as { rel_path: string; sha256: string; deleted: number; missing_here: number }[];
-    const hits = all.filter((r) => key(r.rel_path) === k);
-    return hits.find((r) => !r.deleted) ?? hits[0];
-  };
+  const rowAt = (root: SharedRoot, rel: string) => findRow(ctx.deps.db, key, root, rel);
   const stillLeader = (still: () => boolean, what: string): void => {
     if (!still()) throw new SyncReadOnly(what);
   };
 
-  const place = async (tmp: string, base: string, dest: string): Promise<void> => {
+  const place = async (tmp: string, base: string, dest: string, guard: () => void): Promise<void> => {
     await fs.promises.mkdir(path.dirname(dest), { recursive: true });
     await safeAbs(base, path.relative(base, dest)); // again, now that the folders exist
+    guard(); // the role is checked right before the write, not before the folders
     await fs.promises.rename(tmp, dest);
   };
 
@@ -231,7 +214,7 @@ export function createServe(ctx: ServeCtx): Serve {
         if (there !== null && there !== meta.sha256 && String(mirror?.sha256) !== there) continue;
         guard();
         // eslint-disable-next-line no-await-in-loop
-        await place(tmpFile, held.base, held.abs);
+        await place(tmpFile, held.base, held.abs, guard);
         const st = await fs.promises.stat(held.abs);
         guard();
         await db.batch([
@@ -255,7 +238,7 @@ export function createServe(ctx: ServeCtx): Serve {
       // 4. The path is free, or still holds the version the offering Mac started from.
       if (here === null || (meta.base !== null && here === meta.base)) {
         guard();
-        await place(tmpFile, target.base, abs);
+        await place(tmpFile, target.base, abs, guard);
         ctx.kick();
         return 'written';
       }
@@ -277,7 +260,7 @@ export function createServe(ctx: ServeCtx): Serve {
         if (taken || listed) continue;
         guard();
         // eslint-disable-next-line no-await-in-loop
-        await place(tmpFile, ctx.roots()[root]!, dest);
+        await place(tmpFile, ctx.roots()[root]!, dest, guard);
         ctx.kick();
         return 'kept-both';
       }
@@ -293,8 +276,17 @@ export function createServe(ctx: ServeCtx): Serve {
         await ctx.quick(root);
         if ((await shaAt(ctx, root, rel, abs)) !== q.sha256) return false;
         stillLeader(still, 'serve.remove');
-        await ctx.deps.trash(abs);
+        // Recorded first: a crash between the two leaves the gap explained.
         await recordGone(ctx.deps.db, 'removed', { root, rel }, q.sha256, null);
+        try {
+          await ctx.deps.trash(abs);
+        } catch (err) {
+          await ctx.deps.db.run(
+            `DELETE FROM shared_pending WHERE kind = 'removed' AND root = ? AND rel_path = ? AND sha256 = ?`,
+            [root, rel, q.sha256],
+          );
+          throw err;
+        }
         ctx.kick();
         return true;
       });

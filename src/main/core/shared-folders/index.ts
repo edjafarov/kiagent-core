@@ -13,3 +13,4 @@ export type {
   SharedTransport,
 } from './service';
 export type { SharedRoot } from './paths';
+export { SharedRootPaused } from './root-state';

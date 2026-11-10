@@ -6,7 +6,8 @@ import fs from 'node:fs';
 
 import type { AppDb } from '../../db/app-db';
 import { explainedRels, loadOps } from './pending';
-import { STAGING_DIR, type NameKey, type SharedRoot } from './paths';
+import { walkRoot } from '../../sources/local-folder/scanner';
+import { type NameKey, type SharedRoot } from './paths';
 
 export const ROOT_NAMES: readonly SharedRoot[] = ['incoming', 'sorted'];
 
@@ -167,14 +168,15 @@ export async function quickCheck(
   base: string,
   key: NameKey = (rel) => rel,
 ): Promise<'ok' | 'paused'> {
-  let top: string[];
   try {
-    top = await fs.promises.readdir(base);
+    await fs.promises.readdir(base);
   } catch {
     await setPaused(d, root, true, 'is missing or unreadable');
     return 'paused';
   }
-  if (top.some((n) => n !== STAGING_DIR)) return 'ok';
+  // Stops at the first admitted file: a mount point holding only `.DS_Store`
+  // or the staging folder is as good as empty.
+  for await (const _ of walkRoot(base, { incomplete: false })) return 'ok';
   const rows = (await d.db.all(
     `SELECT rel_path FROM shared_files WHERE root = ? AND deleted = 0 AND missing_here = 0`,
     [root],

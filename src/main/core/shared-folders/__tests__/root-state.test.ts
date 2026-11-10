@@ -67,6 +67,13 @@ describe('a paused root accepts nothing and stays paused', () => {
     await expect(d.svc.serve.stagingFile('incoming')).resolves.toContain('.kia-sync');
   });
 
+  it('a root holding only files the index does not admit is as good as empty', async () => {
+    const { d, sorted } = await populated();
+    unmount(sorted);
+    write(path.join(sorted, '.DS_Store'), 'finder'); // what a mount point can hold
+    await expect(d.svc.serve.stagingFile('sorted')).rejects.toMatchObject({ code: 'SHARED_ROOT_PAUSED' });
+  });
+
   it('open and remove are refused too', async () => {
     const { d, sorted } = await populated();
     unmount(sorted);

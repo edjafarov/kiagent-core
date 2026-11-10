@@ -8,6 +8,7 @@ import { migrateLocalFolders, type LocalFolderAccess } from './migrate';
 import { scanRoot } from './leader-scan';
 import { mirrorPass } from './mirror';
 import { listSortable, reconcileAtPromotion } from './promote';
+import { rowAt } from './row-lookup';
 import { nameKey, normalizeRel, safeAbs, toRel, type SharedRoot } from './paths';
 import { loadRootSet, OWED_KEY, PAUSED_KEY, quickCheck, ROOT_NAMES, saveRootSet, SharedRootPaused } from './root-state';
 import { createServe } from './serve';
@@ -146,6 +147,7 @@ export async function createSharedFolders(deps: SharedFoldersDeps): Promise<Shar
     return r.follower ? 'copy' : 'idle';
   };
   let roleGen = 0;
+  const key = nameKey(deps.platform);
   let closed = false;
   /** `() => true` while this device is still in `expected` mode and the role
    *  has not changed since this was made (not even to something else and back). */
@@ -222,7 +224,7 @@ export async function createSharedFolders(deps: SharedFoldersDeps): Promise<Shar
   const reconcileIfPending = async (still: () => boolean): Promise<void> => {
     if (owed.size === 0) return;
     const gen = pendingGen;
-    const result = await reconcileAtPromotion({ ...deps, roots, gateChanged, still });
+    const result = await reconcileAtPromotion({ ...deps, roots, gateChanged, still, only: owed });
     if (gen !== pendingGen || !still()) return; // became a copy again meanwhile: still owed
     let changed = false;
     for (const r of ROOT_NAMES) if (result[r] === 'done' && owed.delete(r)) changed = true;
@@ -388,7 +390,10 @@ export async function createSharedFolders(deps: SharedFoldersDeps): Promise<Shar
       for (const root of ['incoming', 'sorted'] as const) {
         const base = roots[root];
         const rel = base ? toRel(base, absPath) : null;
-        if (rel) return { accountId: id, externalId: `${root}/${rel}`, root, relPath: rel };
+        if (!rel) continue;
+        const row = await rowAt(deps.db, key, root, rel); // the manifest's spelling is the identity
+        const relPath = row?.rel_path ?? rel;
+        return { accountId: id, externalId: `${root}/${relPath}`, root, relPath };
       }
       return null;
     },
@@ -414,11 +419,7 @@ export async function createSharedFolders(deps: SharedFoldersDeps): Promise<Shar
         const base = roots[root];
         const rel = base ? toRel(base, absPath) : null;
         if (!rel) continue;
-        const rows = await deps.db.all(`SELECT parked FROM shared_files WHERE root = ? AND rel_path = ?`, [
-          root,
-          rel,
-        ]);
-        return rows[0]?.parked === 1;
+        return (await rowAt(deps.db, key, root, rel))?.parked === 1;
       }
       return false;
     },
