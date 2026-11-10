@@ -23,6 +23,7 @@ import type {
   Account,
   AppState,
   AccountId,
+  FolderScopeUpdate,
   ProjectionHandle,
   SchedulerEnv,
   Seq,
@@ -158,6 +159,7 @@ import type { LocalAsrProvider } from './providers/local-asr';
 import { CURATED_TIERS, modelTotalBytes } from './providers/local-llm/models';
 import type { LocalLlmProvider } from './providers/local-llm/provider';
 import { registerBundledSources } from './sources';
+import { readFolderRoots } from './sources/local-folder/folder-roots';
 import {
   SHARED_IDENTIFIER,
   SHARED_SOURCE_ID,
@@ -1493,6 +1495,35 @@ app
           cadence: sharedFolderDescriptor.cadence,
         });
         runAccount(p, account);
+      },
+      localFolders: {
+        accounts: async () =>
+          (await p.store.read.accounts())
+            .filter((a) => a.source === 'local-folder')
+            .flatMap((a) => {
+              try {
+                return [
+                  { id: a.id, roots: readFolderRoots(a).map((r) => r.id) },
+                ];
+              } catch {
+                return []; // a malformed config must not hide the others
+              }
+            }),
+        archive: async (accountId, refs) => {
+          // Read fresh each page: the account's loop restarts after each one.
+          const account = await p.store.account(accountId as AccountId);
+          if (!account) return;
+          await p.engine.applyScope(
+            account.id,
+            {
+              config: account.config as FolderScopeUpdate['config'],
+              cursor: account.cursor,
+              archiveScopeRootIds: [],
+              archiveRefs: refs,
+            },
+            JSON.stringify(account.config),
+          );
+        },
       },
     });
     sharedSourceHost = { db: p.db, sharedFolders };

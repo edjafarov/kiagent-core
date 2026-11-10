@@ -4,6 +4,7 @@
 import type { AppDb } from '../../db/app-db';
 import type { SyncService } from '../sync/service';
 import { createCaptures } from './captures';
+import { migrateLocalFolders, type LocalFolderAccess } from './migrate';
 import { scanRoot } from './leader-scan';
 import { mirrorPass } from './mirror';
 import { listSortable, reconcileAtPromotion } from './promote';
@@ -80,6 +81,9 @@ export interface SharedFoldersDeps {
   /** Creates the one `shared-folder` account and starts it (the host does
    *  `store.createAccount` + `runAccount`). Absent in hosts without an engine. */
   ensureAccount?(): Promise<void>;
+  /** The Mac's `local-folder` accounts, for the one-time move of the
+   *  documents they hold under a folder that has become a shared root. */
+  localFolders?: LocalFolderAccess;
   /** How often a copy tries again without being told to (a failed transport,
    *  a join that finished). Default 60 000. */
   retryMs?: number;
@@ -309,6 +313,13 @@ export async function createSharedFolders(deps: SharedFoldersDeps): Promise<Shar
         [ROOTS_META_KEY, JSON.stringify(clean)],
       );
       roots = clean;
+      // Before the first scan: the exclusion in `local-folder` is already in force.
+      if (deps.localFolders) {
+        for (const base of [clean.incoming, clean.sorted]) {
+          // eslint-disable-next-line no-await-in-loop
+          if (base) await migrateLocalFolders({ db: deps.db, localFolders: deps.localFolders, log: deps.log }, base);
+        }
+      }
       await rewatch();
       kick();
     },

@@ -23,7 +23,17 @@ export function registerBundledSources(
   /** The shared-folders service and database, once the host has built them. */
   sharedHost?: () => SharedFolderHost | null,
 ): Map<string, (creds: Credentials) => Promise<Credentials | null>> {
-  register(createLocalFolderSource({ converter, scratchDir }));
+  register(
+    createLocalFolderSource({
+      converter,
+      scratchDir,
+      // The shared folders belong to the `shared-folder` source.
+      excluded: () => {
+        const roots = sharedHost?.()?.sharedFolders.roots();
+        return [roots?.incoming, roots?.sorted].filter((r): r is string => !!r);
+      },
+    }),
+  );
   register(createSharedFolderSource(sharedHost ?? (() => null)));
   register(createImapSource());
   register(gmailSource);
