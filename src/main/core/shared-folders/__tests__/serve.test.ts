@@ -48,6 +48,27 @@ const missingRow = (d: Device, root: string, rel: string, text: string) =>
     [root, rel, sha(text), Buffer.byteLength(text)],
   );
 
+describe('serve.open and the manifest', () => {
+  it('serves only the version the live row names: not older bytes, not a missing_here or deleted row', async () => {
+    const { d, sorted } = await leader();
+    write(path.join(sorted, 'a.txt'), 'old');
+    write(path.join(sorted, 'b.txt'), 'bee');
+    write(path.join(sorted, 'c.txt'), 'sea');
+    await scan(d);
+    // a new leader that never fetched the newer a.txt: the row names the new bytes, the disk holds the old
+    await d.db.run(`UPDATE shared_files SET sha256 = ? WHERE rel_path = 'a.txt'`, [sha('new')]);
+    await d.db.run(`UPDATE shared_files SET missing_here = 1 WHERE rel_path = 'b.txt'`);
+    await d.db.run(`UPDATE shared_files SET deleted = 1 WHERE rel_path = 'c.txt'`);
+    const q = (relPath: string, text: string) => ({ root: 'sorted' as const, relPath, sha256: sha(text) });
+    expect(await d.svc.serve.open(q('a.txt', 'old'))).toBeNull(); // old bytes, the file's own hash
+    expect(await d.svc.serve.open(q('a.txt', 'new'))).toBeNull(); // the row's hash, which the disk does not have
+    expect(await d.svc.serve.open(q('b.txt', 'bee'))).toBeNull();
+    expect(await d.svc.serve.open(q('c.txt', 'sea'))).toBeNull();
+    await d.db.run(`UPDATE shared_files SET sha256 = ? WHERE rel_path = 'a.txt'`, [sha('old')]);
+    expect(await d.svc.serve.open(q('a.txt', 'old'))).toMatchObject({ bytes: 3 });
+  });
+});
+
 describe('serve.open', () => {
   it('gives the path and size of a file that still has that hash; null otherwise', async () => {
     const { d, sorted } = await leader();

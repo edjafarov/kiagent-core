@@ -163,12 +163,15 @@ it('a root that was not set when rows passed is listed again once it is', async 
   expect(ids(second.docs)).toEqual(['incoming/in.txt', 'sorted/out.txt']);
 });
 
-it('the hash is of the bytes parsed, even when the file changed since the scan', async () => {
+it('a file that changed since the scan is not parsed until the scan has listed the change; then the hash is of the bytes parsed', async () => {
   const { d, sorted } = await leader();
   write(path.join(sorted, 'a.txt'), 'scanned text');
   await scan(d);
+  const first = await pullAll(d);
   write(path.join(sorted, 'a.txt'), 'changed after the scan!');
-  const { docs } = await pullAll(d);
+  expect((await pullAll(d, first.cursor)).docs).toEqual([]); // the row still names the old bytes
+  await scan(d);
+  const { docs } = await pullAll(d, first.cursor);
   expect(docs[0].markdown).toBe('changed after the scan!');
   expect(docs[0].metadata?.sha256).toBe(sha('changed after the scan!'));
 });
@@ -262,6 +265,7 @@ describe('fetchBytes', () => {
     const { d, sorted } = await leader();
     await addAccount(d);
     write(path.join(sorted, 'tax', 'a.txt'), 'hello');
+    await scan(d);
     const source = createSharedFolderSource(() => hostOf(d));
     const bytes = await source.fetchBytes!(session(), doc('sorted/tax/a.txt'));
     expect(Buffer.from(bytes!).toString()).toBe('hello');
@@ -365,5 +369,41 @@ describe('a path from another device through a symlinked directory', () => {
     const doc = { accountId: 'acct-shared', externalId: 'sorted/Tax/report.txt' } as never;
     expect(await source.fetchBytes!(session(), doc)).toBeNull();
     expect(await d.svc.pathOf(doc)).toBeNull();
+  });
+});
+
+describe('older bytes are never indexed as the current file', () => {
+  it('a row whose file holds other bytes than the row names yields no document; a missing_here or deleted row neither serves bytes', async () => {
+    const { d, sorted } = await leader();
+    await d.db.run(
+      `INSERT INTO accounts(id, source, identifier, config, status, created_at)
+       VALUES('acct-shared', 'shared-folder', 'shared', '{}', 'connecting', 'now')`,
+    );
+    write(path.join(sorted, 'a.txt'), 'version one');
+    write(path.join(sorted, 'b.txt'), 'bee');
+    write(path.join(sorted, 'c.txt'), 'sea');
+    await scan(d);
+    // the leader's disk holds an older version than the row names
+    await d.db.run(`UPDATE shared_files SET sha256 = ? WHERE rel_path = 'a.txt'`, [sha('version two')]);
+    await d.db.run(`UPDATE shared_files SET missing_here = 1 WHERE rel_path = 'b.txt'`);
+    await d.db.run(`UPDATE shared_files SET deleted = 1 WHERE rel_path = 'c.txt'`);
+    const { docs } = await pullAll(d);
+    expect(ids(docs)).toEqual([]);
+    const source = createSharedFolderSource(() => hostOf(d));
+    for (const rel of ['a', 'b', 'c'])
+      expect(await source.fetchBytes!(session(), { accountId: 'acct-shared', externalId: `sorted/${rel}.txt` } as never)).toBeNull();
+    // the row and the file agree again: it is indexed, and its bytes are served
+    await d.db.run(`UPDATE shared_files SET sha256 = ? WHERE rel_path = 'a.txt'`, [sha('version one')]);
+    expect(ids((await pullAll(d)).docs)).toEqual(['sorted/a.txt']);
+    const bytes = await source.fetchBytes!(session(), { accountId: 'acct-shared', externalId: 'sorted/a.txt' } as never);
+    expect(Buffer.from(bytes!).toString()).toBe('version one');
+  });
+
+  it('the document carries the hash of the bytes it was parsed from, which is the row\'s', async () => {
+    const { d, sorted } = await leader();
+    write(path.join(sorted, 'a.txt'), 'hello world');
+    await scan(d);
+    const { docs } = await pullAll(d);
+    expect(docs[0].metadata).toMatchObject({ sha256: sha('hello world') });
   });
 });

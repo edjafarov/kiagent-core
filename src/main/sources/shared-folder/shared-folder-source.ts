@@ -2,6 +2,7 @@
  *  the leader only (it is not device-owned), whose documents travel to the
  *  copies. Its listing is the manifest (`shared_files`); the disk is read only
  *  to parse the bytes of a row that is present here. */
+import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 
@@ -74,7 +75,19 @@ const rootsSet = (host: SharedFolderHost): SharedRoot[] => {
 
 /** The item for a present, live row, or null when the file is not readable
  *  here or changed while it was read (the scan will list the change). */
+/** The manifest's live row for this file that this Mac holds the bytes of
+ *  (not `missing_here`): the version the leader publishes. */
+async function currentSha(host: SharedFolderHost, root: string, rel: string): Promise<string | null> {
+  const row = (await host.db.all(`SELECT sha256, deleted, missing_here FROM shared_files WHERE root = ? AND rel_path = ?`, [
+    root,
+    rel,
+  ]))[0];
+  return !row || row.deleted || row.missing_here ? null : String(row.sha256);
+}
+
 async function itemFor(host: SharedFolderHost, row: Row, base: string): Promise<SharedFileItem | null> {
+  const current = await currentSha(host, row.root, row.rel_path);
+  if (current === null) return null;
   let abs: string;
   try {
     abs = await safeAbs(base, row.rel_path);
@@ -103,6 +116,8 @@ async function itemFor(host: SharedFolderHost, row: Row, base: string): Promise<
       return null;
     }
   }
+  // Older (or newer) bytes than the row names are not the current file.
+  if (sha !== current) return null;
   const built = await buildItem(abs, before);
   let after: fs.Stats;
   try {
@@ -246,10 +261,14 @@ export function createSharedFolderSource(
       const root = doc.externalId.slice(0, doc.externalId.indexOf('/'));
       if ((root === 'incoming' || root === 'sorted') && !h.sharedFolders.usable(root)) return null;
       try {
+        const rel = doc.externalId.slice(doc.externalId.indexOf('/') + 1);
+        const current = await currentSha(h, root, rel);
         const st = await fs.promises.stat(abs);
         const d = decideLocalFile(abs, st.size);
         if (d.kind === 'ignore' || d.bytes === 'none') return null;
-        return new Uint8Array(await fs.promises.readFile(abs));
+        const bytes = new Uint8Array(await fs.promises.readFile(abs));
+        // The bytes just read must be the version the row names.
+        return createHash('sha256').update(bytes).digest('hex') === current ? bytes : null;
       } catch {
         return null;
       }

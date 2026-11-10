@@ -115,6 +115,13 @@ export function createServe(ctx: ServeCtx): Serve {
         await ctx.ready();
         const { root, rel, abs } = await locate(ctx, q.root, q.relPath);
         await ctx.quick(root);
+        // Only the version the manifest names, and only where this Mac holds
+        // those bytes: a new leader's older copy of a file is not served.
+        const row = (await ctx.deps.db.all(
+          `SELECT sha256, deleted, missing_here FROM shared_files WHERE root = ? AND rel_path = ?`,
+          [root, rel],
+        ))[0];
+        if (!row || row.deleted || row.missing_here || String(row.sha256) !== q.sha256) return null;
         if ((await shaAt(ctx, root, rel, abs)) !== q.sha256) return null;
         return { path: abs, bytes: (await fs.promises.stat(abs)).size };
       });
