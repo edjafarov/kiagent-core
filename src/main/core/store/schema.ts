@@ -14,6 +14,7 @@ import {
 } from '@shared/folder-paths';
 
 import { buildStemView } from '../stemming';
+import { ensureSyncTriggers } from '../sync/tracking';
 import { corpusTooNewMessage } from './corpus-refusal';
 import { META_LEDGER_REKEYED } from './maintenance-keys';
 
@@ -1580,4 +1581,6 @@ export function migrate(db: BetterSqlite3.Database): void {
       META_LEDGER_REKEYED,
     );
   ensureQueryIndexes(db);
+  // A leader that tracked before a copied table existed gets its triggers now.
+  ensureSyncTriggers(db);
 }

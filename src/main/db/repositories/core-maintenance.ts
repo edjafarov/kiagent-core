@@ -24,6 +24,9 @@ export async function resetCoreStoreTables(
       'attention_items',
       'attention_revisions',
       'sync_rows',
+      'shared_files',
+      'shared_capture_files',
+      'shared_mirror',
     ].map((table) => ({ sql: `DELETE FROM ${table}` })),
     { sql: `DELETE FROM meta WHERE key != 'schemaVersion'` },
     // The wiped ledger is empty, so it is trivially re-keyed (#59 §0) —
