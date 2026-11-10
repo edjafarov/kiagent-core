@@ -5,6 +5,7 @@ import type { AppDb } from '../../db/app-db';
 import { SyncReadOnly } from '../sync/role';
 import type { SyncService } from '../sync/service';
 import { scanRoot } from './leader-scan';
+import { mirrorPass } from './mirror';
 import { listSortable, reconcileAtPromotion } from './promote';
 import { normalizeRel, toAbs, toRel, type SharedRoot } from './paths';
 import { watchRoot, type RootWatcher } from './watch';
@@ -72,6 +73,9 @@ export interface SharedFoldersDeps {
   watch?(rootAbs: string, onEvent: () => void): RootWatcher;
   /** How long a burst of file events is gathered before a pass. Default 750. */
   debounceMs?: number;
+  /** How often a copy tries again without being told to (a failed transport,
+   *  a join that finished). Default 60 000. */
+  retryMs?: number;
 }
 
 export interface SharedFolders extends SharedFoldersApi {
@@ -161,7 +165,16 @@ export async function createSharedFolders(deps: SharedFoldersDeps): Promise<Shar
     await reconciling;
   };
 
+  const joining = async (): Promise<boolean> =>
+    (await deps.db.all(`SELECT joining FROM sync_state`))[0]?.joining === 1;
+
   const pass = async (): Promise<void> => {
+    if (mode() === 'copy') {
+      // A device that is still joining has not finished receiving its copy.
+      if (!transport || (await joining())) return;
+      await mirrorPass({ ...deps, roots }, transport);
+      return;
+    }
     if (mode() !== 'leader') return;
     await reconcileIfPending();
     for (const root of ['incoming', 'sorted'] as const) {
@@ -190,6 +203,14 @@ export async function createSharedFolders(deps: SharedFoldersDeps): Promise<Shar
     if (running) again = true;
     else run();
   };
+  // A copy tries again now and then: the transport may have failed, or a join finished.
+  const retry = setInterval(() => {
+    if (!closed && transport && mode() === 'copy') kick();
+  }, deps.retryMs ?? 60_000);
+  retry.unref?.();
+  deps.sync.onApplied((tables) => {
+    if (tables.includes('shared_files')) kick();
+  });
   const onFileEvent = (): void => {
     if (timer || closed) return;
     timer = setTimeout(() => {
@@ -226,6 +247,7 @@ export async function createSharedFolders(deps: SharedFoldersDeps): Promise<Shar
     },
     close: async () => {
       closed = true;
+      clearInterval(retry);
       if (timer) clearTimeout(timer);
       timer = null;
       await running;
@@ -246,7 +268,7 @@ export async function createSharedFolders(deps: SharedFoldersDeps): Promise<Shar
     },
     setTransport: (t) => {
       transport = t;
-      void transport;
+      if (t) kick();
     },
     kick,
     resolve: async (absPath) => {

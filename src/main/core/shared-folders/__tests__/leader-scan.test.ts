@@ -24,7 +24,9 @@ const write = (file: string, text: string) => {
   fs.writeFileSync(file, text);
 };
 const setup = async () => {
-  const d = await device();
+  // A copy runs no background scan, so the tests below are the only scanner
+  // (scanRoot does not look at the mode).
+  const d = await device('copy');
   const r = await withRoots(d);
   return { d, ...r };
 };
@@ -58,6 +60,7 @@ it('a removed file becomes a deleted row with its last hash, and loses its mirro
   const { d, sorted } = await setup();
   const f = path.join(sorted, 'a.txt');
   write(f, 'one');
+  write(path.join(sorted, 'keep.txt'), 'stays'); // a root that lists nothing is not believed
   await scanRoot(d.deps, 'sorted', sorted);
   const [before] = await rows(d);
   fs.rmSync(f);
@@ -65,7 +68,7 @@ it('a removed file becomes a deleted row with its last hash, and loses its mirro
   const [after] = await rows(d);
   expect(after).toMatchObject({ deleted: 1, sha256: before.sha256 });
   expect(after.rev).toBeGreaterThan(before.rev);
-  expect(await mirror(d)).toEqual([]);
+  expect((await mirror(d)).map((m) => m.rel_path)).toEqual(['keep.txt']);
   const rev = after.rev;
   await scanRoot(d.deps, 'sorted', sorted);
   expect((await rows(d))[0].rev).toBe(rev);
@@ -222,4 +225,31 @@ it('an edit keeps the capture id on the mirror entry', async () => {
   write(a, 'more pixels');
   await scanRoot(d.deps, 'incoming', incoming);
   expect((await mirror(d))[0].capture_id).toBe('cap-1');
+});
+
+it('a root that lists no file at all is not believed: nothing is tombstoned, logged once', async () => {
+  const { d, sorted } = await setup();
+  write(path.join(sorted, 'a.txt'), 'one');
+  write(path.join(sorted, 'b.txt'), 'two');
+  await scanRoot(d.deps, 'sorted', sorted);
+  const before = await rows(d);
+  const mirrorBefore = await mirror(d);
+  fs.rmSync(path.join(sorted, 'a.txt'));
+  fs.rmSync(path.join(sorted, 'b.txt'));
+  await scanRoot(d.deps, 'sorted', sorted);
+  await scanRoot(d.deps, 'sorted', sorted);
+  expect(await rows(d)).toEqual(before);
+  expect(await mirror(d)).toEqual(mirrorBefore);
+  expect(d.logs.filter((l) => l.includes('lists no file at all'))).toHaveLength(1);
+  // the files come back: the root is believed again
+  write(path.join(sorted, 'a.txt'), 'one');
+  await scanRoot(d.deps, 'sorted', sorted);
+  expect((await rows(d)).map((r) => [r.rel_path, r.deleted])).toEqual([['a.txt', 0], ['b.txt', 1]]);
+});
+
+it('an empty first Incoming is still a fresh root: no rows, nothing to protect', async () => {
+  const { d, incoming } = await setup();
+  await scanRoot(d.deps, 'incoming', incoming);
+  expect(await rows(d)).toEqual([]);
+  expect(d.logs.filter((l) => l.includes('lists no file at all'))).toHaveLength(0);
 });

@@ -19,7 +19,7 @@ export interface MirrorRow {
   rel_path: string; sha256: string; bytes: number; mtime_ms: number; capture_id: string | null;
 }
 
-const complained = new WeakMap<object, Set<SharedRoot>>();
+const complained = new WeakMap<object, Set<string>>();
 
 export async function readable(rootAbs: string): Promise<boolean> {
   try {
@@ -111,6 +111,17 @@ export async function scanRoot(d: ScanDeps, root: SharedRoot, rootAbs: string): 
   );
 
   const disk = await readDisk(d, rootAbs, mirror);
+  // An empty root is not believed: an unmounted volume leaves an empty mount
+  // point. A root that has live rows and now lists no file at all changes
+  // nothing (no tombstone, no mirror change) until a file shows up again.
+  const liveRows = [...rows.values()].some((r) => !r.deleted && !r.missing_here);
+  if (disk.seen.size === 0 && !disk.incomplete && liveRows) {
+    if (!told.has(`empty:${root}`))
+      d.log('warn', `${root} folder lists no file at all; its listing is left as it is`);
+    told.add(`empty:${root}`);
+    return;
+  }
+  told.delete(`empty:${root}`);
   const trouble = { incomplete: disk.incomplete };
   const seen = disk.seen;
   const units: BatchStep[][] = [];
