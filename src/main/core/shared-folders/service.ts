@@ -5,6 +5,7 @@ import type { AppDb } from '../../db/app-db';
 import { SyncReadOnly } from '../sync/role';
 import type { SyncService } from '../sync/service';
 import { scanRoot } from './leader-scan';
+import { listSortable, reconcileAtPromotion } from './promote';
 import { normalizeRel, toAbs, toRel, type SharedRoot } from './paths';
 import { watchRoot, type RootWatcher } from './watch';
 
@@ -84,6 +85,9 @@ export interface SharedFolders extends SharedFoldersApi {
 }
 
 export const ROOTS_META_KEY = 'shared-folders:roots';
+/** Set while this device is, or was last, a copy: the next time it leads it
+ *  reconciles first. Local, so it survives a restart between the two. */
+export const RECONCILE_PENDING_KEY = 'shared-folders:reconcile-pending';
 export const SHARED_SOURCE = 'shared-folder';
 
 const isRoot = (s: string): s is SharedRoot => s === 'incoming' || s === 'sorted';
@@ -115,13 +119,15 @@ export async function createSharedFolders(deps: SharedFoldersDeps): Promise<Shar
   };
   const modeListeners: ((next: SharedMode, prev: SharedMode) => void)[] = [];
   let lastMode = mode();
+  let starting: Promise<void> = Promise.resolve();
   deps.sync.onRole(() => {
     const next = mode();
     if (next === lastMode) return;
     const prev = lastMode;
     lastMode = next;
+    if (next === 'copy') void markPending().catch((err) => deps.log('warn', `${String(err)}`));
     for (const cb of modeListeners) cb(next, prev);
-    void rewatch().then(kick);
+    starting = rewatch().then(kick);
   });
 
   const watchers: RootWatcher[] = [];
@@ -131,8 +137,33 @@ export async function createSharedFolders(deps: SharedFoldersDeps): Promise<Shar
   let again = false;
   let closed = false;
 
+  let pending =
+    (await deps.db.all(`SELECT 1 FROM meta WHERE key = ?`, [RECONCILE_PENDING_KEY])).length > 0;
+  let pendingGen = 0;
+  const markPending = async (): Promise<void> => {
+    pendingGen += 1;
+    pending = true;
+    await deps.db.run(`INSERT OR IGNORE INTO meta(key, value) VALUES(?, '1')`, [RECONCILE_PENDING_KEY]);
+  };
+  let reconciling: Promise<void> | null = null;
+  /** Runs the promotion reconcile if one is owed; every caller waits for the same run. */
+  const reconcileIfPending = async (): Promise<void> => {
+    if (!pending) return;
+    reconciling ??= (async () => {
+      const gen = pendingGen;
+      await reconcileAtPromotion({ ...deps, roots });
+      if (gen !== pendingGen) return; // became a copy again meanwhile: still owed
+      pending = false;
+      await deps.db.run(`DELETE FROM meta WHERE key = ?`, [RECONCILE_PENDING_KEY]);
+    })().finally(() => {
+      reconciling = null;
+    });
+    await reconciling;
+  };
+
   const pass = async (): Promise<void> => {
     if (mode() !== 'leader') return;
+    await reconcileIfPending();
     for (const root of ['incoming', 'sorted'] as const) {
       const base = roots[root];
       // eslint-disable-next-line no-await-in-loop
@@ -187,6 +218,7 @@ export async function createSharedFolders(deps: SharedFoldersDeps): Promise<Shar
   const api: SharedFolders = {
     mode,
     settled: async () => {
+      await starting;
       while (timer || running) {
         // eslint-disable-next-line no-await-in-loop
         await (running ?? new Promise((r) => setTimeout(r, debounceMs + 1)));
@@ -247,8 +279,25 @@ export async function createSharedFolders(deps: SharedFoldersDeps): Promise<Shar
         [captureId, sha256],
       );
     },
-    parked: notYet('parked'),
-    listForSorting: notYet('listForSorting'),
+    parked: async (absPath) => {
+      for (const root of ['incoming', 'sorted'] as const) {
+        const base = roots[root];
+        const rel = base ? toRel(base, absPath) : null;
+        if (!rel) continue;
+        const rows = await deps.db.all(`SELECT parked FROM shared_files WHERE root = ? AND rel_path = ?`, [
+          root,
+          rel,
+        ]);
+        return rows[0]?.parked === 1;
+      }
+      return false;
+    },
+    listForSorting: async () => {
+      if (mode() !== 'leader' || !roots.incoming) return [];
+      await reconcileIfPending();
+      if (mode() !== 'leader') return [];
+      return listSortable(deps, roots.incoming);
+    },
     moved: notYet('moved'),
     noteCapture: notYet('noteCapture'),
     fileOfCapture: notYet('fileOfCapture'),
@@ -259,6 +308,7 @@ export async function createSharedFolders(deps: SharedFoldersDeps): Promise<Shar
       remove: notYet('serve.remove'),
     },
   };
+  if (mode() === 'copy') await markPending();
   await rewatch();
   kick();
   return api;

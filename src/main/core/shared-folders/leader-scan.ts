@@ -12,16 +12,16 @@ export type ScanDeps = Pick<SharedFoldersDeps, 'db' | 'hashFile' | 'log'>;
 
 export const INCOMING_SCANNED_KEY = 'shared-folders:incoming-scanned';
 
-interface FileRow {
+export interface FileRow {
   rel_path: string; sha256: string; missing_here: number; deleted: number;
 }
-interface MirrorRow {
+export interface MirrorRow {
   rel_path: string; sha256: string; bytes: number; mtime_ms: number; capture_id: string | null;
 }
 
 const complained = new WeakMap<object, Set<SharedRoot>>();
 
-async function readable(rootAbs: string): Promise<boolean> {
+export async function readable(rootAbs: string): Promise<boolean> {
   try {
     if (!(await fs.promises.stat(rootAbs)).isDirectory()) return false;
     await fs.promises.readdir(rootAbs);
@@ -31,14 +31,56 @@ async function readable(rootAbs: string): Promise<boolean> {
   }
 }
 
-const UPSERT_ROW = `INSERT INTO shared_files(root, rel_path, sha256, bytes, mtime, missing_here, deleted, parked, rev)
+export const UPSERT_ROW = `INSERT INTO shared_files(root, rel_path, sha256, bytes, mtime, missing_here, deleted, parked, rev)
   VALUES(?, ?, ?, ?, ?, 0, 0, ?, ?)
   ON CONFLICT(root, rel_path) DO UPDATE SET sha256 = excluded.sha256, bytes = excluded.bytes,
     mtime = excluded.mtime, missing_here = 0, deleted = 0, rev = excluded.rev`;
-const UPSERT_MIRROR = `INSERT INTO shared_mirror(root, rel_path, sha256, bytes, mtime_ms, capture_id)
+export const UPSERT_MIRROR = `INSERT INTO shared_mirror(root, rel_path, sha256, bytes, mtime_ms, capture_id)
   VALUES(?, ?, ?, ?, ?, ?)
   ON CONFLICT(root, rel_path) DO UPDATE SET sha256 = excluded.sha256, bytes = excluded.bytes,
     mtime_ms = excluded.mtime_ms`;
+
+
+export interface DiskFile {
+  abs: string;
+  sha: string;
+  stats: fs.Stats;
+  mtimeMs: number;
+  iso: string;
+}
+
+/** Every admitted file under the root with its hash. A file whose size and
+ *  mtime equal its mirror entry is not hashed again. `seen` holds every path
+ *  the walk reached, also those it could not hash; `incomplete` says the
+ *  listing is not proof that anything is gone. */
+export async function readDisk(
+  d: Pick<ScanDeps, 'hashFile'>,
+  rootAbs: string,
+  mirror: ReadonlyMap<string, { sha256: string; bytes: number; mtime_ms: number }>,
+): Promise<{ files: Map<string, DiskFile>; seen: Set<string>; incomplete: boolean }> {
+  const trouble: WalkTrouble = { incomplete: false };
+  const files = new Map<string, DiskFile>();
+  const seen = new Set<string>();
+  for await (const { absPath, stats } of walkRoot(rootAbs, trouble)) {
+    const rel = toRel(rootAbs, absPath);
+    if (rel === null) continue;
+    seen.add(rel);
+    const mtimeMs = Math.floor(stats.mtimeMs);
+    const m = mirror.get(rel);
+    let sha: string;
+    if (m && m.bytes === stats.size && m.mtime_ms === mtimeMs) sha = m.sha256;
+    else {
+      try {
+        sha = await d.hashFile(absPath);
+      } catch {
+        trouble.incomplete = true; // vanished or locked: not proof of anything
+        continue;
+      }
+    }
+    files.set(rel, { abs: absPath, sha, stats, mtimeMs, iso: new Date(stats.mtimeMs).toISOString() });
+  }
+  return { files, seen, incomplete: trouble.incomplete };
+}
 
 /** One pass over one root. Does nothing when the root is missing or unreadable
  *  (an unmounted volume is not an empty folder), and tombstones nothing when
@@ -68,33 +110,20 @@ export async function scanRoot(d: ScanDeps, root: SharedRoot, rootAbs: string): 
     (await d.db.all(`SELECT coalesce(max(rev), 0) AS m FROM shared_files`))[0]?.m ?? 0,
   );
 
-  const trouble: WalkTrouble = { incomplete: false };
-  const seen = new Set<string>();
+  const disk = await readDisk(d, rootAbs, mirror);
+  const trouble = { incomplete: disk.incomplete };
+  const seen = disk.seen;
   const units: BatchStep[][] = [];
   const fresh: { rel: string; sha: string; bytes: number; mtimeMs: number; step: number }[] = [];
 
-  for await (const { absPath, stats } of walkRoot(rootAbs, trouble)) {
-    const rel = toRel(rootAbs, absPath);
-    if (rel === null) continue;
-    seen.add(rel);
-    const mtimeMs = Math.floor(stats.mtimeMs);
+  for (const [rel, f] of disk.files) {
+    const { sha, stats, mtimeMs } = f;
     const m = mirror.get(rel);
-    let sha: string;
-    if (m && m.bytes === stats.size && m.mtime_ms === mtimeMs) sha = m.sha256;
-    else {
-      try {
-        sha = await d.hashFile(absPath);
-      } catch {
-        trouble.incomplete = true; // vanished or locked: not proof of anything
-        continue;
-      }
-    }
     const r = rows.get(rel);
-    const iso = new Date(stats.mtimeMs).toISOString();
     const write = (mirrorCapture: string | null = m?.capture_id ?? null): BatchStep[] => {
       rev += 1;
       return [
-        { sql: UPSERT_ROW, params: [root, rel, sha, stats.size, iso, r ? 0 : park, rev] },
+        { sql: UPSERT_ROW, params: [root, rel, sha, stats.size, f.iso, r ? 0 : park, rev] },
         { sql: UPSERT_MIRROR, params: [root, rel, sha, stats.size, mtimeMs, mirrorCapture] },
       ];
     };
