@@ -465,6 +465,12 @@ export interface Store {
     load(account: AccountId): Promise<Credentials | null>;
     delete(account: AccountId): Promise<void>;
   };
+  /** Account-wide secrets: vault rows keyed `secret:<extension>:<name>`, so they
+   *  travel to followers like a login. The value is an opaque string. */
+  secrets: {
+    save(key: string, value: string): Promise<void>;
+    load(key: string): Promise<string | null>;
+  };
   identity: {
     get(): Promise<Identity | null>;
     set(i: Identity): Promise<void>;

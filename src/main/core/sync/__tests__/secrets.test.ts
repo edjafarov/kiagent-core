@@ -222,3 +222,41 @@ it('v16 adds the stamp columns to a vault that has none, once', async () => {
   expect(c.prepare(`SELECT epoch, n FROM vault`).get()).toEqual({ epoch: 0, n: 0 });
   expect(c.prepare(`SELECT value FROM meta WHERE key = 'schemaVersion'`).get()).toEqual({ value: '23' });
 });
+
+describe('account secrets', () => {
+  it('save then load round-trips; a missing key is null', async () => {
+    const a = await device('a');
+    await a.store.secrets.save('secret:x:y', 'v');
+    expect(await a.store.secrets.load('secret:x:y')).toBe('v');
+    expect(await a.store.secrets.load('secret:x:none')).toBeNull();
+  });
+
+  it('a tracking leader stamps the row with the epoch and the next n', async () => {
+    const a = await device('a');
+    a.conn().prepare(`UPDATE sync_state SET epoch = 2`).run();
+    enableTracking(a.conn());
+    await a.store.vault.save('login', { t: 1 } as never);
+    await a.store.secrets.save('secret:x:y', 'v');
+    expect(stamp(a, 'secret:x:y')).toEqual({ epoch: 2, n: 2 });
+    await a.store.secrets.save('secret:x:y', 'v2');
+    expect(stamp(a, 'secret:x:y')).toEqual({ epoch: 2, n: 3 });
+  });
+
+  it('travels through export and import to a follower', async () => {
+    const a = await device('a');
+    const b = await device('b');
+    enableTracking(a.conn());
+    await a.store.secrets.save('secret:x:y', 'v');
+    const got = await a.svc.exportSecrets({ epoch: 0, n: 0 });
+    expect(got).toContainEqual(expect.objectContaining({ accountId: 'secret:x:y', value: 'v' }));
+    asFollower(b);
+    await b.svc.importSecrets(got);
+    expect(await b.store.secrets.load('secret:x:y')).toBe('v');
+  });
+
+  it('refuses a key that is not a secret key', async () => {
+    const a = await device('a');
+    await expect(a.store.secrets.save('gmail-1', 'v')).rejects.toThrow('not a secret key');
+    await expect(a.store.secrets.load('gmail-1')).rejects.toThrow('not a secret key');
+  });
+});
