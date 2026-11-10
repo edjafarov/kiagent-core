@@ -1,6 +1,8 @@
 /** Shared folders (phone phase 3): the Incoming and Sorted folders belong to
  *  the account. The leader lists them in `shared_files`; a copy mirrors them.
  *  This is the service shell and its API surface; the passes live beside it. */
+import fs from 'node:fs';
+
 import type { AppDb } from '../../db/app-db';
 import type { SyncService } from '../sync/service';
 import { createCaptures } from './captures';
@@ -48,6 +50,8 @@ export interface SharedFoldersApi {
   setTransport(t: SharedTransport | null): void;
   kick(): void;
   resolve(absPath: string): Promise<SharedRef | null>;
+  /** The local path of a document's original, only while the root is usable,
+   *  the row is live, and the file here holds the row's bytes. */
   pathOf(doc: { accountId: string; externalId: string }): Promise<string | null>;
   parked(absPath: string): Promise<boolean>;
   /** Tells `cb` when `shared_files` changed on this device or a promotion
@@ -402,9 +406,29 @@ export async function createSharedFolders(deps: SharedFoldersDeps): Promise<Shar
       const cut = doc.externalId.indexOf('/');
       const root = doc.externalId.slice(0, cut);
       const base = cut > 0 && isRoot(root) ? roots[root] : null;
-      if (!base) return null;
+      // A copy is never owed a reconcile (that is for a new leader), so it is
+      // only a paused root that withholds the path there.
+      if (!base || paused.has(root as SharedRoot) || (owed.has(root as SharedRoot) && mode() !== 'copy')) return null;
       try {
-        return await safeAbs(base, normalizeRel(doc.externalId.slice(cut + 1)));
+        const rel = normalizeRel(doc.externalId.slice(cut + 1));
+        // Only for the version the manifest names: after a promotion the disk
+        // may hold an older one (the row is `missing_here`), and that is not
+        // the document's original. `missing_here` describes the leader's disk;
+        // a copy that holds the right bytes still gets its path.
+        const row = await rowAt(deps.db, key, root as SharedRoot, rel);
+        if (!row || row.deleted) return null;
+        const abs = await safeAbs(base, row.rel_path);
+        const st = await fs.promises.stat(abs);
+        if (!st.isFile()) return null;
+        const m = (await deps.db.all(`SELECT sha256, bytes, mtime_ms FROM shared_mirror WHERE root = ? AND rel_path = ?`, [
+          root,
+          row.rel_path,
+        ]))[0];
+        const sha =
+          m && Number(m.bytes) === st.size && Number(m.mtime_ms) === Math.floor(st.mtimeMs)
+            ? String(m.sha256)
+            : await deps.hashFile(abs);
+        return sha === row.sha256 ? abs : null;
       } catch {
         return null;
       }
