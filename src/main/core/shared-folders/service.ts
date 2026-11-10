@@ -124,6 +124,9 @@ export interface SharedFoldersApi {
 
 export interface SharedFoldersDeps {
   db: AppDb;
+  /** Called with the service before its start-up work (the migration restarts
+   *  local-folder scans, and they must already see what the folders exclude). */
+  publish?(api: SharedFolders): void;
   /** `onApplied` is the hook that says rows from the leader were applied. */
   sync: Pick<SyncService, 'readOnly' | 'role' | 'onRole' | 'onApplied'>;
   hashFile(abs: string): Promise<string>;
@@ -595,6 +598,7 @@ export async function createSharedFolders(deps: SharedFoldersDeps): Promise<Shar
     listPresent: () => listIncoming(true),
     serve,
   };
+  deps.publish?.(api);
   if (mode() === 'copy') await markPending();
   if (due()) {
     enabled = true;

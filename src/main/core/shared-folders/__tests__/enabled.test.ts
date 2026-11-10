@@ -206,4 +206,21 @@ describe('when another computer joins the account', () => {
     expect(svc.enabled()).toBe(true);
     expect(fs.existsSync(path.join(incoming, MARKER))).toBe(true);
   });
+
+  it('at such a restart the service is published before a local-folder scan is restarted', async () => {
+    const { d, w } = await alone();
+    d.sync.setPeer(true, false);
+    let published: { enabled(): boolean } | null = null;
+    const seen: (boolean | null)[] = [];
+    (w.over as { publish?: (api: { enabled(): boolean }) => void }).publish = (api) => {
+      published = api;
+    };
+    w.over.localFolders.quiesce = async () => {
+      seen.push(published ? (published as { enabled(): boolean }).enabled() : null);
+    };
+    const svc = await d.restart();
+    await svc.settled();
+    expect(seen.length).toBeGreaterThan(0);
+    expect(seen.every((v) => v === true)).toBe(true);
+  });
 });

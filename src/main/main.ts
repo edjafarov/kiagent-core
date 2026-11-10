@@ -1481,6 +1481,11 @@ app
     // duplication bug.
     const outboundRoutes = createOutboundRoutes(outbound, calendarOut);
     const sharedFolders = await createSharedFolders({
+      // Before start-up: a local-folder scan the migration restarts must
+      // already see the shared folders it leaves alone.
+      publish: (api) => {
+        sharedSourceHost = { db: p.db, sharedFolders: api };
+      },
       db: p.db,
       sync: p.sync,
       hashFile: sha256File,
