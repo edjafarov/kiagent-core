@@ -261,6 +261,26 @@ describe('account secrets', () => {
   });
 });
 
+describe('a secret is never stored as plain text', () => {
+  it('refuses the save when the strict keystore fails, and stores nothing', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sync-secrets-strict-'));
+    const db = await openDb(path.join(dir, 'a.db'));
+    migrate(db._conn!);
+    const ks = keystore('strict');
+    const store = openStore(db, {
+      ...ks,
+      encryptStrict: () => {
+        throw new Error('no keystore');
+      },
+      detectLanguages: () => ['eng'],
+    });
+    await expect(store.secrets.save('secret:x:y', 'v')).rejects.toThrow('no keystore');
+    expect(db._conn!.prepare(`SELECT count(*) AS c FROM vault`).get()).toEqual({ c: 0 });
+    await db.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+});
+
 describe('onSecret', () => {
   it('tells the listener once per imported account secret, not for logins', async () => {
     const b = await device('b');
@@ -286,6 +306,16 @@ describe('onSecret', () => {
       b.svc.importSecrets([{ accountId: 'secret:x:y', epoch: 1, n: 1, value: 'v' }]),
     ).resolves.toEqual({ applied: 1 });
     expect(seen).toEqual(['secret:x:y']);
+  });
+
+  it('stops telling a listener that unsubscribed', async () => {
+    const b = await device('b');
+    asFollower(b);
+    const seen: string[] = [];
+    const off = b.svc.onSecret((k) => void seen.push(k));
+    off();
+    await b.svc.importSecrets([{ accountId: 'secret:x:y', epoch: 1, n: 1, value: 'v' }]);
+    expect(seen).toEqual([]);
   });
 
   it('an import whose store write fails tells nobody', async () => {

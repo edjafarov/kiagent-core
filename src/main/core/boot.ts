@@ -368,6 +368,7 @@ export async function bootCore(deps: BootDeps): Promise<CorePlatform> {
   const gateAtBoot = await readSyncGate(db);
   const store = openStore(db, {
     encrypt: deps.encrypt,
+    encryptStrict: deps.encryptStrict,
     decrypt: deps.decrypt,
     detectLanguages,
     profileDir: deps.dataDir,

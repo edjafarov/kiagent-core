@@ -179,6 +179,9 @@ function backupAssets(
 export interface StoreDeps {
   /** Credential blob encryption (Electron safeStorage in production). */
   encrypt(plain: string): Buffer;
+  /** Like `encrypt`, but throws when the keystore is unavailable instead of
+   *  storing plain text. Account secrets use it when it is supplied. */
+  encryptStrict?(plain: string): Buffer;
   decrypt(blob: Buffer): string;
   /** Cheap language detection for search stemming (ISO-639-3). */
   detectLanguages(text: string): string[];
@@ -969,7 +972,8 @@ export function openStore(db: AppDb, deps: StoreDeps): CoreStore {
            ON CONFLICT(account_id) DO UPDATE SET blob = excluded.blob,
              epoch = CASE WHEN ${TRACKING} THEN excluded.epoch ELSE vault.epoch END,
              n = CASE WHEN ${TRACKING} THEN excluded.n ELSE vault.n END`,
-          [key, deps.encrypt(value)],
+          // Never plain text: a secret is refused when the keystore is not there.
+          [key, (deps.encryptStrict ?? deps.encrypt)(value)],
         );
       },
       async load(key) {

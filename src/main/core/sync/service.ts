@@ -264,7 +264,7 @@ export interface SyncService {
   onRole(cb: (r: SyncRoleWire) => void): void;
   /** Tells `cb` the key of each account secret (`secret:…`) imported from the
    *  leader, after it was stored. Core-internal. */
-  onSecret(cb: (key: string) => void): void;
+  onSecret(cb: (key: string) => void): () => void;
   /** The last lease snapshot, or null before the first. */
   lease(): LeaseSnapshot | null;
   /** Deletes the old database a join set aside. Restoring it is then gone. */
@@ -1024,7 +1024,7 @@ export function createSyncService(deps: SyncServiceDeps): SyncService {
       );
       for (const e of entries) {
         if (!e.accountId.startsWith('secret:')) continue;
-        for (const cb of secretListeners) {
+        for (const cb of [...secretListeners]) {
           // The rows are already stored: a listener must not fail the import.
           try {
             cb(e.accountId);
@@ -1148,7 +1148,13 @@ export function createSyncService(deps: SyncServiceDeps): SyncService {
     },
     role: roleNow,
     onRole: (cb) => void roleListeners.push(cb),
-    onSecret: (cb) => void secretListeners.push(cb),
+    onSecret: (cb) => {
+      secretListeners.push(cb);
+      return () => {
+        const i = secretListeners.indexOf(cb);
+        if (i >= 0) secretListeners.splice(i, 1);
+      };
+    },
     lease: () => leaseNow,
     deviceId: () => deviceId ?? deps.deviceId?.() ?? null,
     deleteArchive: async () => {

@@ -280,8 +280,8 @@ export function buildSurfaces(deps: SurfaceDeps): {
 } {
   const eventSubs = new Map<string, () => void>();
   let prefsWatch: (() => void) | null = null;
-  let secretsWatching = false;
-  let secretsSubscribed = false;
+  /** Set while this extension watches its secrets; calling it unsubscribes. */
+  let offSecrets: (() => void) | null = null;
   const remoteWatchers = new Map<number, { close(): Promise<void> }>();
   const uiRegistry = deps.uiRegistry ?? createUiRegistry();
   // ONE resolution of the default, reused by both the registry bind (which
@@ -733,7 +733,7 @@ export function buildSurfaces(deps: SurfaceDeps): {
         return `${prefix}${name}`;
       };
       const told = (name: string): void => {
-        if (!secretsWatching) return;
+        if (!offSecrets) return;
         deps.deliverEvent(
           'platform.secrets.change',
           { name },
@@ -752,18 +752,17 @@ export function buildSurfaces(deps: SurfaceDeps): {
           told(key.slice(prefix.length));
         },
         watch: () => {
-          secretsWatching = true;
-          if (secretsSubscribed) return;
-          secretsSubscribed = true;
-          // The service has no unsubscribe: the flags above gate delivery.
-          deps.sync?.onSecret((key) => {
+          if (offSecrets) return;
+          const off = deps.sync?.onSecret((key) => {
             if (!key.startsWith(prefix)) return;
             const name = key.slice(prefix.length);
             if (SECRET_NAME_RE.test(name)) told(name);
           });
+          offSecrets = off ?? (() => {});
         },
         unwatch: () => {
-          secretsWatching = false;
+          offSecrets?.();
+          offSecrets = null;
         },
       };
     })(),
@@ -840,7 +839,8 @@ export function buildSurfaces(deps: SurfaceDeps): {
       eventSubs.clear();
       prefsWatch?.();
       prefsWatch = null;
-      secretsWatching = false;
+      offSecrets?.();
+      offSecrets = null;
       await Promise.all(
         [...remoteWatchers.values()].map((watcher) =>
           watcher.close().catch(() => undefined),
