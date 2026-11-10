@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import fs from 'fs';
+import os from 'os';
 import path from 'path';
 
 import { reconcileAtPromotion } from '../promote';
@@ -259,4 +260,89 @@ it('a Mac that never was a copy has nothing to reconcile', async () => {
   await d.svc.settled();
   expect(await d.db.all(`SELECT 1 FROM meta WHERE key = 'shared-folders:reconcile-pending'`)).toEqual([]);
   expect(await d.svc.listForSorting()).toEqual([path.join(incoming, 'a.pdf')]);
+});
+
+describe('a root that is not there is still owed its reconcile', () => {
+  const owed = async (d: Device) =>
+    (await d.db.all(`SELECT value FROM meta WHERE key = 'shared-folders:reconcile-pending'`)).map((r) => r.value);
+
+  it('an unmounted root stays owed; when it returns the rows are reconciled, not tombstoned', async () => {
+    const { d, incoming } = await setup();
+    await putRow(d, 'never-fetched.pdf', 'bytes');
+    await putRow(d, 'dead.pdf', 'bye', { deleted: 1 });
+    fs.rmSync(incoming, { recursive: true });
+    d.sync.set('leader');
+    await d.svc.settled();
+    expect(await rows(d)).toMatchObject([
+      { rel_path: 'dead.pdf', deleted: 1, rev: 3 },
+      { rel_path: 'never-fetched.pdf', deleted: 0, missing_here: 0, rev: 3 },
+    ]);
+    expect(await owed(d)).toHaveLength(1);
+    expect(await d.svc.listForSorting()).toEqual([]);
+    // the volume comes back with a file of its own and the old tombstone's file
+    write(path.join(incoming, 'dead.pdf'), 'bye');
+    write(path.join(incoming, 'own.pdf'), 'own');
+    await putMirror(d, 'dead.pdf', 'bye');
+    d.svc.kick();
+    await d.svc.settled();
+    expect(await rows(d)).toMatchObject([
+      { rel_path: 'dead.pdf', deleted: 1 },
+      { rel_path: 'never-fetched.pdf', deleted: 0, missing_here: 1 },
+      { rel_path: 'own.pdf', deleted: 0, missing_here: 0 },
+    ]);
+    expect(d.trashed).toEqual([path.join(incoming, 'dead.pdf')]);
+    expect(await owed(d)).toEqual([]);
+  });
+
+  it('a root that reappears between the reconcile and the scan is not scanned before its reconcile', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'owed-'));
+    const incoming = path.join(dir, 'incoming');
+    const d = await device('copy', {
+      log: (_l, m) => {
+        if (m.includes('reconcile is still owed')) write(path.join(incoming, 'own.pdf'), 'own');
+      },
+    });
+    await d.svc.setRoots({ incoming, sorted: null });
+    await putRow(d, 'never-fetched.pdf', 'bytes');
+    d.sync.set('leader');
+    await d.svc.settled();
+    expect(await rows(d)).toMatchObject([{ rel_path: 'never-fetched.pdf', deleted: 0, rev: 3 }]);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('an empty mount point leaves rows and mirror entries alone and stays owed', async () => {
+    const { d } = await setup();
+    await putRow(d, 'a.pdf', 'a');
+    await putRow(d, 'b.pdf', 'b');
+    await putMirror(d, 'a.pdf', 'a');
+    await putMirror(d, 'b.pdf', 'b');
+    d.sync.set('leader');
+    await d.svc.settled();
+    expect(await rows(d)).toMatchObject([
+      { rel_path: 'a.pdf', missing_here: 0, deleted: 0, rev: 3 },
+      { rel_path: 'b.pdf', missing_here: 0, deleted: 0, rev: 3 },
+    ]);
+    expect(await mirror(d)).toHaveLength(2);
+    expect(await owed(d)).toHaveLength(1);
+  });
+
+  it('an unset root is owed too, and an owed root refuses serve and sorting', async () => {
+    const d = await device('copy');
+    const incoming = path.join(d.dir, 'incoming');
+    fs.mkdirSync(incoming);
+    await d.svc.setRoots({ incoming, sorted: null });
+    await putRow(d, 'x.pdf', 'x', { root: 'sorted' });
+    d.sync.set('leader');
+    await d.svc.settled();
+    expect(await owed(d)).toHaveLength(1);
+    await expect(
+      d.svc.serve.open({ root: 'sorted', relPath: 'x.pdf', sha256: sha('x') }),
+    ).rejects.toMatchObject({ code: 'SHARED_ROOT_PAUSED', root: 'sorted', reason: 'owed' });
+    await d.svc.setRoots({ incoming, sorted: path.join(d.dir, 'sorted') });
+    fs.mkdirSync(path.join(d.dir, 'sorted'));
+    write(path.join(d.dir, 'sorted', 'y.pdf'), 'y');
+    d.svc.kick();
+    await d.svc.settled();
+    expect(await owed(d)).toEqual([]);
+  });
 });

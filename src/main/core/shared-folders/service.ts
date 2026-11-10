@@ -9,6 +9,7 @@ import { scanRoot } from './leader-scan';
 import { mirrorPass } from './mirror';
 import { listSortable, reconcileAtPromotion } from './promote';
 import { normalizeRel, toAbs, toRel, type SharedRoot } from './paths';
+import { loadRootSet, OWED_KEY, ROOT_NAMES, saveRootSet, SharedRootPaused } from './root-state';
 import { createServe } from './serve';
 import { watchRoot, type RootWatcher } from './watch';
 
@@ -51,6 +52,10 @@ export interface SharedFoldersApi {
    *  reconcile finished (the sorter asks `listForSorting` again). */
   onChange(cb: () => void): () => void;
   listForSorting(): Promise<string[]>;
+  /** False while the root is owed its reconcile (a new leader that has not
+   *  checked it yet, or whose folder is not there): nothing is scanned,
+   *  sorted, served or indexed for it. Synchronous: the source reads it per row. */
+  usable(root: SharedRoot): boolean;
   moved(fromAbs: string, toAbs: string): Promise<void>;
   registerCapture(captureId: string, sha256: string): Promise<void>;
   noteCapture(captureId: string, absPath: string, sha256: string): Promise<boolean>;
@@ -102,7 +107,7 @@ export interface SharedFolders extends SharedFoldersApi {
 export const ROOTS_META_KEY = 'shared-folders:roots';
 /** Set while this device is, or was last, a copy: the next time it leads it
  *  reconciles first. Local, so it survives a restart between the two. */
-export const RECONCILE_PENDING_KEY = 'shared-folders:reconcile-pending';
+export const RECONCILE_PENDING_KEY = OWED_KEY;
 export const SHARED_SOURCE = 'shared-folder';
 
 const isRoot = (s: string): s is SharedRoot => s === 'incoming' || s === 'sorted';
@@ -149,13 +154,14 @@ export async function createSharedFolders(deps: SharedFoldersDeps): Promise<Shar
   let again = false;
   let closed = false;
 
-  let pending =
-    (await deps.db.all(`SELECT 1 FROM meta WHERE key = ?`, [RECONCILE_PENDING_KEY])).length > 0;
+  // The roots whose reconcile at promotion is owed. Persisted, so a restart
+  // (or a volume that is not mounted yet) does not forget it.
+  const owed = await loadRootSet(deps.db, OWED_KEY);
   let pendingGen = 0;
   const markPending = async (): Promise<void> => {
     pendingGen += 1;
-    pending = true;
-    await deps.db.run(`INSERT OR IGNORE INTO meta(key, value) VALUES(?, '1')`, [RECONCILE_PENDING_KEY]);
+    for (const r of ROOT_NAMES) owed.add(r);
+    await saveRootSet(deps.db, OWED_KEY, owed);
   };
   const changeListeners = new Set<() => void>();
   const fire = (): void => {
@@ -171,6 +177,7 @@ export async function createSharedFolders(deps: SharedFoldersDeps): Promise<Shar
     Number((await deps.db.all(`SELECT coalesce(max(rev), 0) AS m FROM shared_files`))[0]?.m ?? 0);
   const pendingNotes = new Map<string, string>();
   const explained = new Set<string>();
+  const isExplained = (root: SharedRoot, rel: string): boolean => explained.has(`${root}/${rel}`);
   const takeNote = (sha: string): string | null => {
     const note = pendingNotes.get(sha) ?? null;
     pendingNotes.delete(sha);
@@ -179,13 +186,15 @@ export async function createSharedFolders(deps: SharedFoldersDeps): Promise<Shar
   let reconciling: Promise<void> | null = null;
   /** Runs the promotion reconcile if one is owed; every caller waits for the same run. */
   const reconcileIfPending = async (): Promise<void> => {
-    if (!pending) return;
+    if (owed.size === 0) return;
     reconciling ??= (async () => {
       const gen = pendingGen;
-      await reconcileAtPromotion({ ...deps, roots });
+      const result = await reconcileAtPromotion({ ...deps, roots, explained: isExplained });
       if (gen !== pendingGen) return; // became a copy again meanwhile: still owed
-      pending = false;
-      await deps.db.run(`DELETE FROM meta WHERE key = ?`, [RECONCILE_PENDING_KEY]);
+      let changed = false;
+      for (const r of ROOT_NAMES) if (result[r] === 'done' && owed.delete(r)) changed = true;
+      if (!changed) return;
+      await saveRootSet(deps.db, OWED_KEY, owed);
       fire();
     })().finally(() => {
       reconciling = null;
@@ -216,9 +225,9 @@ export async function createSharedFolders(deps: SharedFoldersDeps): Promise<Shar
     for (const root of ['incoming', 'sorted'] as const) {
       const base = roots[root];
       // eslint-disable-next-line no-await-in-loop
-      if (base) {
+      if (base && !owed.has(root)) {
         // eslint-disable-next-line no-await-in-loop
-        await scanRoot({ ...deps, takeNote, explained }, root, base);
+        await scanRoot({ ...deps, takeNote, explained: isExplained }, root, base);
         for (const key of [...explained]) if (key.startsWith(`${root}/`)) explained.delete(key);
       }
     }
@@ -283,6 +292,9 @@ export async function createSharedFolders(deps: SharedFoldersDeps): Promise<Shar
     roots: () => roots,
     leader: () => mode() === 'leader',
     ready: reconcileIfPending,
+    refuse: (root) => {
+      if (owed.has(root)) throw new SharedRootPaused(root, 'owed');
+    },
     kick,
     explained,
   });
@@ -368,10 +380,11 @@ export async function createSharedFolders(deps: SharedFoldersDeps): Promise<Shar
       }
       return false;
     },
+    usable: (root) => !owed.has(root),
     listForSorting: async () => {
       if (mode() !== 'leader' || !roots.incoming) return [];
       await reconcileIfPending();
-      if (mode() !== 'leader') return [];
+      if (mode() !== 'leader' || owed.has('incoming')) return [];
       return listSortable(deps, roots.incoming);
     },
     serve,

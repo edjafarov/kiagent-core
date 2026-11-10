@@ -13,16 +13,26 @@ import {
   type MirrorRow,
 } from './leader-scan';
 import { toAbs, type SharedRoot } from './paths';
+import { emptyIsSuspect, ROOT_NAMES } from './root-state';
 import type { Roots, SharedFoldersDeps } from './service';
 
-export type PromoteDeps = Pick<SharedFoldersDeps, 'db' | 'hashFile' | 'trash' | 'log'> & { roots: Roots };
+export type PromoteDeps = Pick<SharedFoldersDeps, 'db' | 'hashFile' | 'trash' | 'log'> & {
+  roots: Roots;
+  /** True for a file this device itself moved or removed (see the empty-root rule). */
+  explained?: (root: SharedRoot, rel: string) => boolean;
+};
+
+/** `done`: the root was reconciled. `owed`: it could not be trusted (unset,
+ *  missing, unreadable, or empty while the manifest has live files and this
+ *  Mac had files here); nothing was touched and the reconcile is still owed. */
+export type ReconcileResult = 'done' | 'owed';
 
 type Row = FileRow & { parked: number };
 
-async function reconcileRoot(d: PromoteDeps, root: SharedRoot, base: string): Promise<void> {
+async function reconcileRoot(d: PromoteDeps, root: SharedRoot, base: string): Promise<ReconcileResult> {
   if (!(await readable(base))) {
-    d.log('warn', `${root} folder is missing or unreadable; not reconciled`);
-    return;
+    d.log('warn', `${root} folder is missing or unreadable; its reconcile is still owed`);
+    return 'owed';
   }
   const rows = new Map(
     ((await d.db.all(`SELECT rel_path, sha256, missing_here, deleted, parked FROM shared_files WHERE root = ?`, [
@@ -36,6 +46,12 @@ async function reconcileRoot(d: PromoteDeps, root: SharedRoot, base: string): Pr
   );
   let rev = Number((await d.db.all(`SELECT coalesce(max(rev), 0) AS m FROM shared_files`))[0]?.m ?? 0);
   const disk = await readDisk(d, base, mirror);
+  // An empty mount point is not an empty folder: this Mac had files here and
+  // now lists none while the manifest has live ones.
+  if (mirror.size > 0 && emptyIsSuspect(rows.values(), disk, (rel) => d.explained?.(root, rel) ?? false)) {
+    d.log('warn', `${root} folder lists no file at all; its reconcile is still owed`);
+    return 'owed';
+  }
   const steps: BatchStep[] = [];
 
   /** The leader's file now. `parked` is only for a new row: an existing row keeps its flag. */
@@ -116,14 +132,17 @@ async function reconcileRoot(d: PromoteDeps, root: SharedRoot, base: string): Pr
     // eslint-disable-next-line no-await-in-loop
     await d.db.batch(steps.slice(i, i + 400));
   }
+  return 'done';
 }
 
-export async function reconcileAtPromotion(d: PromoteDeps): Promise<void> {
-  for (const root of ['incoming', 'sorted'] as const) {
+export async function reconcileAtPromotion(d: PromoteDeps): Promise<Record<SharedRoot, ReconcileResult>> {
+  const out: Record<SharedRoot, ReconcileResult> = { incoming: 'owed', sorted: 'owed' };
+  for (const root of ROOT_NAMES) {
     const base = d.roots[root];
     // eslint-disable-next-line no-await-in-loop
-    if (base) await reconcileRoot(d, root, base);
+    if (base) out[root] = await reconcileRoot(d, root, base);
   }
+  return out;
 }
 
 /** The absolute paths of the Incoming rows a leader may sort: live, present

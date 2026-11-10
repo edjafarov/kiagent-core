@@ -17,6 +17,8 @@ export interface ServeCtx {
   leader(): boolean;
   /** Resolves when a promotion reconcile that is owed has finished. */
   ready(): Promise<void>;
+  /** Throws `SharedRootPaused` while the root may not be touched. */
+  refuse(root: SharedRoot): void;
   kick(): void;
   /** Paths this device made go away (see the scan's empty-root rule). */
   explained: Set<string>;
@@ -29,6 +31,7 @@ type Serve = SharedFoldersApi['serve'];
  *  the staging directory. */
 function locate(ctx: ServeCtx, root: unknown, relPath: unknown): { root: SharedRoot; base: string; rel: string; abs: string } {
   if (root !== 'incoming' && root !== 'sorted') throw new Error(`shared-folders: unknown root ${JSON.stringify(root)}`);
+  ctx.refuse(root);
   const base = ctx.roots()[root];
   if (!base) throw new Error(`shared-folders: the ${root} folder is not set on this Mac`);
   if (typeof relPath !== 'string') throw new Error('shared-folders: bad path');
@@ -90,6 +93,7 @@ export function createServe(ctx: ServeCtx): Serve {
       need('serve.open');
       await ctx.ready();
       const { root, rel, abs } = locate(ctx, q.root, q.relPath);
+      ctx.refuse(root);
       if ((await shaAt(ctx, root, rel, abs)) !== q.sha256) return null;
       return { path: abs, bytes: (await fs.promises.stat(abs)).size };
     },
@@ -99,6 +103,7 @@ export function createServe(ctx: ServeCtx): Serve {
       if (root !== 'incoming' && root !== 'sorted') throw new Error('shared-folders: unknown root');
       const base = ctx.roots()[root];
       if (!base) throw new Error(`shared-folders: the ${root} folder is not set on this Mac`);
+      ctx.refuse(root);
       const dir = path.join(base, STAGING_DIR);
       await fs.promises.mkdir(dir, { recursive: true });
       return path.join(dir, `in-${randomUUID()}`);
@@ -121,6 +126,7 @@ export function createServe(ctx: ServeCtx): Serve {
         throw new Error('shared-folders: the offered bytes do not match their hash');
       }
       await ctx.ready();
+      ctx.refuse(root);
       const db = ctx.deps.db;
       const withSha = (await db.all(
         `SELECT root, rel_path, missing_here FROM shared_files
@@ -224,6 +230,7 @@ export function createServe(ctx: ServeCtx): Serve {
       need('serve.remove');
       await ctx.ready();
       const { root, rel, abs } = locate(ctx, q.root, q.relPath);
+      ctx.refuse(root);
       if ((await shaAt(ctx, root, rel, abs)) !== q.sha256) return false;
       await ctx.deps.trash(abs);
       ctx.explained.add(`${root}/${rel}`);

@@ -86,6 +86,8 @@ it('two Macs with different absolute roots produce the same document for the sam
   write(path.join(mine.sorted, 'tax', 'a.txt'), 'hello world');
   write(path.join(mine.sorted, 'b.txt'), 'second');
   await copyRows(lead.db, copy.db);
+  copy.sync.set('leader'); // the source runs on a leader, after its reconcile
+  await copy.svc.settled();
   const a = await pullAll(lead);
   const b = await pullAll(copy);
   expect(a.docs.map((x) => ({ ...x, createdAt: undefined }))).toEqual(b.docs.map((x) => ({ ...x, createdAt: undefined })));
@@ -305,4 +307,37 @@ it('a live pull wakes when the manifest changes and ends when cancelled', async 
   expect(seen).toEqual(['a.txt', 'b.txt']);
   ac.abort();
   await done;
+});
+
+describe('a root that is owed its reconcile', () => {
+  it('is not parsed; it is listed again from the top once its reconcile has run', async () => {
+    const d = await device('copy');
+    const { sorted } = await withRoots(d);
+    write(path.join(sorted, 'a.txt'), 'hello world');
+    await d.db.run(
+      `INSERT INTO shared_files(root, rel_path, sha256, bytes, mtime, rev) VALUES('sorted','a.txt',?,11,'t',5)`,
+      [sha('hello world')],
+    );
+    await d.db.run(
+      `INSERT INTO shared_mirror(root, rel_path, sha256, bytes, mtime_ms) VALUES('sorted','a.txt',?,11,0)`,
+      [sha('hello world')],
+    );
+    const first = await pullAll(d);
+    expect(first.docs).toEqual([]);
+    expect(first.cursor).toMatchObject({ rev: 5, roots: [] });
+    d.sync.set('leader');
+    await d.svc.settled();
+    const second = await pullAll(d, first.cursor);
+    expect(ids(second.docs)).toEqual(['sorted/a.txt']);
+  });
+
+  it('serves no bytes for a document of an owed root', async () => {
+    const d = await device('copy');
+    const { sorted } = await withRoots(d);
+    write(path.join(sorted, 'a.txt'), 'hello world');
+    const source = createSharedFolderSource(() => hostOf(d));
+    const doc = { accountId: 'x', externalId: 'sorted/a.txt' } as unknown as Document;
+    await d.db.run(`INSERT INTO accounts(id, source, identifier, config, status, created_at) VALUES('x','shared-folder','shared','{}','connected','t')`).catch(() => {});
+    expect(await source.fetchBytes!(session(), doc)).toBeNull();
+  });
 });

@@ -41,7 +41,7 @@ export const descriptor: SourceDescriptor = {
 /** What the source needs from the host; absent until the host has built it. */
 export interface SharedFolderHost {
   db: AppDb;
-  sharedFolders: Pick<SharedFoldersApi, 'roots' | 'pathOf' | 'onChange'>;
+  sharedFolders: Pick<SharedFoldersApi, 'roots' | 'pathOf' | 'onChange' | 'usable'>;
 }
 
 /** `rev` is the highest manifest revision handled. `roots` are the roots that
@@ -67,7 +67,9 @@ interface Row {
 
 const rootsSet = (host: SharedFolderHost): SharedRoot[] => {
   const r = host.sharedFolders.roots();
-  return (['incoming', 'sorted'] as const).filter((k) => r[k]);
+  // A root that is owed its reconcile counts as not set: its rows are passed
+  // over, and the listing starts again from the top when it becomes usable.
+  return (['incoming', 'sorted'] as const).filter((k) => r[k] && host.sharedFolders.usable(k));
 };
 
 /** The item for a present, live row, or null when the file is not readable
@@ -171,7 +173,7 @@ export function createSharedFolderSource(
           for (const row of rows) {
             if (row.deleted) deletions.push({ externalId: sharedExternalId(row.root, row.rel_path), type: 'file' });
             else if (!row.missing_here) {
-              const base = h.sharedFolders.roots()[row.root];
+              const base = set.includes(row.root) ? h.sharedFolders.roots()[row.root] : null;
               // eslint-disable-next-line no-await-in-loop
               const item = base ? await itemFor(h, row, base) : null;
               if (item) items.push(item);
@@ -241,6 +243,8 @@ export function createSharedFolderSource(
       if (!h) return null;
       const abs = await h.sharedFolders.pathOf({ accountId: doc.accountId, externalId: doc.externalId });
       if (!abs) return null;
+      const root = doc.externalId.slice(0, doc.externalId.indexOf('/'));
+      if ((root === 'incoming' || root === 'sorted') && !h.sharedFolders.usable(root)) return null;
       try {
         const st = await fs.promises.stat(abs);
         const d = decideLocalFile(abs, st.size);

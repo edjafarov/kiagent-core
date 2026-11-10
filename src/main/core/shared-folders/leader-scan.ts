@@ -6,6 +6,7 @@ import fs from 'node:fs';
 import type { BatchStep } from '../../db/app-db';
 import { walkRoot, type WalkTrouble } from '../../sources/local-folder/scanner';
 import { toRel, type SharedRoot } from './paths';
+import { emptyIsSuspect } from './root-state';
 import type { SharedFoldersDeps } from './service';
 
 export type ScanDeps = Pick<SharedFoldersDeps, 'db' | 'hashFile' | 'log'> & {
@@ -13,7 +14,7 @@ export type ScanDeps = Pick<SharedFoldersDeps, 'db' | 'hashFile' | 'log'> & {
   takeNote?: (sha: string) => string | null;
   /** `<root>/<rel>` of files this device itself moved or removed since the last
    *  scan (sorting, a mirrored deletion). Their disappearance is explained. */
-  explained?: ReadonlySet<string>;
+  explained?: (root: SharedRoot, rel: string) => boolean;
 };
 
 export const INCOMING_SCANNED_KEY = 'shared-folders:incoming-scanned';
@@ -122,10 +123,7 @@ export async function scanRoot(d: ScanDeps, root: SharedRoot, rootAbs: string): 
   // nothing (no tombstone, no mirror change) until a file shows up again.
   // Unless every one of them left through this device's own hands (the sorter
   // empties Incoming by moving files out).
-  const unexplained = [...rows.values()].some(
-    (r) => !r.deleted && !r.missing_here && !d.explained?.has(`${root}/${r.rel_path}`),
-  );
-  if (disk.seen.size === 0 && !disk.incomplete && unexplained) {
+  if (emptyIsSuspect(rows.values(), disk, (rel) => d.explained?.(root, rel) ?? false)) {
     if (!told.has(`empty:${root}`))
       d.log('warn', `${root} folder lists no file at all; its listing is left as it is`);
     told.add(`empty:${root}`);
