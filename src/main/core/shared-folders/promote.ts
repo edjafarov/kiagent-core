@@ -14,12 +14,15 @@ import {
 } from './leader-scan';
 import { toAbs, type SharedRoot } from './paths';
 import { judgeRoot, ROOT_NAMES, type GateDeps } from './root-state';
+import { NEXT_REV } from './schema';
 import type { Roots, SharedFoldersDeps } from './service';
 
 export type PromoteDeps = Pick<SharedFoldersDeps, 'db' | 'hashFile' | 'trash' | 'log'> & Pick<GateDeps, 'gateChanged'> & {
   roots: Roots;
   /** True for a file this device itself moved or removed (see the empty-root rule). */
   explained?: (root: SharedRoot, rel: string) => boolean;
+  /** False once the role this pass started under has changed. */
+  still?: () => boolean;
 };
 
 /** `done`: the root was reconciled. `owed`: it could not be trusted (unset,
@@ -45,7 +48,6 @@ async function reconcileRoot(d: PromoteDeps, root: SharedRoot, base: string): Pr
       `SELECT rel_path, sha256, bytes, mtime_ms, capture_id FROM shared_mirror WHERE root = ?`, [root],
     )) as unknown as MirrorRow[]).map((r) => [r.rel_path, r]),
   );
-  let rev = Number((await d.db.all(`SELECT coalesce(max(rev), 0) AS m FROM shared_files`))[0]?.m ?? 0);
   const disk = await readDisk(d, base, mirror);
   // An empty mount point is not an empty folder: this Mac had files here and
   // now lists none while the manifest has live ones.
@@ -55,13 +57,13 @@ async function reconcileRoot(d: PromoteDeps, root: SharedRoot, base: string): Pr
   )
     return 'owed';
   const steps: BatchStep[] = [];
+  const alive = (): boolean => d.still?.() ?? true;
 
   /** The leader's file now. `parked` is only for a new row: an existing row keeps its flag. */
   const fromDisk = (rel: string): void => {
     const f = disk.files.get(rel)!;
-    rev += 1;
     steps.push(
-      { sql: UPSERT_ROW, params: [root, rel, f.sha, f.stats.size, f.iso, 0, rev] },
+      { sql: UPSERT_ROW, params: [root, rel, f.sha, f.stats.size, f.iso, 0] },
       { sql: UPSERT_MIRROR, params: [root, rel, f.sha, f.stats.size, f.mtimeMs, mirror.get(rel)?.capture_id ?? null] },
     );
   };
@@ -79,10 +81,9 @@ async function reconcileRoot(d: PromoteDeps, root: SharedRoot, base: string): Pr
       steps.push({ sql: `DELETE FROM shared_mirror WHERE root = ? AND rel_path = ?`, params: [root, rel] });
   };
   const markMissing = (rel: string): void => {
-    rev += 1;
     steps.push({
-      sql: `UPDATE shared_files SET missing_here = 1, rev = ? WHERE root = ? AND rel_path = ?`,
-      params: [rev, root, rel],
+      sql: `UPDATE shared_files SET missing_here = 1, rev = ${NEXT_REV} WHERE root = ? AND rel_path = ?`,
+      params: [root, rel],
     });
   };
 
@@ -107,6 +108,7 @@ async function reconcileRoot(d: PromoteDeps, root: SharedRoot, base: string): Pr
       // eslint-disable-next-line no-await-in-loop
       const now = await fs.promises.stat(f.abs).catch(() => null);
       if (!now || now.size !== f.stats.size || Math.floor(now.mtimeMs) !== f.mtimeMs) continue;
+      if (!alive()) return 'owed';
       try {
         // eslint-disable-next-line no-await-in-loop
         await d.trash(f.abs);
@@ -119,10 +121,9 @@ async function reconcileRoot(d: PromoteDeps, root: SharedRoot, base: string): Pr
       dropMirror(rel);
     } else if (f.sha === r.sha256) {
       if (r.missing_here) {
-        rev += 1;
         steps.push({
-          sql: `UPDATE shared_files SET missing_here = 0, rev = ? WHERE root = ? AND rel_path = ?`,
-          params: [rev, root, rel],
+          sql: `UPDATE shared_files SET missing_here = 0, rev = ${NEXT_REV} WHERE root = ? AND rel_path = ?`,
+          params: [root, rel],
         });
       }
       setMirror(rel);
@@ -131,6 +132,7 @@ async function reconcileRoot(d: PromoteDeps, root: SharedRoot, base: string): Pr
     } else fromDisk(rel);
   }
   for (let i = 0; i < steps.length; i += 400) {
+    if (!alive()) return 'owed'; // no longer the leader: the reconcile is still owed
     // eslint-disable-next-line no-await-in-loop
     await d.db.batch(steps.slice(i, i + 400));
   }

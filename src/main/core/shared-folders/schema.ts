@@ -29,3 +29,8 @@ export const SHARED_FOLDERS_DDL = `
     PRIMARY KEY (root, rel_path)
   );
 `;
+
+/** The next manifest revision, taken inside the statement that commits it, so
+ *  that two writers in a row (a scan and an accepted offer) can never share
+ *  one: the source's `rev > cursor` would skip the second forever. */
+export const NEXT_REV = `(SELECT COALESCE(MAX(rev), 0) + 1 FROM shared_files)`;

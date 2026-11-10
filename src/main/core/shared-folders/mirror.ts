@@ -23,7 +23,17 @@ export type MirrorDeps = Pick<
   SharedFoldersDeps,
   'db' | 'hashFile' | 'trash' | 'log'
 > &
-  Pick<GateDeps, 'gateChanged'> & { roots: Roots };
+  Pick<GateDeps, 'gateChanged'> & {
+    roots: Roots;
+    /** False once this Mac is no longer a copy; checked before every action. */
+    still?: () => boolean;
+  };
+
+/** The pass was told to stop (the role changed): it ends without side effects. */
+class Stopped extends Error {}
+const check = (d: MirrorDeps): void => {
+  if (!(d.still?.() ?? true)) throw new Stopped('shared-folders: the role changed');
+};
 
 type Row = FileRow & { bytes: number; mtime: string };
 
@@ -184,9 +194,10 @@ async function mirrorRoot(
     act: () => Promise<void>,
   ): Promise<void> => {
     try {
+      check(d);
       await act();
     } catch (err) {
-      if (err instanceof TransportFailed) throw err;
+      if (err instanceof TransportFailed || err instanceof Stopped) throw err;
       d.log('warn', `${root}/${rel}: ${String(err)}`);
     }
   };
@@ -208,8 +219,10 @@ async function mirrorRoot(
           f.abs,
         ),
       );
+      check(d);
       if (answer === 'have-it') {
         if ((await d.hashFile(f.abs)) !== f.sha) return;
+        check(d);
         await d.trash(f.abs);
         await dropMirror(rel);
         return;
@@ -217,6 +230,7 @@ async function mirrorRoot(
       await setMirror(rel, f, f.sha, m?.capture_id ?? null);
     });
   }
+  check(d);
   if (refresh.length) await d.db.batch(refresh);
   for (const rel of drops) {
     // eslint-disable-next-line no-await-in-loop
@@ -232,6 +246,7 @@ async function mirrorRoot(
       // edit before the deletion. Checked again just before it goes.
       const now = await stillMirrored(d, abs, m);
       if (now === 'changed') return;
+      check(d);
       if (now === 'same') await d.trash(abs);
       await dropMirror(rel);
     });
@@ -242,6 +257,7 @@ async function mirrorRoot(
     await forPath(rel, async () => {
       const m = mirror.get(rel)!;
       if ((await stillMirrored(d, toAbs(base, rel), m)) !== 'absent') return;
+      check(d);
       await viaTransport(
         transport.remove({ root, relPath: rel, sha256: m.sha256 }),
       );
@@ -282,6 +298,7 @@ async function fetchOne(
     offset = 0;
   }
   if (offset < r.bytes) {
+    check(d);
     const got = await viaTransport(
       transport.fetch({ root, relPath: rel, sha256: r.sha256 }, tmp, offset),
     );
@@ -298,6 +315,7 @@ async function fetchOne(
     await fs.promises.rm(tmp, { force: true });
     return;
   }
+  check(d); // the last look before the downloaded file replaces anything
   await fs.promises.mkdir(path.dirname(dest), { recursive: true });
   await fs.promises.rename(tmp, dest);
   const st = await fs.promises.stat(dest);
@@ -323,6 +341,7 @@ export async function mirrorPass(
       // eslint-disable-next-line no-await-in-loop
       await mirrorRoot(d, root, base, transport);
     } catch (err) {
+      if (err instanceof Stopped) return;
       if (err instanceof TransportFailed) {
         d.log('info', `mirroring paused: ${String(err.inner)}`);
         return;

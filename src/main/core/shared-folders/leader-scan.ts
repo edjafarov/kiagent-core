@@ -7,6 +7,7 @@ import type { BatchStep } from '../../db/app-db';
 import { walkRoot, type WalkTrouble } from '../../sources/local-folder/scanner';
 import { toRel, type SharedRoot } from './paths';
 import { judgeRoot, type GateDeps } from './root-state';
+import { NEXT_REV } from './schema';
 import type { SharedFoldersDeps } from './service';
 
 export type ScanDeps = Pick<SharedFoldersDeps, 'db' | 'hashFile' | 'log'> & Pick<GateDeps, 'gateChanged'> & {
@@ -15,6 +16,9 @@ export type ScanDeps = Pick<SharedFoldersDeps, 'db' | 'hashFile' | 'log'> & Pick
   /** `<root>/<rel>` of files this device itself moved or removed since the last
    *  scan (sorting, a mirrored deletion). Their disappearance is explained. */
   explained?: (root: SharedRoot, rel: string) => boolean;
+  /** False once the role this pass started under has changed. Checked
+   *  immediately before every manifest transaction. */
+  still?: () => boolean;
 };
 
 export const INCOMING_SCANNED_KEY = 'shared-folders:incoming-scanned';
@@ -37,7 +41,7 @@ export async function readable(rootAbs: string): Promise<boolean> {
 }
 
 export const UPSERT_ROW = `INSERT INTO shared_files(root, rel_path, sha256, bytes, mtime, missing_here, deleted, parked, rev)
-  VALUES(?, ?, ?, ?, ?, 0, 0, ?, ?)
+  VALUES(?, ?, ?, ?, ?, 0, 0, ?, ${NEXT_REV})
   ON CONFLICT(root, rel_path) DO UPDATE SET sha256 = excluded.sha256, bytes = excluded.bytes,
     mtime = excluded.mtime, missing_here = 0, deleted = 0, rev = excluded.rev`;
 export const UPSERT_MIRROR = `INSERT INTO shared_mirror(root, rel_path, sha256, bytes, mtime_ms, capture_id)
@@ -109,9 +113,6 @@ export async function scanRoot(d: ScanDeps, root: SharedRoot, rootAbs: string): 
   );
   const flagged = (await d.db.all(`SELECT 1 FROM meta WHERE key = ?`, [INCOMING_SCANNED_KEY])).length > 0;
   const park = root === 'incoming' && rows.size === 0 && !flagged ? 1 : 0;
-  let rev = Number(
-    (await d.db.all(`SELECT coalesce(max(rev), 0) AS m FROM shared_files`))[0]?.m ?? 0,
-  );
 
   const disk = await readDisk(d, rootAbs, mirror);
   // A root that is not trusted right now (see `judgeRoot`: an unmounted volume
@@ -129,9 +130,8 @@ export async function scanRoot(d: ScanDeps, root: SharedRoot, rootAbs: string): 
     const m = mirror.get(rel);
     const r = rows.get(rel);
     const write = (mirrorCapture: string | null = m?.capture_id ?? null): BatchStep[] => {
-      rev += 1;
       return [
-        { sql: UPSERT_ROW, params: [root, rel, sha, stats.size, f.iso, r ? 0 : park, rev] },
+        { sql: UPSERT_ROW, params: [root, rel, sha, stats.size, f.iso, r ? 0 : park] },
         { sql: UPSERT_MIRROR, params: [root, rel, sha, stats.size, mtimeMs, mirrorCapture] },
       ];
     };
@@ -159,9 +159,8 @@ export async function scanRoot(d: ScanDeps, root: SharedRoot, rootAbs: string): 
     for (const [rel, m] of mirror) if (!seen.has(rel)) gone.push(m);
     for (const [rel, r] of rows) {
       if (seen.has(rel) || r.deleted || r.missing_here) continue;
-      rev += 1;
       units.push([
-        { sql: `UPDATE shared_files SET deleted = 1, rev = ? WHERE root = ? AND rel_path = ?`, params: [rev, root, rel] },
+        { sql: `UPDATE shared_files SET deleted = 1, rev = ${NEXT_REV} WHERE root = ? AND rel_path = ?`, params: [root, rel] },
       ]);
     }
     for (const m of gone) {
@@ -188,6 +187,7 @@ export async function scanRoot(d: ScanDeps, root: SharedRoot, rootAbs: string): 
   }
 
   for (let i = 0; i < units.length; i += 200) {
+    if (!(d.still?.() ?? true)) return; // no longer the leader: nothing more is written
     // eslint-disable-next-line no-await-in-loop
     await d.db.batch(units.slice(i, i + 200).flat());
   }

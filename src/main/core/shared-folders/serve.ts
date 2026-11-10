@@ -7,6 +7,7 @@ import path from 'node:path';
 
 import { SyncReadOnly } from '../sync/role';
 import { UPSERT_MIRROR } from './leader-scan';
+import { NEXT_REV } from './schema';
 import { normalizeRel, STAGING_DIR, toAbs, type SharedRoot } from './paths';
 import type { FileQuery, OfferAnswer, OfferMeta, Roots, SharedFoldersApi, SharedFoldersDeps } from './service';
 
@@ -15,7 +16,11 @@ export interface ServeCtx {
   roots(): Roots;
   /** True while this device is the writable leader. */
   leader(): boolean;
-  /** Resolves when a promotion reconcile that is owed has finished. */
+  /** Runs `fn` after everything queued before it (scans, mirror passes, other
+   *  requests), as the leader. `still()` turns false when the role changes;
+   *  it is checked immediately before each manifest write and file change. */
+  run<T>(fn: (still: () => boolean) => Promise<T>): Promise<T>;
+  /** Runs the promotion reconcile if one is owed. Only inside `run`. */
   ready(): Promise<void>;
   /** Throws `SharedRootPaused` while the root may not be touched. */
   refuse(root: SharedRoot): void;
@@ -83,8 +88,9 @@ export function createServe(ctx: ServeCtx): Serve {
       const rel = path.relative(path.join(base, STAGING_DIR), tmp);
       return rel !== '' && !rel.startsWith('..') && !path.isAbsolute(rel);
     });
-  const maxRev = async (): Promise<number> =>
-    Number((await ctx.deps.db.all(`SELECT coalesce(max(rev), 0) AS m FROM shared_files`))[0]?.m ?? 0);
+  const stillLeader = (still: () => boolean, what: string): void => {
+    if (!still()) throw new SyncReadOnly(what);
+  };
 
   const place = async (tmp: string, dest: string): Promise<void> => {
     await fs.promises.mkdir(path.dirname(dest), { recursive: true });
@@ -94,11 +100,14 @@ export function createServe(ctx: ServeCtx): Serve {
   return {
     open: async (q: FileQuery) => {
       need('serve.open');
-      await ctx.ready();
-      const { root, rel, abs } = locate(ctx, q.root, q.relPath);
-      await ctx.quick(root);
-      if ((await shaAt(ctx, root, rel, abs)) !== q.sha256) return null;
-      return { path: abs, bytes: (await fs.promises.stat(abs)).size };
+      return ctx.run(async (still) => {
+        stillLeader(still, 'serve.open');
+        await ctx.ready();
+        const { root, rel, abs } = locate(ctx, q.root, q.relPath);
+        await ctx.quick(root);
+        if ((await shaAt(ctx, root, rel, abs)) !== q.sha256) return null;
+        return { path: abs, bytes: (await fs.promises.stat(abs)).size };
+      });
     },
 
     stagingFile: async (root) => {
@@ -129,7 +138,9 @@ export function createServe(ctx: ServeCtx): Serve {
         await drop();
         throw new Error('shared-folders: the offered bytes do not match their hash');
       }
+      return ctx.run(async (still) => {
       try {
+        stillLeader(still, 'serve.offer');
         await ctx.ready();
         ctx.refuse(root);
         await ctx.quick(root);
@@ -138,6 +149,7 @@ export function createServe(ctx: ServeCtx): Serve {
         throw err;
       }
       const db = ctx.deps.db;
+      const guard = (): void => stillLeader(still, 'serve.offer');
       const withSha = (await db.all(
         `SELECT root, rel_path, missing_here FROM shared_files
           WHERE sha256 = ? AND deleted = 0 ORDER BY missing_here, (root = ? AND rel_path = ?) DESC, rev DESC`,
@@ -182,14 +194,15 @@ export function createServe(ctx: ServeCtx): Serve {
           held.rel,
         ]))[0];
         if (there !== null && there !== meta.sha256 && String(mirror?.sha256) !== there) continue;
+        guard();
         // eslint-disable-next-line no-await-in-loop
         await place(tmpFile, held.abs);
         const st = await fs.promises.stat(held.abs);
-        const rev = (await maxRev()) + 1;
+        guard();
         await db.batch([
           {
-            sql: `UPDATE shared_files SET missing_here = 0, rev = ? WHERE root = ? AND rel_path = ?`,
-            params: [rev, held.root, held.rel],
+            sql: `UPDATE shared_files SET missing_here = 0, rev = ${NEXT_REV} WHERE root = ? AND rel_path = ?`,
+            params: [held.root, held.rel],
           },
           { sql: UPSERT_MIRROR, params: [held.root, held.rel, meta.sha256, st.size, Math.floor(st.mtimeMs), null] },
         ]);
@@ -206,6 +219,7 @@ export function createServe(ctx: ServeCtx): Serve {
 
       // 4. The path is free, or still holds the version the offering Mac started from.
       if (here === null || (meta.base !== null && here === meta.base)) {
+        guard();
         await place(tmpFile, abs);
         ctx.kick();
         return 'written';
@@ -229,23 +243,29 @@ export function createServe(ctx: ServeCtx): Serve {
           candidate,
         ])).length > 0;
         if (taken || listed) continue;
+        guard();
         // eslint-disable-next-line no-await-in-loop
         await place(tmpFile, dest);
         ctx.kick();
         return 'kept-both';
       }
+      });
     },
 
     remove: async (q: FileQuery) => {
       need('serve.remove');
-      await ctx.ready();
-      const { root, rel, abs } = locate(ctx, q.root, q.relPath);
-      await ctx.quick(root);
-      if ((await shaAt(ctx, root, rel, abs)) !== q.sha256) return false;
-      await ctx.deps.trash(abs);
-      ctx.explained.add(`${root}/${rel}`);
-      ctx.kick();
-      return true;
+      return ctx.run(async (still) => {
+        stillLeader(still, 'serve.remove');
+        await ctx.ready();
+        const { root, rel, abs } = locate(ctx, q.root, q.relPath);
+        await ctx.quick(root);
+        if ((await shaAt(ctx, root, rel, abs)) !== q.sha256) return false;
+        stillLeader(still, 'serve.remove');
+        await ctx.deps.trash(abs);
+        ctx.explained.add(`${root}/${rel}`);
+        ctx.kick();
+        return true;
+      });
     },
   };
 }

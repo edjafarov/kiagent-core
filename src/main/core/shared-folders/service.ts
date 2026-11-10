@@ -134,6 +134,29 @@ export async function createSharedFolders(deps: SharedFoldersDeps): Promise<Shar
     if (r.leader) return 'leader';
     return r.follower ? 'copy' : 'idle';
   };
+  let roleGen = 0;
+  let closed = false;
+  /** `() => true` while this device is still in `expected` mode and the role
+   *  has not changed since this was made (not even to something else and back). */
+  const stillAs = (expected: SharedMode): (() => boolean) => {
+    const gen = roleGen;
+    return () => !closed && gen === roleGen && mode() === expected;
+  };
+  // ONE queue: scans, the promotion reconcile, mirror passes and every
+  // request served to another Mac run one after the other.
+  let tail: Promise<void> = Promise.resolve();
+  let queued = 0;
+  const enqueue = <T>(fn: () => Promise<T>): Promise<T> => {
+    queued += 1;
+    const p = tail.then(fn);
+    tail = p.then(
+      () => {},
+      () => {},
+    ).finally(() => {
+      queued -= 1;
+    });
+    return p;
+  };
   const modeListeners: ((next: SharedMode, prev: SharedMode) => void)[] = [];
   let lastMode = mode();
   let starting: Promise<void> = Promise.resolve();
@@ -142,6 +165,7 @@ export async function createSharedFolders(deps: SharedFoldersDeps): Promise<Shar
     if (next === lastMode) return;
     const prev = lastMode;
     lastMode = next;
+    roleGen += 1; // every pass and request that started under the old role must stop writing
     if (next === 'copy') void markPending().catch((err) => deps.log('warn', `${String(err)}`));
     for (const cb of modeListeners) cb(next, prev);
     starting = rewatch().then(kick);
@@ -152,7 +176,6 @@ export async function createSharedFolders(deps: SharedFoldersDeps): Promise<Shar
   let timer: ReturnType<typeof setTimeout> | null = null;
   let running: Promise<void> | null = null;
   let again = false;
-  let closed = false;
 
   // The roots whose reconcile at promotion is owed. Persisted, so a restart
   // (or a volume that is not mounted yet) does not forget it.
@@ -190,37 +213,34 @@ export async function createSharedFolders(deps: SharedFoldersDeps): Promise<Shar
     pendingNotes.delete(sha);
     return note;
   };
-  let reconciling: Promise<void> | null = null;
-  /** Runs the promotion reconcile if one is owed; every caller waits for the same run. */
-  const reconcileIfPending = async (): Promise<void> => {
+  /** Runs the promotion reconcile if one is owed. Only from inside the queue. */
+  const reconcileIfPending = async (still: () => boolean): Promise<void> => {
     if (owed.size === 0) return;
-    reconciling ??= (async () => {
-      const gen = pendingGen;
-      const result = await reconcileAtPromotion({ ...deps, roots, explained: isExplained, gateChanged });
-      if (gen !== pendingGen) return; // became a copy again meanwhile: still owed
-      let changed = false;
-      for (const r of ROOT_NAMES) if (result[r] === 'done' && owed.delete(r)) changed = true;
-      if (!changed) return;
-      await saveRootSet(deps.db, OWED_KEY, owed);
-      fire();
-    })().finally(() => {
-      reconciling = null;
-    });
-    await reconciling;
+    const gen = pendingGen;
+    const result = await reconcileAtPromotion({ ...deps, roots, explained: isExplained, gateChanged, still });
+    if (gen !== pendingGen || !still()) return; // became a copy again meanwhile: still owed
+    let changed = false;
+    for (const r of ROOT_NAMES) if (result[r] === 'done' && owed.delete(r)) changed = true;
+    if (!changed) return;
+    await saveRootSet(deps.db, OWED_KEY, owed);
+    fire();
   };
 
   const joining = async (): Promise<boolean> =>
     (await deps.db.all(`SELECT joining FROM sync_state`))[0]?.joining === 1;
 
   const pass = async (): Promise<void> => {
-    if (mode() === 'copy') {
+    const now = mode();
+    if (now === 'copy') {
       // A device that is still joining has not finished receiving its copy.
       if (!transport || (await joining())) return;
-      await mirrorPass({ ...deps, roots, gateChanged }, transport);
+      await mirrorPass({ ...deps, roots, gateChanged, still: stillAs('copy') }, transport);
       return;
     }
-    if (mode() !== 'leader') return;
-    await reconcileIfPending();
+    if (now !== 'leader') return;
+    const still = stillAs('leader');
+    await reconcileIfPending(still);
+    if (!still()) return;
     if (deps.ensureAccount && (roots.incoming || roots.sorted) && !(await accountId())) {
       try {
         await deps.ensureAccount();
@@ -231,10 +251,11 @@ export async function createSharedFolders(deps: SharedFoldersDeps): Promise<Shar
     const before = await maxRev();
     for (const root of ['incoming', 'sorted'] as const) {
       const base = roots[root];
+      if (!still()) break;
       // eslint-disable-next-line no-await-in-loop
       if (base && !owed.has(root)) {
         // eslint-disable-next-line no-await-in-loop
-        await scanRoot({ ...deps, takeNote, explained: isExplained, gateChanged }, root, base);
+        await scanRoot({ ...deps, takeNote, explained: isExplained, gateChanged, still }, root, base);
         for (const key of [...explained]) if (key.startsWith(`${root}/`)) explained.delete(key);
       }
     }
@@ -247,7 +268,7 @@ export async function createSharedFolders(deps: SharedFoldersDeps): Promise<Shar
         again = false;
         try {
           // eslint-disable-next-line no-await-in-loop
-          await pass();
+          await enqueue(pass);
         } catch (err) {
           deps.log('warn', `a pass failed: ${String(err)}`);
         }
@@ -298,7 +319,8 @@ export async function createSharedFolders(deps: SharedFoldersDeps): Promise<Shar
     deps,
     roots: () => roots,
     leader: () => mode() === 'leader',
-    ready: reconcileIfPending,
+    run: (fn) => enqueue(() => fn(stillAs('leader'))),
+    ready: () => reconcileIfPending(stillAs('leader')),
     refuse: (root) => {
       if (owed.has(root)) throw new SharedRootPaused(root, 'owed');
       if (paused.has(root)) throw new SharedRootPaused(root, 'paused');
@@ -315,9 +337,9 @@ export async function createSharedFolders(deps: SharedFoldersDeps): Promise<Shar
     mode,
     settled: async () => {
       await starting;
-      while (timer || running) {
+      while (timer || running || queued > 0) {
         // eslint-disable-next-line no-await-in-loop
-        await (running ?? new Promise((r) => setTimeout(r, debounceMs + 1)));
+        await (running ?? (queued > 0 ? tail : new Promise((r) => setTimeout(r, debounceMs + 1))));
       }
     },
     close: async () => {
@@ -326,6 +348,7 @@ export async function createSharedFolders(deps: SharedFoldersDeps): Promise<Shar
       if (timer) clearTimeout(timer);
       timer = null;
       await running;
+      await tail;
       await rewatch();
     },
     onMode: (cb) => void modeListeners.push(cb),
@@ -396,9 +419,12 @@ export async function createSharedFolders(deps: SharedFoldersDeps): Promise<Shar
     usable: (root) => !owed.has(root) && !paused.has(root),
     listForSorting: async () => {
       if (mode() !== 'leader' || !roots.incoming) return [];
-      await reconcileIfPending();
-      if (mode() !== 'leader' || !api.usable('incoming')) return [];
-      return listSortable(deps, roots.incoming);
+      return enqueue(async () => {
+        const still = stillAs('leader');
+        await reconcileIfPending(still);
+        if (!still() || !api.usable('incoming') || !roots.incoming) return [];
+        return listSortable(deps, roots.incoming);
+      });
     },
     serve,
   };
