@@ -60,8 +60,17 @@ export interface SharedTransport {
 export type SharedMode = 'leader' | 'copy' | 'idle';
 
 export interface SharedFoldersApi {
+  /** Remembers the roots. Nothing else happens until `enabled()`. */
   setRoots(roots: Roots): Promise<void>;
   roots(): Roots;
+  /** True once this device belongs to an account with at least one other
+   *  computer and roots are set: only then are the folders shared (marker,
+   *  scans, mirror, `shared-folder` account, `local-folder` exclusion and its
+   *  migration). Kept for good once true, also if the other computer leaves.
+   *  Until then every other member answers "nothing is shared" and
+   *  `rootStatus` is `'unset'`. Synchronous. `onChange` fires when it turns
+   *  true. */
+  enabled(): boolean;
   setTransport(t: SharedTransport | null): void;
   kick(): void;
   resolve(absPath: string): Promise<SharedRef | null>;
@@ -144,6 +153,9 @@ export interface SharedFolders extends SharedFoldersApi {
 }
 
 export const ROOTS_META_KEY = 'shared-folders:roots';
+/** Set locally, once, the first time the device is in an account with a peer
+ *  while roots are set. Never cleared. */
+export const ENABLED_META_KEY = 'shared-folders:enabled';
 /** Set while this device is, or was last, a copy: the next time it leads it
  *  reconciles first. Local, so it survives a restart between the two. */
 export const RECONCILE_PENDING_KEY = OWED_KEY;
@@ -166,8 +178,18 @@ async function loadRoots(db: AppDb): Promise<Roots> {
 }
 
 export async function createSharedFolders(deps: SharedFoldersDeps): Promise<SharedFolders> {
+  let closed = false;
   let roots = await loadRoots(deps.db);
   let transport: SharedTransport | null = null;
+  let enabled = (await deps.db.all(`SELECT 1 FROM meta WHERE key = ?`, [ENABLED_META_KEY])).length > 0;
+  /** Another computer is in this device's account: a follower always has one
+   *  (its leader), a leader has one when the lease says `multiDevice`. */
+  const hasPeer = (): boolean => {
+    const r = deps.sync.role();
+    return r.multiDevice || r.follower;
+  };
+  /** Enabling is due: roots are set and a peer is there. */
+  const due = (): boolean => !enabled && !closed && !!(roots.incoming || roots.sorted) && hasPeer();
 
   const mode = (): SharedMode => {
     const r = deps.sync.role();
@@ -176,7 +198,6 @@ export async function createSharedFolders(deps: SharedFoldersDeps): Promise<Shar
   };
   let roleGen = 0;
   const key = nameKey(deps.platform);
-  let closed = false;
   /** `() => true` while this device is still in `expected` mode and the role
    *  has not changed since this was made (not even to something else and back). */
   const stillAs = (expected: SharedMode): (() => boolean) => {
@@ -202,6 +223,10 @@ export async function createSharedFolders(deps: SharedFoldersDeps): Promise<Shar
   let lastMode = mode();
   let starting: Promise<void> = Promise.resolve();
   deps.sync.onRole(() => {
+    if (due()) {
+      enabled = true;
+      starting = starting.then(enableNow).catch((err) => deps.log('warn', `could not start the shared folders: ${String(err)}`));
+    }
     const next = mode();
     if (next === lastMode) return;
     const prev = lastMode;
@@ -209,9 +234,34 @@ export async function createSharedFolders(deps: SharedFoldersDeps): Promise<Shar
     roleGen += 1; // every pass and request that started under the old role must stop writing
     if (next === 'copy') void markPending().catch((err) => deps.log('warn', `${String(err)}`));
     for (const cb of modeListeners) cb(next, prev);
-    starting = rewatch().then(kick);
+    starting = starting.then(rewatch).then(kick);
   });
 
+  /** What happens when roots are set on a device that shares folders. */
+  const startUp = async (): Promise<void> => {
+    await enqueue(lookAtRoots); // the marker, written once, before anything scans
+    // Before the first scan: the exclusion in `local-folder` is already in force.
+    if (deps.localFolders) {
+      for (const base of [roots.incoming, roots.sorted]) {
+        // eslint-disable-next-line no-await-in-loop
+        if (base) await migrateLocalFolders({ db: deps.db, localFolders: deps.localFolders, log: deps.log }, base);
+      }
+    }
+    await rewatch();
+    kick();
+  };
+  /** The device has just become one that shares folders (`enabled` is already
+   *  true in memory): remembered for good, then started as if the roots had
+   *  just been set. */
+  const enableNow = async (): Promise<void> => {
+    await deps.db.run(
+      `INSERT INTO meta(key, value) VALUES(?, '1') ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
+      [ENABLED_META_KEY],
+    );
+    deps.log('info', 'shared folders are on: this device has another computer in its account');
+    await startUp();
+    fire();
+  };
   const watchers: RootWatcher[] = [];
   const debounceMs = deps.debounceMs ?? 750;
   let timer: ReturnType<typeof setTimeout> | null = null;
@@ -247,7 +297,7 @@ export async function createSharedFolders(deps: SharedFoldersDeps): Promise<Shar
     }
   };
   const rootStatus = (root: SharedRoot): RootStatus => {
-    if (!roots[root]) return 'unset';
+    if (!enabled || !roots[root]) return 'unset';
     const g = gates.get(root);
     if (g !== 'ok') return g === 'marker' ? 'paused-marker' : 'paused-missing';
     return owed.has(root) ? 'owed' : 'ok';
@@ -289,6 +339,7 @@ export async function createSharedFolders(deps: SharedFoldersDeps): Promise<Shar
     (await deps.db.all(`SELECT joining FROM sync_state`))[0]?.joining === 1;
 
   const pass = async (): Promise<void> => {
+    if (!enabled) return;
     const now = mode();
     await lookAtRoots();
     if (mode() !== now) return; // the role changed meanwhile: the pass its change asked for follows
@@ -362,7 +413,7 @@ export async function createSharedFolders(deps: SharedFoldersDeps): Promise<Shar
   const rewatch = async (): Promise<void> => {
     const old = watchers.splice(0);
     await Promise.all(old.map((w) => w.close().catch(() => {})));
-    if (closed || mode() === 'idle') return;
+    if (closed || !enabled || mode() === 'idle') return;
     const watch = deps.watch ?? watchRoot;
     for (const root of ['incoming', 'sorted'] as const) {
       const base = roots[root];
@@ -377,7 +428,12 @@ export async function createSharedFolders(deps: SharedFoldersDeps): Promise<Shar
     return rows[0] ? String(rows[0].id) : null;
   };
 
-  const captures = createCaptures({ deps, roots: () => roots, accountId, kick });
+  const captures = createCaptures({
+    deps,
+    roots: () => (enabled ? roots : { incoming: null, sorted: null }),
+    accountId: async () => (enabled ? accountId() : null),
+    kick,
+  });
   const serve = createServe({
     deps,
     roots: () => roots,
@@ -385,6 +441,7 @@ export async function createSharedFolders(deps: SharedFoldersDeps): Promise<Shar
     run: (fn) => enqueue(() => fn(stillAs('leader'))),
     ready: () => reconcileIfPending(stillAs('leader')),
     refuse: (root) => {
+      if (!enabled) throw new SharedRootPaused(root, 'paused');
       if (owed.has(root)) throw new SharedRootPaused(root, 'owed');
       if (roots[root] && gates.get(root) !== 'ok') throw new SharedRootPaused(root, 'paused');
     },
@@ -422,23 +479,20 @@ export async function createSharedFolders(deps: SharedFoldersDeps): Promise<Shar
         [ROOTS_META_KEY, JSON.stringify(clean)],
       );
       roots = clean;
-      await enqueue(lookAtRoots); // the marker, written once, before anything scans
-      // Before the first scan: the exclusion in `local-folder` is already in force.
-      if (deps.localFolders) {
-        for (const base of [clean.incoming, clean.sorted]) {
-          // eslint-disable-next-line no-await-in-loop
-          if (base) await migrateLocalFolders({ db: deps.db, localFolders: deps.localFolders, log: deps.log }, base);
-        }
-      }
-      await rewatch();
-      kick();
+      if (due()) {
+        enabled = true;
+        await enableNow();
+      } else if (enabled) await startUp();
+      // else: remembered, and used once a peer is there
     },
+    enabled: () => enabled,
     setTransport: (t) => {
       transport = t;
       if (t) kick();
     },
     kick,
     resolve: async (absPath) => {
+      if (!enabled) return null;
       const id = await accountId();
       if (!id) return null;
       for (const root of ['incoming', 'sorted'] as const) {
@@ -452,6 +506,7 @@ export async function createSharedFolders(deps: SharedFoldersDeps): Promise<Shar
       return null;
     },
     pathOf: async (doc) => {
+      if (!enabled) return null;
       if (doc.accountId !== (await accountId())) return null;
       const cut = doc.externalId.indexOf('/');
       const root = doc.externalId.slice(0, cut);
@@ -504,6 +559,7 @@ export async function createSharedFolders(deps: SharedFoldersDeps): Promise<Shar
     reattach: (root) =>
       enqueue(async () => {
         const base = roots[root];
+        if (!enabled) throw new Error('shared-folders: folders are shared only once another computer is in the account');
         if (!base) throw new Error(`shared-folders: the ${root} folder is not set on this Mac`);
         await reinitialiseRoot(gated, root, base);
         // Every file is compared afresh: nothing on disk can be read as a deletion.
@@ -518,7 +574,7 @@ export async function createSharedFolders(deps: SharedFoldersDeps): Promise<Shar
       }),
     reportUnparsed: (refs) => reportUnparsed({ ...deps, roots }, unparsed, refs),
     listForSorting: async () => {
-      if (mode() !== 'leader' || !roots.incoming) return [];
+      if (!enabled || mode() !== 'leader' || !roots.incoming) return [];
       return enqueue(async () => {
         const still = stillAs('leader');
         await reconcileIfPending(still);
@@ -530,8 +586,13 @@ export async function createSharedFolders(deps: SharedFoldersDeps): Promise<Shar
     serve,
   };
   if (mode() === 'copy') await markPending();
-  await lookAtRoots();
-  await rewatch();
-  kick();
+  if (due()) {
+    enabled = true;
+    await enableNow();
+  } else if (enabled) {
+    await lookAtRoots();
+    await rewatch();
+    kick();
+  }
   return api;
 }

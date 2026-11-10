@@ -226,6 +226,7 @@ const unavailableSharedFolders = (): SharedFoldersApi => {
   return {
     setRoots: no,
     roots: () => ({ incoming: null, sorted: null }),
+    enabled: () => false,
     setTransport: no,
     kick: () => {},
     resolve: async () => null,

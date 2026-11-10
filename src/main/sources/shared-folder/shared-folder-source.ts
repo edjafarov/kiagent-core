@@ -42,7 +42,7 @@ export const descriptor: SourceDescriptor = {
 /** What the source needs from the host; absent until the host has built it. */
 export interface SharedFolderHost {
   db: AppDb;
-  sharedFolders: Pick<SharedFoldersApi, 'roots' | 'pathOf' | 'onChange' | 'usable' | 'reportUnparsed'>;
+  sharedFolders: Pick<SharedFoldersApi, 'roots' | 'pathOf' | 'onChange' | 'usable' | 'reportUnparsed' | 'enabled'>;
 }
 
 /** `rev` is the highest manifest revision handled. `roots` are the roots that
@@ -153,7 +153,7 @@ export function createSharedFolderSource(
     cursor: SharedFolderCursor | null,
   ): AsyncIterable<Batch<SharedFolderCursor, SharedFileItem>> {
     const h = host();
-    if (!h) return;
+    if (!h || !h.sharedFolders.enabled()) return; // nothing is shared on this device
     const live = session.account.config?.watch !== false;
     let wake: (() => void) | null = null;
     let dirty = false; // a change that arrived while rows were being handled

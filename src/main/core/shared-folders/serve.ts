@@ -131,9 +131,9 @@ export function createServe(ctx: ServeCtx): Serve {
     stagingFile: async (root) => {
       need('serve.stagingFile');
       if (root !== 'incoming' && root !== 'sorted') throw new Error('shared-folders: unknown root');
+      ctx.refuse(root);
       const base = ctx.roots()[root];
       if (!base) throw new Error(`shared-folders: the ${root} folder is not set on this Mac`);
-      ctx.refuse(root);
       await ctx.quick(root);
       const dir = path.join(base, STAGING_DIR);
       await fs.promises.mkdir(dir, { recursive: true });

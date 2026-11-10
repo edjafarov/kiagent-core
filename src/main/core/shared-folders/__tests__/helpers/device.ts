@@ -11,14 +11,16 @@ import { createSharedFolders, type SharedFoldersDeps, type SharedFolders } from 
 export type FakeMode = 'leader' | 'copy' | 'fenced';
 
 /** The slice of the sync service the shared folders read, driven by hand. */
-export function fakeSync(mode: FakeMode) {
+export function fakeSync(mode: FakeMode, peerInitially = true) {
   let current = mode;
+  // Whether another computer is in this device's account (a lone leader has none).
+  let peer = peerInitially;
   const roleListeners: ((r: SyncRoleWire) => void)[] = [];
   const appliedListeners: ((tables: string[], meta: { prefKeys: string[] }) => void)[] = [];
   const role = (): SyncRoleWire => ({
     leader: current === 'leader',
     follower: current === 'copy',
-    multiDevice: current !== 'leader',
+    multiDevice: peer || current === 'copy',
     epoch: 1,
     priorRenewedAt: null,
     reason: current === 'leader' ? 'solo' : 'follower',
@@ -28,6 +30,11 @@ export function fakeSync(mode: FakeMode) {
     role,
     onRole: (cb: (r: SyncRoleWire) => void) => void roleListeners.push(cb),
     onApplied: (cb: (tables: string[], meta: { prefKeys: string[] }) => void) => void appliedListeners.push(cb),
+    /** Another computer joins (true) or leaves (false) this device's account. */
+    setPeer(next: boolean, notify = true) {
+      peer = next;
+      if (notify) for (const cb of roleListeners) cb(role());
+    },
     set(next: FakeMode) {
       current = next;
       for (const cb of roleListeners) cb(role());
@@ -55,14 +62,17 @@ export interface Device {
 
 const devices: Device[] = [];
 
+/** A device is, by default, joined to an account with a peer: shared folders are
+ *  on. `{ alone: true }` is a Mac with no other computer in its account. */
 export async function device(
   mode: FakeMode = 'leader',
   over: Partial<SharedFoldersDeps> = {},
+  opts: { alone?: boolean } = {},
 ): Promise<Device> {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'shared-'));
   const db = await openDb(path.join(dir, 'a.db'));
   migrate(db._conn!);
-  const sync = fakeSync(mode);
+  const sync = fakeSync(mode, !opts.alone);
   const trashed: string[] = [];
   const hashed: string[] = [];
   const logs: string[] = [];

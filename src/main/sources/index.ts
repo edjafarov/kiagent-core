@@ -7,6 +7,14 @@ import { createImapSource } from './imap';
 import { createLocalFolderSource } from './local-folder';
 import { createSharedFolderSource, type SharedFolderHost } from './shared-folder';
 
+/** The folders `local-folder` leaves to the `shared-folder` source: none until
+ *  this device shares folders. */
+export function sharedSubtrees(host: SharedFolderHost | null | undefined): string[] {
+  if (!host?.sharedFolders.enabled()) return [];
+  const roots = host.sharedFolders.roots();
+  return [roots.incoming, roots.sorted].filter((r): r is string => !!r);
+}
+
 /**
  * First-party sources. Each family registers its source; OAuth-backed
  * families also register their profile with the connect broker and their
@@ -28,10 +36,7 @@ export function registerBundledSources(
       converter,
       scratchDir,
       // The shared folders belong to the `shared-folder` source.
-      excluded: () => {
-        const roots = sharedHost?.()?.sharedFolders.roots();
-        return [roots?.incoming, roots?.sorted].filter((r): r is string => !!r);
-      },
+      excluded: () => sharedSubtrees(sharedHost?.()),
     }),
   );
   register(createSharedFolderSource(sharedHost ?? (() => null)));
