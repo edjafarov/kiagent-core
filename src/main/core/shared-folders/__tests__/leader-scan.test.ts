@@ -253,3 +253,16 @@ it('an empty first Incoming is still a fresh root: no rows, nothing to protect',
   expect(await rows(d)).toEqual([]);
   expect(d.logs.filter((l) => l.includes('lists no file at all'))).toHaveLength(0);
 });
+
+it('a folder emptied by this device\'s own hands (sorting, a mirrored removal) is believed', async () => {
+  const { d, sorted } = await setup();
+  write(path.join(sorted, 'a.txt'), 'one');
+  write(path.join(sorted, 'b.txt'), 'two');
+  await scanRoot(d.deps, 'sorted', sorted);
+  fs.rmSync(path.join(sorted, 'a.txt'));
+  fs.rmSync(path.join(sorted, 'b.txt'));
+  await scanRoot({ ...d.deps, explained: new Set(['sorted/a.txt']) }, 'sorted', sorted); // b.txt is unexplained
+  expect((await rows(d)).map((r) => r.deleted)).toEqual([0, 0]);
+  await scanRoot({ ...d.deps, explained: new Set(['sorted/a.txt', 'sorted/b.txt']) }, 'sorted', sorted);
+  expect((await rows(d)).map((r) => r.deleted)).toEqual([1, 1]);
+});

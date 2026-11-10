@@ -8,7 +8,13 @@ import { walkRoot, type WalkTrouble } from '../../sources/local-folder/scanner';
 import { toRel, type SharedRoot } from './paths';
 import type { SharedFoldersDeps } from './service';
 
-export type ScanDeps = Pick<SharedFoldersDeps, 'db' | 'hashFile' | 'log'>;
+export type ScanDeps = Pick<SharedFoldersDeps, 'db' | 'hashFile' | 'log'> & {
+  /** A capture note waiting for a file with this hash to be listed (it was moved between roots). */
+  takeNote?: (sha: string) => string | null;
+  /** `<root>/<rel>` of files this device itself moved or removed since the last
+   *  scan (sorting, a mirrored deletion). Their disappearance is explained. */
+  explained?: ReadonlySet<string>;
+};
 
 export const INCOMING_SCANNED_KEY = 'shared-folders:incoming-scanned';
 
@@ -114,8 +120,12 @@ export async function scanRoot(d: ScanDeps, root: SharedRoot, rootAbs: string): 
   // An empty root is not believed: an unmounted volume leaves an empty mount
   // point. A root that has live rows and now lists no file at all changes
   // nothing (no tombstone, no mirror change) until a file shows up again.
-  const liveRows = [...rows.values()].some((r) => !r.deleted && !r.missing_here);
-  if (disk.seen.size === 0 && !disk.incomplete && liveRows) {
+  // Unless every one of them left through this device's own hands (the sorter
+  // empties Incoming by moving files out).
+  const unexplained = [...rows.values()].some(
+    (r) => !r.deleted && !r.missing_here && !d.explained?.has(`${root}/${r.rel_path}`),
+  );
+  if (disk.seen.size === 0 && !disk.incomplete && unexplained) {
     if (!told.has(`empty:${root}`))
       d.log('warn', `${root} folder lists no file at all; its listing is left as it is`);
     told.add(`empty:${root}`);
@@ -126,6 +136,7 @@ export async function scanRoot(d: ScanDeps, root: SharedRoot, rootAbs: string): 
   const seen = disk.seen;
   const units: BatchStep[][] = [];
   const fresh: { rel: string; sha: string; bytes: number; mtimeMs: number; step: number }[] = [];
+  const noted = new Map<string, string>();
 
   for (const [rel, f] of disk.files) {
     const { sha, stats, mtimeMs } = f;
@@ -173,19 +184,21 @@ export async function scanRoot(d: ScanDeps, root: SharedRoot, rootAbs: string): 
       units.push([{ sql: `DELETE FROM shared_mirror WHERE root = ? AND rel_path = ?`, params: [root, m.rel_path] }]);
     }
     // A rename is a deleted row and a new one; the capture note follows the bytes.
-    const noted = new Map<string, string>();
     for (const m of gone) if (m.capture_id && !noted.has(m.sha256)) noted.set(m.sha256, m.capture_id);
-    for (const f of fresh) {
-      const capture = noted.get(f.sha);
-      if (!capture || mirror.has(f.rel)) continue;
-      noted.delete(f.sha);
-      units[f.step][1] = { sql: UPSERT_MIRROR, params: [root, f.rel, f.sha, f.bytes, f.mtimeMs, capture] };
-    }
     if (root === 'incoming' && !flagged) {
       units.push([
         { sql: `INSERT OR IGNORE INTO meta(key, value) VALUES(?, '1')`, params: [INCOMING_SCANNED_KEY] },
       ]);
     }
+  }
+
+  // A file that came from another root has its note in the service's hands.
+  for (const f of fresh) {
+    if (mirror.has(f.rel)) continue;
+    const capture = noted.get(f.sha) ?? d.takeNote?.(f.sha);
+    if (!capture) continue;
+    noted.delete(f.sha);
+    units[f.step][1] = { sql: UPSERT_MIRROR, params: [root, f.rel, f.sha, f.bytes, f.mtimeMs, capture] };
   }
 
   for (let i = 0; i < units.length; i += 200) {
