@@ -55,12 +55,26 @@ export interface DiskFile {
   iso: string;
 }
 
+/** Hashes of files that have no mirror entry (yet), by path, size and mtime:
+ *  a copy that cannot reach the leader would otherwise hash them all again on
+ *  every retry. In memory; a changed size or mtime is a miss. */
+const hashCaches = new WeakMap<object, Map<string, { size: number; mtimeMs: number; sha: string }>>();
+const MAX_HASHES = 5000;
+const hashes = (db: object): Map<string, { size: number; mtimeMs: number; sha: string }> =>
+  hashCaches.get(db) ?? hashCaches.set(db, new Map()).get(db)!;
+function remember(db: object, abs: string, v: { size: number; mtimeMs: number; sha: string }): void {
+  const m = hashes(db);
+  m.delete(abs);
+  m.set(abs, v);
+  if (m.size > MAX_HASHES) m.delete(m.keys().next().value!);
+}
+
 /** Every admitted file under the root with its hash. A file whose size and
  *  mtime equal its mirror entry is not hashed again. `seen` holds every path
  *  the walk reached, also those it could not hash; `incomplete` says the
  *  listing is not proof that anything is gone. */
 export async function readDisk(
-  d: Pick<ScanDeps, 'hashFile'>,
+  d: Pick<ScanDeps, 'hashFile' | 'db'>,
   rootAbs: string,
   /** By `key(rel)`. */
   mirror: ReadonlyMap<string, { sha256: string; bytes: number; mtime_ms: number }>,
@@ -76,10 +90,13 @@ export async function readDisk(
     const mtimeMs = Math.floor(stats.mtimeMs);
     const m = mirror.get(key(rel));
     let sha: string;
+    const known = hashes(d.db).get(absPath);
     if (m && m.bytes === stats.size && m.mtime_ms === mtimeMs) sha = m.sha256;
+    else if (known && known.size === stats.size && known.mtimeMs === mtimeMs) sha = known.sha;
     else {
       try {
         sha = await d.hashFile(absPath);
+        remember(d.db, absPath, { size: stats.size, mtimeMs, sha });
       } catch {
         trouble.incomplete = true; // vanished or locked: not proof of anything
         continue;

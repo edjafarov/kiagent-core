@@ -181,6 +181,12 @@ async function mirrorRoot(
     }
   };
 
+  // What this Mac found out is written before the network is asked for
+  // anything: a failing transport must not lose it, or every retry (the timer
+  // fires every minute) would hash all those files again.
+  check(d);
+  if (refresh.length) await d.db.batch(refresh);
+
   for (const g of offers) {
     const f = g.f!;
     // eslint-disable-next-line no-await-in-loop
@@ -220,7 +226,6 @@ async function mirrorRoot(
     });
   }
   check(d);
-  if (refresh.length) await d.db.batch(refresh);
   for (const g of drops) {
     // eslint-disable-next-line no-await-in-loop
     await dropMirror(g.m!.rel_path);
