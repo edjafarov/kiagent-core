@@ -39,6 +39,7 @@ export function fakeSync(mode: FakeMode) {
 }
 
 export interface Device {
+  deps: SharedFoldersDeps;
   dir: string;
   db: AppDb;
   sync: ReturnType<typeof fakeSync>;
@@ -67,7 +68,10 @@ export async function device(
   const logs: string[] = [];
   const clock = { t: 1_000_000 };
   const { createHash } = await import('node:crypto');
+  // Default: no real watcher in tests; they drive the service with kick().
   const deps = (): SharedFoldersDeps => ({
+    watch: () => ({ close: async () => {} }),
+    debounceMs: 0,
     db,
     sync,
     hashFile: async (p) => {
@@ -83,6 +87,7 @@ export async function device(
     ...over,
   });
   const d: Device = {
+    deps: deps(),
     dir,
     db,
     sync,
@@ -91,8 +96,12 @@ export async function device(
     hashed,
     logs,
     clock,
-    restart: async () => (d.svc = await createSharedFolders(deps())),
+    restart: async () => {
+      await d.svc.close();
+      return (d.svc = await createSharedFolders(deps()));
+    },
     close: async () => {
+      await d.svc.close();
       await db.close();
       fs.rmSync(dir, { recursive: true, force: true });
     },

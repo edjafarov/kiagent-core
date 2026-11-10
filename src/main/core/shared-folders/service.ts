@@ -4,7 +4,9 @@
 import type { AppDb } from '../../db/app-db';
 import { SyncReadOnly } from '../sync/role';
 import type { SyncService } from '../sync/service';
+import { scanRoot } from './leader-scan';
 import { normalizeRel, toAbs, toRel, type SharedRoot } from './paths';
+import { watchRoot, type RootWatcher } from './watch';
 
 export type { SharedRoot } from './paths';
 
@@ -65,10 +67,18 @@ export interface SharedFoldersDeps {
   trash(abs: string): Promise<void>;
   now(): number;
   log(level: 'info' | 'warn' | 'error', msg: string): void;
+  /** One watcher for one root; every event is `onEvent()`. Defaults to chokidar. */
+  watch?(rootAbs: string, onEvent: () => void): RootWatcher;
+  /** How long a burst of file events is gathered before a pass. Default 750. */
+  debounceMs?: number;
 }
 
 export interface SharedFolders extends SharedFoldersApi {
   mode(): SharedMode;
+  /** Resolves when no pass is running or waiting. For tests and shutdown. */
+  settled(): Promise<void>;
+  /** Stops the watchers and timers. */
+  close(): Promise<void>;
   /** Tells `cb` when the mode changes. Core-internal (the passes use it). */
   onMode(cb: (next: SharedMode, prev: SharedMode) => void): void;
 }
@@ -111,7 +121,61 @@ export async function createSharedFolders(deps: SharedFoldersDeps): Promise<Shar
     const prev = lastMode;
     lastMode = next;
     for (const cb of modeListeners) cb(next, prev);
+    void rewatch().then(kick);
   });
+
+  const watchers: RootWatcher[] = [];
+  const debounceMs = deps.debounceMs ?? 750;
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  let running: Promise<void> | null = null;
+  let again = false;
+  let closed = false;
+
+  const pass = async (): Promise<void> => {
+    if (mode() !== 'leader') return;
+    for (const root of ['incoming', 'sorted'] as const) {
+      const base = roots[root];
+      // eslint-disable-next-line no-await-in-loop
+      if (base) await scanRoot(deps, root, base);
+    }
+  };
+  const run = (): void => {
+    if (running || closed) return;
+    running = (async () => {
+      do {
+        again = false;
+        try {
+          // eslint-disable-next-line no-await-in-loop
+          await pass();
+        } catch (err) {
+          deps.log('warn', `a pass failed: ${String(err)}`);
+        }
+      } while (again && !closed);
+    })().finally(() => {
+      running = null;
+    });
+  };
+  const kick = (): void => {
+    if (running) again = true;
+    else run();
+  };
+  const onFileEvent = (): void => {
+    if (timer || closed) return;
+    timer = setTimeout(() => {
+      timer = null;
+      kick();
+    }, debounceMs);
+  };
+  const rewatch = async (): Promise<void> => {
+    const old = watchers.splice(0);
+    await Promise.all(old.map((w) => w.close().catch(() => {})));
+    if (closed || mode() === 'idle') return;
+    const watch = deps.watch ?? watchRoot;
+    for (const root of ['incoming', 'sorted'] as const) {
+      const base = roots[root];
+      if (base) watchers.push(watch(base, onFileEvent));
+    }
+  };
 
   const accountId = async (): Promise<string | null> => {
     const rows = await deps.db.all(`SELECT id FROM accounts WHERE source = ? ORDER BY created_at LIMIT 1`, [
@@ -122,6 +186,19 @@ export async function createSharedFolders(deps: SharedFoldersDeps): Promise<Shar
 
   const api: SharedFolders = {
     mode,
+    settled: async () => {
+      while (timer || running) {
+        // eslint-disable-next-line no-await-in-loop
+        await (running ?? new Promise((r) => setTimeout(r, debounceMs + 1)));
+      }
+    },
+    close: async () => {
+      closed = true;
+      if (timer) clearTimeout(timer);
+      timer = null;
+      await running;
+      await rewatch();
+    },
     onMode: (cb) => void modeListeners.push(cb),
     roots: () => ({ ...roots }),
     setRoots: async (next) => {
@@ -132,12 +209,14 @@ export async function createSharedFolders(deps: SharedFoldersDeps): Promise<Shar
         [ROOTS_META_KEY, JSON.stringify(clean)],
       );
       roots = clean;
+      await rewatch();
+      kick();
     },
     setTransport: (t) => {
       transport = t;
       void transport;
     },
-    kick: () => {},
+    kick,
     resolve: async (absPath) => {
       const id = await accountId();
       if (!id) return null;
@@ -180,5 +259,7 @@ export async function createSharedFolders(deps: SharedFoldersDeps): Promise<Shar
       remove: notYet('serve.remove'),
     },
   };
+  await rewatch();
+  kick();
   return api;
 }
