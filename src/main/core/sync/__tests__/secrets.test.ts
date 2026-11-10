@@ -260,3 +260,43 @@ describe('account secrets', () => {
     await expect(a.store.secrets.load('gmail-1')).rejects.toThrow('not a secret key');
   });
 });
+
+describe('onSecret', () => {
+  it('tells the listener once per imported account secret, not for logins', async () => {
+    const b = await device('b');
+    asFollower(b);
+    const seen: string[] = [];
+    b.svc.onSecret((k) => void seen.push(k));
+    await b.svc.importSecrets([
+      { accountId: 'secret:x:y', epoch: 1, n: 1, value: 'v' },
+      { accountId: 'gmail-1', epoch: 1, n: 2, value: '{}' },
+    ]);
+    expect(seen).toEqual(['secret:x:y']);
+  });
+
+  it('an import whose store write fails tells nobody', async () => {
+    const b = await device('b');
+    asFollower(b);
+    jest.spyOn(b.store, 'importSyncSecrets').mockRejectedValueOnce(new Error('disk full'));
+    const seen: string[] = [];
+    b.svc.onSecret((k) => void seen.push(k));
+    await expect(
+      b.svc.importSecrets([{ accountId: 'secret:x:y', epoch: 1, n: 1, value: 'v' }]),
+    ).rejects.toThrow(/disk full/);
+    expect(seen).toEqual([]);
+  });
+
+  it('an import whose encryption fails tells nobody', async () => {
+    const b = await device('b', { failStrict: (n) => n === 2 });
+    asFollower(b);
+    const seen: string[] = [];
+    b.svc.onSecret((k) => void seen.push(k));
+    await expect(
+      b.svc.importSecrets([
+        { accountId: 'secret:x:y', epoch: 1, n: 1, value: 'v' },
+        { accountId: 'secret:x:z', epoch: 1, n: 2, value: 'v' },
+      ]),
+    ).rejects.toThrow(/keystore/);
+    expect(seen).toEqual([]);
+  });
+});

@@ -262,6 +262,9 @@ export interface SyncService {
   role(): SyncRoleWire;
   /** Tells `cb` when the role changes. Core-internal. */
   onRole(cb: (r: SyncRoleWire) => void): void;
+  /** Tells `cb` the key of each account secret (`secret:…`) imported from the
+   *  leader, after it was stored. Core-internal. */
+  onSecret(cb: (key: string) => void): void;
   /** The last lease snapshot, or null before the first. */
   lease(): LeaseSnapshot | null;
   /** Deletes the old database a join set aside. Restoring it is then gone. */
@@ -366,6 +369,7 @@ export function createSyncService(deps: SyncServiceDeps): SyncService {
     priorRenewedAt: leaseNow?.priorRenewedAt ?? null,
   });
   const roleListeners: ((r: SyncRoleWire) => void)[] = [];
+  const secretListeners: ((key: string) => void)[] = [];
   let lastRole: SyncRoleWire | null = null;
   const publishRole = (): void => {
     const r = roleNow();
@@ -1018,6 +1022,10 @@ export function createSyncService(deps: SyncServiceDeps): SyncService {
         'info',
         `sync: ${r.applied} of ${list.length} logins from the leader were newer`,
       );
+      for (const e of entries) {
+        if (!e.accountId.startsWith('secret:')) continue;
+        for (const cb of secretListeners) cb(e.accountId);
+      }
       return r;
     },
     isBusy: () => deps.busy?.() ?? null,
@@ -1133,6 +1141,7 @@ export function createSyncService(deps: SyncServiceDeps): SyncService {
     },
     role: roleNow,
     onRole: (cb) => void roleListeners.push(cb),
+    onSecret: (cb) => void secretListeners.push(cb),
     lease: () => leaseNow,
     deviceId: () => deviceId ?? deps.deviceId?.() ?? null,
     deleteArchive: async () => {
