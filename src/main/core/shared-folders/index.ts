@@ -4,6 +4,7 @@ export type {
   FileQuery,
   OfferAnswer,
   OfferMeta,
+  RootStatus,
   Roots,
   SharedFolders,
   SharedFoldersApi,

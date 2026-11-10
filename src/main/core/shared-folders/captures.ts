@@ -2,7 +2,7 @@
  *  sorting has put the file. The note ("this file is that capture") lives on
  *  the local mirror entry and follows the file when it moves. */
 import { SyncReadOnly } from '../sync/role';
-import { recordGone, recordNote } from './pending';
+import { DELETE_OP, recordGone, recordNote } from './pending';
 import { safeAbs, toRel, type SharedRoot } from './paths';
 import type {
   Roots,
@@ -84,10 +84,21 @@ export function createCaptures(ctx: CaptureCtx): Captures {
         const row = old
           ? null
           : (await db.all(`SELECT sha256 FROM shared_files WHERE root = ? AND rel_path = ?`, [from.root, from.rel]))[0];
-        const sha = String(old?.sha256 ?? row?.sha256 ?? '');
+        // A scan that saw the file leave first kept its capture note at the old path.
+        const left = old
+          ? null
+          : (await db.all(
+              `SELECT id, sha256, capture_id FROM shared_pending WHERE kind = 'note' AND root = ? AND rel_path = ?`,
+              [from.root, from.rel],
+            ))[0];
+        const sha = String(old?.sha256 ?? row?.sha256 ?? left?.sha256 ?? '');
+        const capture = old?.capture_id ?? left?.capture_id ?? null;
         await recordGone(db, 'moved', { root: from.root, rel: from.rel }, sha, to);
         // The note follows the bytes to where the file went.
-        if (old?.capture_id && to) await recordNote(db, to, sha, String(old.capture_id));
+        if (capture && to) {
+          await recordNote(db, to, sha, String(capture));
+          if (left) await db.run(DELETE_OP, [Number(left.id)]);
+        }
       }
       ctx.kick();
     },

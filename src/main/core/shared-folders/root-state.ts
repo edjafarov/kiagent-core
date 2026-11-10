@@ -1,13 +1,24 @@
-/** Whether a shared root may be trusted right now. A root that is not there,
- *  not readable, or that suddenly lists nothing while the manifest holds live
- *  files (an unmounted volume leaves an empty mount point) is not an empty
- *  folder: nothing is tombstoned, marked, dropped, sent or accepted for it. */
+/** Whether a shared root may be trusted right now. A root is "really here"
+ *  only while its directory lists and holds the marker file this Mac wrote
+ *  into it (`.kia-sync/root`, a random id also kept in the `meta` table). An
+ *  unmounted volume, which can leave an empty mount point behind, or another
+ *  folder at that path, has no such marker: the root is then paused, and
+ *  nothing is tombstoned, marked, dropped, sent, applied, fetched or accepted
+ *  for it. With the marker present an empty listing is believed.
+ *
+ *  Deliberately no volume identity (device numbers are not stable across
+ *  mounts on macOS, and a root's location is fixed in this phase): a folder
+ *  the user replaced at the same path by a full copy that includes
+ *  `.kia-sync` is accepted. */
+import { randomUUID } from 'node:crypto';
 import fs from 'node:fs';
+import path from 'node:path';
 
 import type { AppDb } from '../../db/app-db';
-import { explainedRels, loadOps } from './pending';
-import { walkRoot } from '../../sources/local-folder/scanner';
-import { type NameKey, type SharedRoot } from './paths';
+import { STAGING_DIR, type SharedRoot } from './paths';
+
+/** The marker inside a root, relative to it. */
+export const MARKER_REL = path.join(STAGING_DIR, 'root');
 
 export const ROOT_NAMES: readonly SharedRoot[] = ['incoming', 'sorted'];
 
@@ -55,134 +66,102 @@ export async function saveRootSet(db: AppDb, key: string, set: ReadonlySet<Share
   );
 }
 
-/** The roots that are paused: not there, not readable, or suddenly empty. Local. */
-export const PAUSED_KEY = 'shared-folders:paused';
+/** Why a root is not trusted: its directory is not there, not readable, or
+ *  was never initialised on this Mac; or it lists but the marker is absent or
+ *  another id. `ok` is the only state in which anything is done to the root. */
+export type Gate = 'ok' | 'missing' | 'marker';
 
 /** What the passes need to judge a root; `gateChanged` tells the service. */
 export interface GateDeps {
   db: AppDb;
   log(level: 'info' | 'warn' | 'error', msg: string): void;
-  gateChanged?(root: SharedRoot, paused: boolean): void;
+  gateChanged?(root: SharedRoot, gate: Gate): void;
 }
 
-export interface LiveRow {
-  rel_path: string;
-  sha256: string;
-  bytes: number;
-  deleted: number;
-  missing_here: number;
+export async function readable(rootAbs: string): Promise<boolean> {
+  try {
+    if (!(await fs.promises.stat(rootAbs)).isDirectory()) return false;
+    await fs.promises.readdir(rootAbs);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
-/** What a walk listed, as `readDisk` returns it. */
-export interface Listing {
-  files: ReadonlyMap<string, { sha: string; stats: { size: number } }>;
-  seen: ReadonlySet<string>;
-  incomplete: boolean;
+/** This Mac initialised `root` at `path` with `id`. Local; one per (root, path). */
+export const INITIALISED_KEY = 'shared-folders:initialised';
+interface Initialised {
+  root: SharedRoot;
+  path: string;
+  id: string;
 }
 
-const told = new WeakMap<object, Set<string>>();
-const tellOnce = (d: GateDeps, key: string, msg: string): void => {
-  const set = told.get(d.db) ?? told.set(d.db, new Set()).get(d.db)!;
-  if (set.has(key)) return;
-  set.add(key);
-  d.log('warn', msg);
+async function loadInitialised(db: AppDb): Promise<Initialised[]> {
+  try {
+    const row = (await db.all(`SELECT value FROM meta WHERE key = ?`, [INITIALISED_KEY]))[0];
+    const j: unknown = JSON.parse(String(row?.value ?? '[]'));
+    if (Array.isArray(j)) return j.filter((e) => e && isRoot(e.root) && typeof e.path === 'string' && typeof e.id === 'string');
+  } catch {
+    // an unreadable note is the same as none: the root is uninitialised, so paused
+  }
+  return [];
+}
+
+const saveInitialised = (db: AppDb, list: readonly Initialised[]): Promise<unknown> =>
+  db.run(`INSERT INTO meta(key, value) VALUES(?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`, [
+    INITIALISED_KEY,
+    JSON.stringify(list),
+  ]);
+
+const markerIdIn = async (base: string): Promise<string | null> => {
+  try {
+    return (await fs.promises.readFile(path.join(base, MARKER_REL), 'utf8')).trim() || null;
+  } catch {
+    return null;
+  }
 };
 
-async function setPaused(d: GateDeps, root: SharedRoot, on: boolean, why: string): Promise<void> {
-  const set = await loadRootSet(d.db, PAUSED_KEY);
-  if (set.has(root) === on) return;
-  if (on) set.add(root);
-  else set.delete(root);
-  await saveRootSet(d.db, PAUSED_KEY, set);
-  const key = `paused:${root}`;
-  if (on) tellOnce(d, key, `${root} folder ${why}; paused until its files are back`);
-  else {
-    told.get(d.db)?.delete(key);
-    d.log('info', `${root} folder is back; resumed`);
-  }
-  d.gateChanged?.(root, on);
+async function writeMarker(base: string, id: string): Promise<void> {
+  await fs.promises.mkdir(path.join(base, STAGING_DIR), { recursive: true });
+  await fs.promises.writeFile(path.join(base, MARKER_REL), `${id}\n`);
 }
 
-const isLive = (r: LiveRow): boolean => !r.deleted && !r.missing_here;
-
-/** THE judgement of one root, used by the leader's scan, the copy's mirror
- *  and the promotion reconcile. `paused` means: change nothing for this root
- *  (no tombstone, no `missing_here`, no mirror change, nothing sent or applied).
- *
- *  A root is paused when it is not readable, or when it lists no file at all
- *  while the manifest holds live files here, unless every one of them left
- *  through this device's own hands (`explained`) or this Mac never had files
- *  here (`evidence` false: a new copy fetches into an empty folder). It is
- *  released only by a listing that holds at least one file of a live row (same
- *  path and size, or same hash), or when the emptiness is fully explained. */
-export async function judgeRoot(
-  d: GateDeps,
-  root: SharedRoot,
-  input: {
-    readable: boolean;
-    rows: Iterable<LiveRow>;
-    disk?: Listing;
-    explained: (rel: string) => boolean;
-    evidence: boolean;
-  },
-): Promise<'ok' | 'paused'> {
-  const was = (await loadRootSet(d.db, PAUSED_KEY)).has(root);
-  if (!input.readable || !input.disk) {
-    await setPaused(d, root, true, 'is missing or unreadable');
-    return 'paused';
+/** Written exactly once per (root, absolute path): the first time this Mac is
+ *  told to use `base` for `root`. The directory must exist and list; otherwise
+ *  the root stays uninitialised (paused) and a later call tries again. A
+ *  marker already in the folder (a database that was wiped) is adopted, not
+ *  rewritten. Called only from `setRoots` and the start of a pass, never while
+ *  scanning, mirroring, receiving or serving. */
+export async function initialiseRoot(d: GateDeps, root: SharedRoot, base: string): Promise<void> {
+  const list = await loadInitialised(d.db);
+  if (list.some((e) => e.root === root && e.path === base)) return;
+  if (!(await readable(base))) return;
+  let id = await markerIdIn(base);
+  if (!id) {
+    id = randomUUID();
+    await writeMarker(base, id);
   }
-  const live = [...input.rows].filter(isLive);
-  if (live.length === 0) {
-    await setPaused(d, root, false, '');
-    return 'ok';
-  }
-  const disk = input.disk;
-  if (disk.incomplete) return was ? 'paused' : 'ok'; // a walk that missed folders proves nothing
-  const shas = new Set<string>();
-  for (const f of disk.files.values()) shas.add(f.sha);
-  const matches = live.some((r) => disk.files.get(r.rel_path)?.stats.size === r.bytes || shas.has(r.sha256));
-  if (matches) {
-    await setPaused(d, root, false, '');
-    return 'ok';
-  }
-  if (disk.seen.size === 0) {
-    if (live.every((r) => input.explained(r.rel_path))) {
-      await setPaused(d, root, false, '');
-      return 'ok';
-    }
-    if (input.evidence || was) {
-      await setPaused(d, root, true, 'lists no file at all');
-      return 'paused';
-    }
-  }
-  return was ? 'paused' : 'ok';
+  await saveInitialised(d.db, [...list.filter((e) => e.root !== root), { root, path: base, id }]);
 }
 
-/** The cheap check a request from another Mac gets before anything is written
- *  or read (after the service has refused a root it already knows is owed or
- *  paused): is the root there, and does it list anything at its top? Pauses
- *  the root if not; releases nothing. */
-export async function quickCheck(
-  d: GateDeps,
-  root: SharedRoot,
-  base: string,
-  key: NameKey = (rel) => rel,
-): Promise<'ok' | 'paused'> {
-  try {
-    await fs.promises.readdir(base);
-  } catch {
-    await setPaused(d, root, true, 'is missing or unreadable');
-    return 'paused';
-  }
-  // Stops at the first admitted file: a mount point holding only `.DS_Store`
-  // or the staging folder is as good as empty.
-  for await (const _ of walkRoot(base, { incomplete: false })) return 'ok';
-  const rows = (await d.db.all(
-    `SELECT rel_path FROM shared_files WHERE root = ? AND deleted = 0 AND missing_here = 0`,
-    [root],
-  )) as unknown as { rel_path: string }[];
-  const gone = explainedRels(await loadOps(d.db, root), key);
-  if (rows.every((r) => gone.has(key(r.rel_path)))) return 'ok';
-  await setPaused(d, root, true, 'lists no file at all');
-  return 'paused';
+/** The user confirmed that the folder now at `base` is the one to use: a new
+ *  marker and id replace whatever was there. Throws when it does not list. */
+export async function reinitialiseRoot(d: GateDeps, root: SharedRoot, base: string): Promise<void> {
+  if (!(await readable(base))) throw new Error(`shared-folders: the ${root} folder is not there`);
+  const id = randomUUID();
+  await writeMarker(base, id);
+  const list = await loadInitialised(d.db);
+  await saveInitialised(d.db, [...list.filter((e) => e.root !== root), { root, path: base, id }]);
+}
+
+/** THE judgement of one root, used by the leader's scan, the copy's mirror,
+ *  the promotion reconcile and every request served: only `ok` allows a
+ *  change. Reads only; never writes the marker. */
+export async function checkRoot(d: GateDeps, root: SharedRoot, base: string): Promise<Gate> {
+  const rec = (await loadInitialised(d.db)).find((e) => e.root === root && e.path === base);
+  let gate: Gate;
+  if (!rec || !(await readable(base))) gate = 'missing';
+  else gate = (await markerIdIn(base)) === rec.id ? 'ok' : 'marker';
+  d.gateChanged?.(root, gate);
+  return gate;
 }

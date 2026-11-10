@@ -5,7 +5,6 @@ import fs from 'node:fs';
 
 import type { BatchStep } from '../../db/app-db';
 import {
-  readable,
   readDisk,
   type DiskFile,
   UPSERT_MIRROR,
@@ -16,7 +15,7 @@ import {
 import { nameKey, safeAbs, type SharedRoot } from './paths';
 import { groupByName, type Group } from './groups';
 import { explainedRels, loadOps } from './pending';
-import { judgeRoot, ROOT_NAMES, type GateDeps } from './root-state';
+import { checkRoot, ROOT_NAMES, type GateDeps } from './root-state';
 import { NEXT_REV } from './schema';
 import type { Roots, SharedFoldersDeps } from './service';
 
@@ -40,10 +39,7 @@ type Disk = DiskFile & { rel: string };
 type G = Group<Disk, MirrorRow, Row>;
 
 async function reconcileRoot(d: PromoteDeps, root: SharedRoot, base: string): Promise<ReconcileResult> {
-  if (!(await readable(base))) {
-    await judgeRoot(d, root, { readable: false, rows: [], explained: () => false, evidence: true });
-    return 'owed';
-  }
+  if ((await checkRoot(d, root, base)) !== 'ok') return 'owed';
   const key = nameKey(d.platform);
   const rowList = (await d.db.all(
     `SELECT rel_path, sha256, bytes, missing_here, deleted, parked FROM shared_files WHERE root = ?`,
@@ -56,13 +52,8 @@ async function reconcileRoot(d: PromoteDeps, root: SharedRoot, base: string): Pr
   const disk = await readDisk(d, base, new Map(mirrorList.map((m) => [key(m.rel_path), m])), key);
   const gone = explainedRels(await loadOps(d.db, root), key);
   const explained = (rel: string): boolean => gone.has(key(rel));
-  // An empty mount point is not an empty folder: this Mac had files here and
-  // now lists none while the manifest has live ones.
-  if (
-    (await judgeRoot(d, root, { readable: true, rows: rowList, disk, explained, evidence: mirrorList.length > 0 })) ===
-    'paused'
-  )
-    return 'owed';
+  // The listing counts only if the root was really here while it was made.
+  if ((await checkRoot(d, root, base)) !== 'ok') return 'owed';
   const steps: BatchStep[] = [];
   const alive = (): boolean => d.still?.() ?? true;
   const seenKeys = new Set([...disk.seen].map(key));

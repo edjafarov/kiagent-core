@@ -64,7 +64,7 @@ describe('the copy (macOS and Windows match names without regard to case)', () =
     await run();
     await run();
     expect(t.calls).toEqual([]);
-    expect(fs.readdirSync(sorted)).toEqual(['taxes']);
+    expect(fs.readdirSync(sorted).filter((n) => n !== '.kia-sync')).toEqual(['taxes']);
     expect(await entries(c)).toEqual(['taxes/a.pdf']);
   });
 
@@ -74,7 +74,7 @@ describe('the copy (macOS and Windows match names without regard to case)', () =
     await row(c, 'Taxes/a.pdf', 'theirs');
     await run();
     expect(t.calls).toEqual(['offer sorted/Taxes/a.pdf']);
-    expect(fs.readdirSync(sorted)).toEqual(['taxes']);
+    expect(fs.readdirSync(sorted).filter((n) => n !== '.kia-sync')).toEqual(['taxes']);
   });
 
   it('a newer version is fetched over the file that is there, in its own spelling', async () => {

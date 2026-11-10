@@ -271,6 +271,7 @@ describe('a root that is not there is still owed its reconcile', () => {
     await putRow(d, 'never-fetched.pdf', 'bytes');
     await putRow(d, 'kept.pdf', 'kept');
     await putRow(d, 'dead.pdf', 'bye', { deleted: 1 });
+    const marker = fs.readFileSync(path.join(incoming, '.kia-sync', 'root'), 'utf8');
     fs.rmSync(incoming, { recursive: true });
     d.sync.set('leader');
     await d.svc.settled();
@@ -281,7 +282,8 @@ describe('a root that is not there is still owed its reconcile', () => {
     ]);
     expect(await owed(d)).toHaveLength(1);
     expect(await d.svc.listForSorting()).toEqual([]);
-    // the volume comes back with a file of its own and the old tombstone's file
+    // the volume comes back (marker included) with a file of its own and the old tombstone's file
+    write(path.join(incoming, '.kia-sync', 'root'), marker);
     write(path.join(incoming, 'dead.pdf'), 'bye');
     write(path.join(incoming, 'own.pdf'), 'own');
     write(path.join(incoming, 'kept.pdf'), 'kept');
@@ -315,7 +317,8 @@ describe('a root that is not there is still owed its reconcile', () => {
   });
 
   it('an empty mount point leaves rows and mirror entries alone and stays owed', async () => {
-    const { d } = await setup();
+    const { d, incoming, sorted } = await setup();
+    for (const root of [incoming, sorted]) fs.rmSync(path.join(root, '.kia-sync'), { recursive: true }); // what a mount point lacks
     await putRow(d, 'a.pdf', 'a');
     await putRow(d, 'b.pdf', 'b');
     await putMirror(d, 'a.pdf', 'a');

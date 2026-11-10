@@ -7,8 +7,8 @@ import type { BatchStep } from '../../db/app-db';
 import { walkRoot, type WalkTrouble } from '../../sources/local-folder/scanner';
 import { nameKey, toRel, type NameKey, type SharedRoot } from './paths';
 import { groupByName } from './groups';
-import { DELETE_OP, explainedRels, loadOps } from './pending';
-import { judgeRoot, type GateDeps } from './root-state';
+import { DELETE_OP, loadOps } from './pending';
+import { checkRoot, type GateDeps } from './root-state';
 import { NEXT_REV } from './schema';
 import type { SharedFoldersDeps } from './service';
 
@@ -25,16 +25,6 @@ export interface FileRow {
 }
 export interface MirrorRow {
   rel_path: string; sha256: string; bytes: number; mtime_ms: number; capture_id: string | null;
-}
-
-export async function readable(rootAbs: string): Promise<boolean> {
-  try {
-    if (!(await fs.promises.stat(rootAbs)).isDirectory()) return false;
-    await fs.promises.readdir(rootAbs);
-    return true;
-  } catch {
-    return false;
-  }
 }
 
 export const UPSERT_ROW = `INSERT INTO shared_files(root, rel_path, sha256, bytes, mtime, missing_here, deleted, parked, rev)
@@ -107,20 +97,15 @@ export async function readDisk(
   return { files, seen, incomplete: trouble.incomplete };
 }
 
-/** One pass over one root. Does nothing when the root is missing or unreadable
- *  (an unmounted volume is not an empty folder), and tombstones nothing when
- *  the walk could not read every folder. */
+/** One pass over one root. Does nothing while the root is not really here
+ *  (see `checkRoot`: an unmounted volume is not an empty folder), and
+ *  tombstones nothing when the walk could not read every folder. */
 export async function scanRoot(d: ScanDeps, root: SharedRoot, rootAbs: string): Promise<void> {
-  if (!(await readable(rootAbs))) {
-    await judgeRoot(d, root, { readable: false, rows: [], explained: () => false, evidence: true });
-    return;
-  }
+  if ((await checkRoot(d, root, rootAbs)) !== 'ok') return;
   // What this device moved or removed, and the capture notes not attached yet:
   // remembered in the database until the transaction that commits what they explain.
   const key = nameKey(d.platform);
   const ops = await loadOps(d.db, root);
-  const explainedSet = explainedRels(ops, key);
-  const explained = (rel: string): boolean => explainedSet.has(key(rel));
   const notes = new Map(ops.filter((o) => o.kind === 'note').map((o) => [`${key(o.rel_path)}\0${o.sha256}`, o]));
 
   const rowList = (await d.db.all(
@@ -133,10 +118,8 @@ export async function scanRoot(d: ScanDeps, root: SharedRoot, rootAbs: string): 
   const park = root === 'incoming' && rowList.length === 0 && !flagged ? 1 : 0;
 
   const disk = await readDisk(d, rootAbs, new Map(mirrorList.map((m) => [key(m.rel_path), m])), key);
-  // A root that is not trusted right now (see `judgeRoot`: an unmounted volume
-  // leaves an empty mount point) changes nothing: no tombstone, no mirror change.
-  if ((await judgeRoot(d, root, { readable: true, rows: rowList, disk, explained, evidence: true })) === 'paused')
-    return;
+  // The listing counts only if the root was really here while it was made.
+  if ((await checkRoot(d, root, rootAbs)) !== 'ok') return;
   const trouble = { incomplete: disk.incomplete };
   const seenKeys = new Set([...disk.seen].map(key));
   // One group per file, whatever the case of its name: a name that differs only
@@ -149,7 +132,7 @@ export async function scanRoot(d: ScanDeps, root: SharedRoot, rootAbs: string): 
     units.push(steps);
   };
   const fresh: { rel: string; sha: string; bytes: number; mtimeMs: number; step: number }[] = [];
-  const noted = new Map<string, string>();
+  const noted = new Map<string, { capture: string; rel: string }>();
 
   for (const [k, g] of groups) {
     const { f, m, r } = g;
@@ -226,7 +209,7 @@ export async function scanRoot(d: ScanDeps, root: SharedRoot, rootAbs: string): 
       units.push([{ sql: `DELETE FROM shared_mirror WHERE root = ? AND rel_path = ?`, params: [root, m.rel_path] }]);
     }
     // A rename is a deleted row and a new one; the capture note follows the bytes.
-    for (const m of gone) if (m.capture_id && !noted.has(m.sha256)) noted.set(m.sha256, m.capture_id);
+    for (const m of gone) if (m.capture_id && !noted.has(m.sha256)) noted.set(m.sha256, { capture: m.capture_id, rel: m.rel_path });
     if (root === 'incoming' && !flagged) {
       units.push([
         { sql: `INSERT OR IGNORE INTO meta(key, value) VALUES(?, '1')`, params: [INCOMING_SCANNED_KEY] },
@@ -236,10 +219,17 @@ export async function scanRoot(d: ScanDeps, root: SharedRoot, rootAbs: string): 
 
   // A rename on this Mac: the note of the entry that vanished follows the bytes.
   for (const f of fresh) {
-    const capture = noted.get(f.sha);
-    if (!capture) continue;
+    const n = noted.get(f.sha);
+    if (!n) continue;
     noted.delete(f.sha);
-    units[f.step][1] = { sql: UPSERT_MIRROR, params: [root, f.rel, f.sha, f.bytes, f.mtimeMs, capture] };
+    units[f.step][1] = { sql: UPSERT_MIRROR, params: [root, f.rel, f.sha, f.bytes, f.mtimeMs, n.capture] };
+  }
+  // The entry's file left this folder (the sorter moved it, and `moved()` has
+  // not been called yet): the capture note stays, at the old path, for it.
+  for (const [sha, n] of noted) {
+    units.push([
+      { sql: `INSERT INTO shared_pending(kind, root, rel_path, sha256, capture_id) VALUES('note', ?, ?, ?, ?)`, params: [root, n.rel, sha, n.capture] },
+    ]);
   }
 
   for (let i = 0; i < units.length; i += 200) {

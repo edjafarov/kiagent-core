@@ -12,7 +12,17 @@ import { mirrorPass } from './mirror';
 import { listSortable, reconcileAtPromotion } from './promote';
 import { rowAt } from './row-lookup';
 import { nameKey, normalizeRel, safeAbs, toRel, type SharedRoot } from './paths';
-import { loadRootSet, OWED_KEY, PAUSED_KEY, quickCheck, ROOT_NAMES, saveRootSet, SharedRootPaused } from './root-state';
+import {
+  checkRoot,
+  initialiseRoot,
+  loadRootSet,
+  OWED_KEY,
+  reinitialiseRoot,
+  ROOT_NAMES,
+  saveRootSet,
+  SharedRootPaused,
+  type Gate,
+} from './root-state';
 import { createServe } from './serve';
 import { loadUnparsed, reportUnparsed, restamp, type Unparsed } from './unparsed';
 import { watchRoot, type RootWatcher } from './watch';
@@ -20,6 +30,11 @@ import { watchRoot, type RootWatcher } from './watch';
 export type { SharedRoot } from './paths';
 
 export type Roots = { incoming: string | null; sorted: string | null };
+/** Why a root is (not) in use on this Mac: `unset` no folder chosen; `paused-missing`
+ *  the folder is not there, not readable, or not initialised yet; `paused-marker`
+ *  the folder is there but its marker is absent or another id; `owed` a
+ *  reconcile (a new leader's, or after `reattach`) has not finished. */
+export type RootStatus = 'ok' | 'unset' | 'paused-missing' | 'paused-marker' | 'owed';
 export type SharedRef = { accountId: string; externalId: string; root: SharedRoot; relPath: string };
 export type OfferMeta = {
   root: SharedRoot;
@@ -63,10 +78,19 @@ export interface SharedFoldersApi {
    *  the source sees them again, once the file can be opened and the file's
    *  stat has changed or a minute has passed since they were reported. */
   reportUnparsed(refs: { root: SharedRoot; relPath: string }[]): Promise<void>;
-  /** False while the root is owed its reconcile (a new leader that has not
-   *  checked it yet, or whose folder is not there, or lists nothing): nothing is scanned,
-   *  sorted, served or indexed for it. Synchronous: the source reads it per row. */
+  /** False while the root is unset, paused (its folder is not really here: see
+   *  `rootStatus`) or owed its reconcile: nothing is scanned, sorted, served or
+   *  indexed for it. Synchronous: the source reads it per row. */
   usable(root: SharedRoot): boolean;
+  /** `usable(root)` is `rootStatus(root) === 'ok'`. Synchronous. */
+  rootStatus(root: SharedRoot): RootStatus;
+  /** For Settings, once the user confirms that the folder now at this root's
+   *  path should be used (after a volume came back different, say). It must
+   *  exist and list. This Mac forgets its mirror entries for the root, so
+   *  nothing on disk can be read as a deletion and every file is compared
+   *  afresh; a new marker is written; a leader owes the root a reconcile.
+   *  Deletes and trashes nothing. */
+  reattach(root: SharedRoot): Promise<void>;
   moved(fromAbs: string, toAbs: string): Promise<void>;
   registerCapture(captureId: string, sha256: string): Promise<void>;
   noteCapture(captureId: string, absPath: string, sha256: string): Promise<boolean>;
@@ -197,12 +221,36 @@ export async function createSharedFolders(deps: SharedFoldersDeps): Promise<Shar
   // The roots whose reconcile at promotion is owed. Persisted, so a restart
   // (or a volume that is not mounted yet) does not forget it.
   const owed = await loadRootSet(deps.db, OWED_KEY);
-  // The roots that are paused (not there, unreadable, suddenly empty).
-  const paused = await loadRootSet(deps.db, PAUSED_KEY);
-  const gateChanged = (root: SharedRoot, on: boolean): void => {
-    if (on) paused.add(root);
-    else paused.delete(root);
+  // What the last look at each root's folder and marker found (see `checkRoot`).
+  const gates = new Map<SharedRoot, Gate>();
+  const gateChanged = (root: SharedRoot, gate: Gate): void => {
+    const was = gates.get(root);
+    if (was === gate) return;
+    gates.set(root, gate);
+    if (gate === 'ok') deps.log('info', `${root} folder is back; resumed`);
+    else deps.log('warn', `${root} folder ${gate === 'marker' ? 'is not the one this Mac set up' : 'is missing or unreadable'}; paused until it is back`);
     fire();
+  };
+  const gated = { ...deps, gateChanged };
+  /** Initialises a root this Mac has not initialised yet, and looks at both. */
+  const lookAtRoots = async (): Promise<void> => {
+    for (const root of ROOT_NAMES) {
+      const base = roots[root];
+      if (!base) {
+        gates.delete(root);
+        continue;
+      }
+      // eslint-disable-next-line no-await-in-loop
+      await initialiseRoot(gated, root, base);
+      // eslint-disable-next-line no-await-in-loop
+      await checkRoot(gated, root, base);
+    }
+  };
+  const rootStatus = (root: SharedRoot): RootStatus => {
+    if (!roots[root]) return 'unset';
+    const g = gates.get(root);
+    if (g !== 'ok') return g === 'marker' ? 'paused-marker' : 'paused-missing';
+    return owed.has(root) ? 'owed' : 'ok';
   };
   // Rows the source could not parse; see `reportUnparsed`. Local, persisted.
   const unparsed: Unparsed = await loadUnparsed(deps.db);
@@ -242,10 +290,12 @@ export async function createSharedFolders(deps: SharedFoldersDeps): Promise<Shar
 
   const pass = async (): Promise<void> => {
     const now = mode();
+    await lookAtRoots();
+    if (mode() !== now) return; // the role changed meanwhile: the pass its change asked for follows
     if (now === 'copy') {
       // A device that is still joining has not finished receiving its copy.
       if (!transport || (await joining())) return;
-      await mirrorPass({ ...deps, roots, gateChanged, still: stillAs('copy') }, transport);
+      await mirrorPass({ ...gated, roots, still: stillAs('copy') }, transport);
       return;
     }
     if (now !== 'leader') return;
@@ -266,7 +316,7 @@ export async function createSharedFolders(deps: SharedFoldersDeps): Promise<Shar
       // eslint-disable-next-line no-await-in-loop
       if (base && !owed.has(root)) {
         // eslint-disable-next-line no-await-in-loop
-        await scanRoot({ ...deps, gateChanged, still }, root, base);
+        await scanRoot({ ...gated, still }, root, base);
       }
     }
     if (still()) await restamp({ ...deps, roots, usable: (r) => api.usable(r), still }, unparsed);
@@ -296,7 +346,7 @@ export async function createSharedFolders(deps: SharedFoldersDeps): Promise<Shar
   const retry = setInterval(() => {
     if (closed) return;
     if (transport && mode() === 'copy') kick();
-    else if (mode() === 'leader' && unparsed.size > 0) kick();
+    else if (mode() === 'leader' && (unparsed.size > 0 || ROOT_NAMES.some((r) => roots[r] && gates.get(r) !== 'ok'))) kick();
   }, deps.retryMs ?? 60_000);
   retry.unref?.();
   deps.sync.onApplied((tables) => {
@@ -336,12 +386,11 @@ export async function createSharedFolders(deps: SharedFoldersDeps): Promise<Shar
     ready: () => reconcileIfPending(stillAs('leader')),
     refuse: (root) => {
       if (owed.has(root)) throw new SharedRootPaused(root, 'owed');
-      if (paused.has(root)) throw new SharedRootPaused(root, 'paused');
+      if (roots[root] && gates.get(root) !== 'ok') throw new SharedRootPaused(root, 'paused');
     },
     quick: async (root) => {
       const base = roots[root];
-      if (base && (await quickCheck({ ...deps, gateChanged }, root, base, nameKey(deps.platform))) === 'paused')
-        throw new SharedRootPaused(root, 'paused');
+      if (base && (await checkRoot(gated, root, base)) !== 'ok') throw new SharedRootPaused(root, 'paused');
     },
     kick,
   });
@@ -373,6 +422,7 @@ export async function createSharedFolders(deps: SharedFoldersDeps): Promise<Shar
         [ROOTS_META_KEY, JSON.stringify(clean)],
       );
       roots = clean;
+      await enqueue(lookAtRoots); // the marker, written once, before anything scans
       // Before the first scan: the exclusion in `local-folder` is already in force.
       if (deps.localFolders) {
         for (const base of [clean.incoming, clean.sorted]) {
@@ -408,7 +458,9 @@ export async function createSharedFolders(deps: SharedFoldersDeps): Promise<Shar
       const base = cut > 0 && isRoot(root) ? roots[root] : null;
       // A copy is never owed a reconcile (that is for a new leader), so it is
       // only a paused root that withholds the path there.
-      if (!base || paused.has(root as SharedRoot) || (owed.has(root as SharedRoot) && mode() !== 'copy')) return null;
+      if (!base) return null;
+      const status = rootStatus(root as SharedRoot);
+      if (status !== 'ok' && !(status === 'owed' && mode() === 'copy')) return null;
       try {
         const rel = normalizeRel(doc.externalId.slice(cut + 1));
         // Only for the version the manifest names: after a promotion the disk
@@ -447,20 +499,38 @@ export async function createSharedFolders(deps: SharedFoldersDeps): Promise<Shar
       }
       return false;
     },
-    usable: (root) => !owed.has(root) && !paused.has(root),
+    usable: (root) => rootStatus(root) === 'ok',
+    rootStatus,
+    reattach: (root) =>
+      enqueue(async () => {
+        const base = roots[root];
+        if (!base) throw new Error(`shared-folders: the ${root} folder is not set on this Mac`);
+        await reinitialiseRoot(gated, root, base);
+        // Every file is compared afresh: nothing on disk can be read as a deletion.
+        await deps.db.run(`DELETE FROM shared_mirror WHERE root = ?`, [root]);
+        if (mode() === 'leader') {
+          pendingGen += 1;
+          owed.add(root);
+          await saveRootSet(deps.db, OWED_KEY, owed);
+        }
+        await checkRoot(gated, root, base);
+        kick();
+      }),
     reportUnparsed: (refs) => reportUnparsed({ ...deps, roots }, unparsed, refs),
     listForSorting: async () => {
       if (mode() !== 'leader' || !roots.incoming) return [];
       return enqueue(async () => {
         const still = stillAs('leader');
         await reconcileIfPending(still);
-        if (!still() || !api.usable('incoming') || !roots.incoming) return [];
-        return listSortable(deps, roots.incoming);
+        const base = roots.incoming;
+        if (!still() || !base || (await checkRoot(gated, 'incoming', base)) !== 'ok' || !api.usable('incoming')) return [];
+        return listSortable(deps, base);
       });
     },
     serve,
   };
   if (mode() === 'copy') await markPending();
+  await lookAtRoots();
   await rewatch();
   kick();
   return api;

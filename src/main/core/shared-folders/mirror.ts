@@ -8,7 +8,6 @@ import path from 'node:path';
 
 import type { BatchStep } from '../../db/app-db';
 import {
-  readable,
   readDisk,
   UPSERT_MIRROR,
   type DiskFile,
@@ -18,7 +17,7 @@ import {
 import { groupByName, type Group as G } from './groups';
 import { nameKey, safeAbs, STAGING_DIR, type SharedRoot } from './paths';
 import { DELETE_OP, noteFor } from './pending';
-import { judgeRoot, type GateDeps } from './root-state';
+import { checkRoot, type GateDeps } from './root-state';
 import type { Roots, SharedFoldersDeps, SharedTransport } from './service';
 
 export type MirrorDeps = Pick<
@@ -85,11 +84,7 @@ async function mirrorRoot(
   base: string,
   transport: SharedTransport,
 ): Promise<void> {
-  const explained = (): boolean => false; // a copy never sorts, and its own removals leave no live row
-  if (!(await readable(base))) {
-    await judgeRoot(d, root, { readable: false, rows: [], explained, evidence: true });
-    return;
-  }
+  if ((await checkRoot(d, root, base)) !== 'ok') return;
   const key = nameKey(d.platform);
   const rowList = (await d.db.all(
     `SELECT rel_path, sha256, bytes, mtime, missing_here, deleted FROM shared_files WHERE root = ?`,
@@ -102,14 +97,8 @@ async function mirrorRoot(
   const mirrorByKey = new Map(mirrorList.map((r) => [key(r.rel_path), r]));
   const disk = await readDisk(d, base, mirrorByKey, key);
 
-  // A root that is not trusted right now (an unmounted volume leaves an empty
-  // mount point) sends nothing and removes nothing; a new copy with no file
-  // yet is not that, it fetches.
-  if (
-    (await judgeRoot(d, root, { readable: true, rows: rowList, disk, explained, evidence: mirrorList.length > 0 })) ===
-    'paused'
-  )
-    return;
+  // The listing counts only if the root was really here while it was made.
+  if ((await checkRoot(d, root, base)) !== 'ok') return;
 
   const groups = groupByName(key, [...disk.files].map(([rel, f]) => ({ ...f, rel })), mirrorList, rowList);
   const seenKeys = new Set([...disk.seen].map(key));

@@ -6,6 +6,9 @@ import { closeDevices, device, withRoots, type Device } from './helpers/device';
 import { serveTransport, sha, stubServe, tmpDir } from './helpers/fake-transport';
 import type { OfferAnswer, OfferMeta } from '../service';
 
+/** What is left in a root's staging folder, besides the marker. */
+const staged = (root: string) => fs.readdirSync(path.join(root, '.kia-sync')).filter((n) => n !== 'root');
+
 afterEach(closeDevices);
 
 type Mac = Device & { incoming: string; sorted: string; lead: { incoming: string; sorted: string } };
@@ -75,7 +78,7 @@ describe('the table, row by row', () => {
     expect(read(f)).toBe('two!');
     expect(fs.statSync(f).mtime.toISOString()).toBe(MT);
     expect((await entries(c))[0].sha256).toBe(sha('two!'));
-    expect(fs.readdirSync(path.join(c.sorted, '.kia-sync'))).toEqual([]);
+    expect(staged(c.sorted)).toEqual([]);
     await run(c, t); // and now it is in agreement
     expect(t.calls).toHaveLength(1);
   });
@@ -270,7 +273,7 @@ describe('the destination is checked again', () => {
     t.duringFetch = () => put(f, 'one, but mine');
     await run(c, t);
     expect(read(f)).toBe('one, but mine');
-    expect(fs.readdirSync(path.join(c.sorted, '.kia-sync'))).toEqual([]);
+    expect(staged(c.sorted)).toEqual([]);
     expect((await entries(c))[0].sha256).toBe(sha('one'));
     t.duringFetch = undefined;
     await run(c, t); // now D differs from M: offered first
@@ -342,7 +345,7 @@ describe('transfers', () => {
     t.corrupt = true;
     await run(c, t);
     expect(read(f)).toBe('one');
-    expect(fs.readdirSync(path.join(c.sorted, '.kia-sync'))).toEqual([]);
+    expect(staged(c.sorted)).toEqual([]);
     expect((await entries(c))[0].sha256).toBe(sha('one'));
   });
 
@@ -393,7 +396,7 @@ describe('a root that is not there, or looks empty', () => {
     expect(c.logs.filter((l) => l.includes('missing or unreadable'))).toHaveLength(1);
   });
 
-  it('a root that lists no file at all sends no deletion and removes nothing', async () => {
+  it('a root that lists no file and has no marker sends no deletion and removes nothing', async () => {
     const { c, serve, t } = await setup();
     const a = path.join(c.sorted, 'a.txt');
     const b = path.join(c.sorted, 'b.txt');
@@ -405,12 +408,12 @@ describe('a root that is not there, or looks empty', () => {
     await row(c, 'sorted', 'b.txt', 'two', { deleted: 1 });
     fs.rmSync(a);
     fs.rmSync(b);
+    fs.rmSync(path.join(c.sorted, '.kia-sync'), { recursive: true });
     await run(c, t);
     await run(c, t);
     expect(serve.removed).toEqual([]);
     expect(t.calls).toEqual([]);
     expect(await entries(c)).toHaveLength(2);
-    expect(c.logs.filter((l) => l.includes('lists no file at all'))).toHaveLength(1);
   });
 
   it('a folder that could not be read is no proof that its files are gone', async () => {

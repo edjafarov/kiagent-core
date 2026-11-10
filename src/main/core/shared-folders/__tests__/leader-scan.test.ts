@@ -227,21 +227,34 @@ it('an edit keeps the capture id on the mirror entry', async () => {
   expect((await mirror(d))[0].capture_id).toBe('cap-1');
 });
 
-it('a root that lists no file at all is not believed: nothing is tombstoned, logged once', async () => {
+it('a root that lists nothing but still has its marker is believed: its files are tombstoned', async () => {
+  const { d, sorted } = await setup();
+  write(path.join(sorted, 'a.txt'), 'one');
+  write(path.join(sorted, 'b.txt'), 'two');
+  await scanRoot(d.deps, 'sorted', sorted);
+  fs.rmSync(path.join(sorted, 'a.txt'));
+  fs.rmSync(path.join(sorted, 'b.txt'));
+  await scanRoot(d.deps, 'sorted', sorted);
+  expect((await rows(d)).map((r) => [r.rel_path, r.deleted])).toEqual([['a.txt', 1], ['b.txt', 1]]);
+  expect(await mirror(d)).toEqual([]);
+});
+
+it('a root that lists nothing and has no marker changes nothing, until the marker is back', async () => {
   const { d, sorted } = await setup();
   write(path.join(sorted, 'a.txt'), 'one');
   write(path.join(sorted, 'b.txt'), 'two');
   await scanRoot(d.deps, 'sorted', sorted);
   const before = await rows(d);
   const mirrorBefore = await mirror(d);
-  fs.rmSync(path.join(sorted, 'a.txt'));
-  fs.rmSync(path.join(sorted, 'b.txt'));
+  const marker = fs.readFileSync(path.join(sorted, '.kia-sync', 'root'), 'utf8');
+  fs.rmSync(sorted, { recursive: true });
+  fs.mkdirSync(sorted); // the mount point
   await scanRoot(d.deps, 'sorted', sorted);
   await scanRoot(d.deps, 'sorted', sorted);
   expect(await rows(d)).toEqual(before);
   expect(await mirror(d)).toEqual(mirrorBefore);
-  expect(d.logs.filter((l) => l.includes('lists no file at all'))).toHaveLength(1);
-  // the files come back: the root is believed again
+  // the volume is back: the marker and a.txt
+  write(path.join(sorted, '.kia-sync', 'root'), marker);
   write(path.join(sorted, 'a.txt'), 'one');
   await scanRoot(d.deps, 'sorted', sorted);
   expect((await rows(d)).map((r) => [r.rel_path, r.deleted])).toEqual([['a.txt', 0], ['b.txt', 1]]);
@@ -251,20 +264,4 @@ it('an empty first Incoming is still a fresh root: no rows, nothing to protect',
   const { d, incoming } = await setup();
   await scanRoot(d.deps, 'incoming', incoming);
   expect(await rows(d)).toEqual([]);
-  expect(d.logs.filter((l) => l.includes('lists no file at all'))).toHaveLength(0);
-});
-
-it('a folder emptied by this device\'s own hands (sorting, a mirrored removal) is believed', async () => {
-  const { d, sorted } = await setup();
-  write(path.join(sorted, 'a.txt'), 'one');
-  write(path.join(sorted, 'b.txt'), 'two');
-  await scanRoot(d.deps, 'sorted', sorted);
-  fs.rmSync(path.join(sorted, 'a.txt'));
-  fs.rmSync(path.join(sorted, 'b.txt'));
-  await d.db.run(`INSERT INTO shared_pending(kind, root, rel_path) VALUES('moved', 'sorted', 'a.txt')`);
-  await scanRoot(d.deps, 'sorted', sorted); // b.txt is unexplained
-  expect((await rows(d)).map((r) => r.deleted)).toEqual([0, 0]);
-  await d.db.run(`INSERT INTO shared_pending(kind, root, rel_path) VALUES('removed', 'sorted', 'b.txt')`);
-  await scanRoot(d.deps, 'sorted', sorted);
-  expect((await rows(d)).map((r) => r.deleted)).toEqual([1, 1]);
 });

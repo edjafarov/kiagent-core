@@ -118,10 +118,11 @@ describe('pathOf is given only for the right bytes', () => {
     put(abs, 'one');
     d.svc.kick();
     await d.svc.settled();
-    await d.db.run(`INSERT INTO meta(key, value) VALUES('shared-folders:paused', '["sorted"]')`);
-    const again = await d.restart();
-    expect(again.usable('sorted')).toBe(false);
-    expect(await again.pathOf(doc('sorted/a.pdf'))).toBeNull();
+    fs.rmSync(path.join(sorted, '.kia-sync'), { recursive: true }); // the marker is gone: paused
+    d.svc.kick();
+    await d.svc.settled();
+    expect(d.svc.usable('sorted')).toBe(false);
+    expect(await d.svc.pathOf(doc('sorted/a.pdf'))).toBeNull();
   });
 });
 

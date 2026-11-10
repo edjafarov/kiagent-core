@@ -53,13 +53,13 @@ describe('moves and removals are remembered until the scan that commits them', (
     expect(await pending(d)).toEqual([]); // consumed with the tombstone
   });
 
-  it('a scan that saw the gap before moved() was called does not forget the move', async () => {
+  it('a scan that saw the gap before moved() was called tombstones it, and the late move leaves nothing behind', async () => {
     const { d, incoming, sorted } = await leader();
     write(path.join(incoming, 'in.pdf'), 'scan');
     await scan(d);
     fs.renameSync(path.join(incoming, 'in.pdf'), path.join(sorted, 'in.pdf'));
-    await scan(d); // sees Incoming empty: paused, row kept
-    expect(await live(d, 'incoming')).toEqual([{ rel_path: 'in.pdf', deleted: 0 }]);
+    await scan(d); // the folder is really here (its marker), so the gap is a deletion
+    expect(await live(d, 'incoming')).toEqual([{ rel_path: 'in.pdf', deleted: 1 }]);
     await d.svc.moved(path.join(incoming, 'in.pdf'), path.join(sorted, 'in.pdf'));
     await d.svc.settled();
     expect(await live(d, 'incoming')).toEqual([{ rel_path: 'in.pdf', deleted: 1 }]);
