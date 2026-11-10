@@ -14,8 +14,8 @@ afterEach(closeDevices);
 type Mac = Device & { incoming: string; sorted: string; lead: { incoming: string; sorted: string } };
 
 /** A copy with its two folders, and a leader that is two folders of files. */
-async function setup(answer?: (m: OfferMeta) => OfferAnswer) {
-  const c = (await device('copy')) as Mac;
+async function setup(answer?: (m: OfferMeta) => OfferAnswer, over: Parameters<typeof device>[1] = {}) {
+  const c = (await device('copy', over)) as Mac;
   const roots = await withRoots(c);
   c.incoming = roots.incoming;
   c.sorted = roots.sorted;
@@ -50,8 +50,10 @@ const entries = async (c: Device) =>
   (await c.db.all(`SELECT root, rel_path, sha256, capture_id FROM shared_mirror ORDER BY root, rel_path`)) as unknown as {
     root: string; rel_path: string; sha256: string; capture_id: string | null;
   }[];
-const run = (c: Device, t: ReturnType<typeof serveTransport>) =>
-  mirrorPass({ ...c.deps, roots: c.svc.roots() }, t);
+const run = (c: Device, t: ReturnType<typeof serveTransport>, over: Partial<Device['deps']> = {}) =>
+  mirrorPass({ ...c.deps, ...over, roots: c.svc.roots() }, t);
+/** The volume disconnects: the folder is an empty mount point again. */
+const unmount = (root: string) => fs.rmSync(path.join(root, '.kia-sync'), { recursive: true, force: true });
 const read = (f: string) => fs.readFileSync(f, 'utf8');
 
 describe('the table, row by row', () => {
@@ -357,6 +359,114 @@ describe('transfers', () => {
     expect(await entries(c)).toEqual([]);
   });
 
+  it('the marker vanishing while the download is checked: no folder is created and nothing is renamed', async () => {
+    const { c, lead, t } = await setup();
+    put(path.join(lead.sorted, 'sub', 'a.txt'), 'theirs');
+    await row(c, 'sorted', 'sub/a.txt', 'theirs');
+    const hashFile: Device['deps']['hashFile'] = async (f) => {
+      const h = await c.deps.hashFile(f);
+      fs.rmSync(path.join(c.sorted, '.kia-sync', 'root'));
+      return h;
+    };
+    await run(c, t, { hashFile });
+    expect(fs.existsSync(path.join(c.sorted, 'sub'))).toBe(false);
+    expect(await entries(c)).toEqual([]);
+  });
+
+  it('the marker vanishing while a have-it file is checked: it is not trashed', async () => {
+    const { c, t } = await setup(() => 'have-it');
+    const f = path.join(c.sorted, 'new.txt');
+    put(f, 'mine');
+    let n = 0;
+    const hashFile: Device['deps']['hashFile'] = async (p) => {
+      const h = await c.deps.hashFile(p);
+      if (++n === 2) unmount(c.sorted); // the first look is the listing
+      return h;
+    };
+    await run(c, t, { hashFile });
+    expect(n).toBe(2);
+    expect(c.trashed).toEqual([]);
+    expect(fs.existsSync(f)).toBe(true);
+  });
+
+  it('the marker vanishing while a mirrored deletion is checked: nothing is trashed', async () => {
+    const { c, t } = await setup();
+    const f = path.join(c.sorted, 'a.txt');
+    put(f, 'old');
+    await mir(c, 'sorted', f, 'a.txt', 'old');
+    await c.db.run(`UPDATE shared_mirror SET mtime_ms = mtime_ms + 5`); // so the file is hashed
+    await row(c, 'sorted', 'a.txt', 'old', { deleted: 1 });
+    let n = 0;
+    const hashFile: Device['deps']['hashFile'] = async (p) => {
+      const h = await c.deps.hashFile(p);
+      if (++n === 2) unmount(c.sorted); // the first look is the listing
+      return h;
+    };
+    await run(c, t, { hashFile });
+    expect(n).toBe(2);
+    expect(c.trashed).toEqual([]);
+    expect(fs.existsSync(f)).toBe(true);
+    expect(await entries(c)).toHaveLength(1);
+  });
+
+  it('the marker vanishing right after a Trash: the deletion that follows is not sent', async () => {
+    const { c, serve, t } = await setup(undefined, {
+      trash: async (p) => {
+        fs.rmSync(p, { force: true });
+        unmount(c0.sorted);
+      },
+    });
+    const c0 = c;
+    const a = path.join(c.sorted, 'a.txt');
+    const b = path.join(c.sorted, 'b.txt');
+    put(a, 'one');
+    put(b, 'two');
+    await mir(c, 'sorted', a, 'a.txt', 'one');
+    await mir(c, 'sorted', b, 'b.txt', 'two');
+    await row(c, 'sorted', 'a.txt', 'one', { deleted: 1 });
+    await row(c, 'sorted', 'b.txt', 'two');
+    fs.rmSync(b);
+    await run(c, t);
+    expect(serve.removed).toEqual([]);
+    expect(t.calls).toEqual([]);
+  });
+
+  it('the marker vanishing right after a Trash: nothing is fetched or created after it', async () => {
+    const { c, lead, t } = await setup(undefined, {
+      trash: async (p) => {
+        fs.rmSync(p, { force: true });
+        unmount(c0.sorted);
+      },
+    });
+    const c0 = c;
+    const a = path.join(c.sorted, 'a.txt');
+    put(a, 'one');
+    await mir(c, 'sorted', a, 'a.txt', 'one');
+    await row(c, 'sorted', 'a.txt', 'one', { deleted: 1 });
+    put(path.join(lead.sorted, 'down.txt'), 'theirs');
+    await row(c, 'sorted', 'down.txt', 'theirs');
+    await run(c, t);
+    expect(t.calls).toEqual([]);
+    expect(fs.existsSync(path.join(c.sorted, '.kia-sync'))).toBe(false);
+  });
+
+  it('the marker vanishing while a deletion is sent: the mirror entry is kept for the next pass', async () => {
+    const { c, t } = await setup();
+    const a = path.join(c.sorted, 'a.txt');
+    put(a, 'one');
+    await mir(c, 'sorted', a, 'a.txt', 'one');
+    await row(c, 'sorted', 'a.txt', 'one');
+    fs.rmSync(a);
+    const remove = t.remove;
+    t.remove = async (q) => {
+      await remove(q);
+      unmount(c.sorted);
+    };
+    await run(c, t);
+    expect(t.calls).toEqual(['remove sorted/a.txt']);
+    expect(await entries(c)).toHaveLength(1);
+  });
+
   it('a failing transport ends the pass quietly at the first failure and changes nothing', async () => {
     const { c, t } = await setup();
     put(path.join(c.sorted, 'a.txt'), 'mine');
@@ -414,6 +524,38 @@ describe('a root that is not there, or looks empty', () => {
     expect(serve.removed).toEqual([]);
     expect(t.calls).toEqual([]);
     expect(await entries(c)).toHaveLength(2);
+  });
+
+  it('the marker vanishing while an offer awaits the leader stops the pass: nothing is fetched, created, written or removed', async () => {
+    const { c, lead, serve, t } = await setup();
+    const up = path.join(c.sorted, 'up.txt');
+    put(up, 'mine');
+    const gone = path.join(c.sorted, 'gone.txt');
+    put(gone, 'was here');
+    await mir(c, 'sorted', gone, 'gone.txt', 'was here');
+    await row(c, 'sorted', 'gone.txt', 'was here');
+    fs.rmSync(gone);
+    put(path.join(lead.sorted, 'down.txt'), 'theirs');
+    await row(c, 'sorted', 'down.txt', 'theirs');
+    // the volume disconnects: the folder is an empty mount point again
+    t.duringOffer = () => unmount(c.sorted);
+    await run(c, t);
+    expect(t.calls).toEqual(['offer sorted/up.txt']);
+    expect(serve.removed).toEqual([]);
+    expect(fs.existsSync(path.join(c.sorted, '.kia-sync'))).toBe(false);
+    expect(fs.existsSync(path.join(c.sorted, 'down.txt'))).toBe(false);
+    expect((await entries(c)).map((e) => e.rel_path)).toEqual(['gone.txt']);
+  });
+
+  it('the marker vanishing during a fetch: the download is not renamed into place', async () => {
+    const { c, lead, t } = await setup();
+    put(path.join(lead.sorted, 'a.txt'), 'theirs');
+    await row(c, 'sorted', 'a.txt', 'theirs');
+    t.duringFetch = () => fs.rmSync(path.join(c.sorted, '.kia-sync', 'root'));
+    await run(c, t);
+    expect(fs.existsSync(path.join(c.sorted, 'a.txt'))).toBe(false);
+    expect(await entries(c)).toEqual([]);
+    expect(c.hashed).toEqual([]); // the pass ended right after the wait
   });
 
   it('a folder that could not be read is no proof that its files are gone', async () => {

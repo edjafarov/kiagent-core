@@ -36,6 +36,16 @@ const check = (d: MirrorDeps): void => {
   if (!(d.still?.() ?? true)) throw new Stopped('shared-folders: the role changed');
 };
 
+/** The root stopped being really here (its marker is gone) mid-pass: this
+ *  root's pass ends at once; the other root's still runs. */
+class RootGone extends Error {}
+/** Right before a file action, and after each wait on the network: the pass
+ *  goes on only while the role is the same and the root still holds its marker. */
+async function alive(d: MirrorDeps, root: SharedRoot, base: string): Promise<void> {
+  check(d);
+  if ((await checkRoot(d, root, base)) !== 'ok') throw new RootGone(`shared-folders: the ${root} folder went away`);
+}
+
 type Row = FileRow & { bytes: number; mtime: string };
 type Group = G<DiskFile & { rel: string }, MirrorRow, Row>;
 /** The network failed: the pass ends and is retried later. Anything else that
@@ -165,7 +175,7 @@ async function mirrorRoot(
       check(d);
       await act();
     } catch (err) {
-      if (err instanceof TransportFailed || err instanceof Stopped) throw err;
+      if (err instanceof TransportFailed || err instanceof Stopped || err instanceof RootGone) throw err;
       d.log('warn', `${root}/${rel}: ${String(err)}`);
     }
   };
@@ -198,11 +208,11 @@ async function mirrorRoot(
           f.abs,
         ),
       );
-      check(d);
+      await alive(d, root, base);
       const mrel = m?.rel_path ?? f.rel;
       if (answer === 'have-it') {
         if ((await d.hashFile(f.abs)) !== f.sha) return;
-        check(d);
+        await alive(d, root, base);
         await d.trash(f.abs);
         await dropMirror(mrel);
         if (note) await d.db.run(DELETE_OP, [note.id]);
@@ -229,7 +239,7 @@ async function mirrorRoot(
       // edit before the deletion. Checked again just before it goes.
       const now = await stillMirrored(d, abs, g.m);
       if (now === 'changed') return;
-      check(d);
+      await alive(d, root, base);
       if (now === 'same') await d.trash(abs);
       await dropMirror(g.m!.rel_path);
     });
@@ -240,10 +250,11 @@ async function mirrorRoot(
     // eslint-disable-next-line no-await-in-loop
     await forPath(m.rel_path, async () => {
       if ((await stillMirrored(d, await safeAbs(base, m.rel_path), m)) !== 'absent') return;
-      check(d);
+      await alive(d, root, base); // a deletion is only sent while the folder is really here
       await viaTransport(
         transport.remove({ root, relPath: g.r!.rel_path, sha256: m.sha256 }),
       );
+      await alive(d, root, base);
       await dropMirror(m.rel_path);
     });
   }
@@ -267,6 +278,7 @@ async function fetchOne(
   const rel = g.f?.rel ?? r.rel_path;
   const dest = await safeAbs(base, rel);
   const stage = path.join(base, STAGING_DIR);
+  await alive(d, root, base); // before anything is created in the folder
   // Named by the hash, so a restart resumes at the length already there.
   const tmp = path.join(stage, `${r.sha256}.part`);
   await fs.promises.mkdir(stage, { recursive: true });
@@ -281,10 +293,10 @@ async function fetchOne(
     offset = 0;
   }
   if (offset < r.bytes) {
-    check(d);
     const got = await viaTransport(
       transport.fetch({ root, relPath: r.rel_path, sha256: r.sha256 }, tmp, offset),
     );
+    await alive(d, root, base);
     if (got === 'gone') return; // the leader moved on: wait for the next rows
   }
   if ((await d.hashFile(tmp)) !== r.sha256) {
@@ -298,9 +310,10 @@ async function fetchOne(
     await fs.promises.rm(tmp, { force: true });
     return;
   }
+  await alive(d, root, base);
   await fs.promises.mkdir(path.dirname(dest), { recursive: true });
   await safeAbs(base, rel); // again, now that the folders exist
-  check(d); // the last look, right before the downloaded file replaces anything
+  await alive(d, root, base); // the last look, right before the downloaded file replaces anything
   await fs.promises.rename(tmp, dest);
   const st = await fs.promises.stat(dest);
   await d.db.run(UPSERT_MIRROR, [
@@ -326,6 +339,10 @@ export async function mirrorPass(
       await mirrorRoot(d, root, base, transport);
     } catch (err) {
       if (err instanceof Stopped) return;
+      if (err instanceof RootGone) {
+        d.log('info', `mirroring ${root} stopped: the folder went away`);
+        continue;
+      }
       if (err instanceof TransportFailed) {
         d.log('info', `mirroring paused: ${String(err.inner)}`);
         return;
