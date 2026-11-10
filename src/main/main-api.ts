@@ -238,6 +238,7 @@ const unavailableSharedFolders = (): SharedFoldersApi => {
     reattach: no,
     reportUnparsed: async () => {},
     listForSorting: async () => [],
+    listPresent: async () => [],
     moved: async () => {},
     registerCapture: no,
     noteCapture: async () => false,

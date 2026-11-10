@@ -81,7 +81,15 @@ export interface SharedFoldersApi {
   /** Tells `cb` when `shared_files` changed on this device or a promotion
    *  reconcile finished (the sorter asks `listForSorting` again). */
   onChange(cb: () => void): () => void;
+  /** The Incoming files the sorter may start on by itself: live, present
+   *  here and not parked. */
   listForSorting(): Promise<string[]>;
+  /** The absolute paths of every Incoming file that is live and present here
+   *  (what `listForSorting` checks), parked ones included: the files whose
+   *  bytes are safe to sort when the user asks for it. Same gating as
+   *  `listForSorting`: the root usable, its reconcile done, shared folders on,
+   *  this device the leader. */
+  listPresent(): Promise<string[]>;
   /** The source could not turn these rows into documents (the file was not
    *  readable, or not the bytes the row names). They get a new revision, so
    *  the source sees them again, once the file can be opened and the file's
@@ -451,6 +459,16 @@ export async function createSharedFolders(deps: SharedFoldersDeps): Promise<Shar
     },
     kick,
   });
+  const listIncoming = async (parkedToo: boolean): Promise<string[]> => {
+    if (!enabled || mode() !== 'leader' || !roots.incoming) return [];
+    return enqueue(async () => {
+      const still = stillAs('leader');
+      await reconcileIfPending(still);
+      const base = roots.incoming;
+      if (!still() || !base || (await checkRoot(gated, 'incoming', base)) !== 'ok' || !api.usable('incoming')) return [];
+      return listSortable(deps, base, parkedToo);
+    });
+  };
   const api: SharedFolders = {
     mode,
     settled: async () => {
@@ -573,16 +591,8 @@ export async function createSharedFolders(deps: SharedFoldersDeps): Promise<Shar
         kick();
       }),
     reportUnparsed: (refs) => reportUnparsed({ ...deps, roots }, unparsed, refs),
-    listForSorting: async () => {
-      if (!enabled || mode() !== 'leader' || !roots.incoming) return [];
-      return enqueue(async () => {
-        const still = stillAs('leader');
-        await reconcileIfPending(still);
-        const base = roots.incoming;
-        if (!still() || !base || (await checkRoot(gated, 'incoming', base)) !== 'ok' || !api.usable('incoming')) return [];
-        return listSortable(deps, base);
-      });
-    },
+    listForSorting: () => listIncoming(false),
+    listPresent: () => listIncoming(true),
     serve,
   };
   if (mode() === 'copy') await markPending();

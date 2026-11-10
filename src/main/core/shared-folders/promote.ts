@@ -167,11 +167,16 @@ export async function reconcileAtPromotion(d: PromoteDeps): Promise<Record<Share
 }
 
 /** The absolute paths of the Incoming rows a leader may sort: live, present
- *  here, not parked. */
-export async function listSortable(d: Pick<SharedFoldersDeps, 'db'>, incomingAbs: string): Promise<string[]> {
+ *  here, and (unless `parkedToo`) not parked. Parking decides only whether the
+ *  sorter starts on a file by itself, not whether its bytes are safe to sort. */
+export async function listSortable(
+  d: Pick<SharedFoldersDeps, 'db'>,
+  incomingAbs: string,
+  parkedToo = false,
+): Promise<string[]> {
   const rows = await d.db.all(
     `SELECT rel_path FROM shared_files
-      WHERE root = 'incoming' AND deleted = 0 AND missing_here = 0 AND parked = 0 ORDER BY rel_path`,
+      WHERE root = 'incoming' AND deleted = 0 AND missing_here = 0${parkedToo ? '' : ' AND parked = 0'} ORDER BY rel_path`,
   );
   const out: string[] = [];
   for (const r of rows) {
