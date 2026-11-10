@@ -13,14 +13,13 @@ import {
   type MirrorRow,
 } from './leader-scan';
 import { safeAbs, type SharedRoot } from './paths';
+import { explainedRels, loadOps } from './pending';
 import { judgeRoot, ROOT_NAMES, type GateDeps } from './root-state';
 import { NEXT_REV } from './schema';
 import type { Roots, SharedFoldersDeps } from './service';
 
 export type PromoteDeps = Pick<SharedFoldersDeps, 'db' | 'hashFile' | 'trash' | 'log'> & Pick<GateDeps, 'gateChanged'> & {
   roots: Roots;
-  /** True for a file this device itself moved or removed (see the empty-root rule). */
-  explained?: (root: SharedRoot, rel: string) => boolean;
   /** False once the role this pass started under has changed. */
   still?: () => boolean;
 };
@@ -33,9 +32,8 @@ export type ReconcileResult = 'done' | 'owed';
 type Row = FileRow & { parked: number };
 
 async function reconcileRoot(d: PromoteDeps, root: SharedRoot, base: string): Promise<ReconcileResult> {
-  const explained = (rel: string): boolean => d.explained?.(root, rel) ?? false;
   if (!(await readable(base))) {
-    await judgeRoot(d, root, { readable: false, rows: [], explained, evidence: true });
+    await judgeRoot(d, root, { readable: false, rows: [], explained: () => false, evidence: true });
     return 'owed';
   }
   const rows = new Map(
@@ -49,6 +47,8 @@ async function reconcileRoot(d: PromoteDeps, root: SharedRoot, base: string): Pr
     )) as unknown as MirrorRow[]).map((r) => [r.rel_path, r]),
   );
   const disk = await readDisk(d, base, mirror);
+  const gone = explainedRels(await loadOps(d.db, root));
+  const explained = (rel: string): boolean => gone.has(rel);
   // An empty mount point is not an empty folder: this Mac had files here and
   // now lists none while the manifest has live ones.
   if (
@@ -119,6 +119,9 @@ async function reconcileRoot(d: PromoteDeps, root: SharedRoot, base: string): Pr
         d.log('warn', `could not move ${root}/${rel} to the Trash: ${String(err)}`);
       }
     } else if (!f) {
+      // A file this device itself moved or removed is not "never fetched": the
+      // scan that follows tombstones its row and uses up the explanation.
+      if (explained(rel)) continue;
       if (!r.missing_here) markMissing(rel);
       dropMirror(rel);
     } else if (f.sha === r.sha256) {

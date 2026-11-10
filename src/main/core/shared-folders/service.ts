@@ -205,19 +205,11 @@ export async function createSharedFolders(deps: SharedFoldersDeps): Promise<Shar
   };
   const maxRev = async (): Promise<number> =>
     Number((await deps.db.all(`SELECT coalesce(max(rev), 0) AS m FROM shared_files`))[0]?.m ?? 0);
-  const pendingNotes = new Map<string, string>();
-  const explained = new Set<string>();
-  const isExplained = (root: SharedRoot, rel: string): boolean => explained.has(`${root}/${rel}`);
-  const takeNote = (sha: string): string | null => {
-    const note = pendingNotes.get(sha) ?? null;
-    pendingNotes.delete(sha);
-    return note;
-  };
   /** Runs the promotion reconcile if one is owed. Only from inside the queue. */
   const reconcileIfPending = async (still: () => boolean): Promise<void> => {
     if (owed.size === 0) return;
     const gen = pendingGen;
-    const result = await reconcileAtPromotion({ ...deps, roots, explained: isExplained, gateChanged, still });
+    const result = await reconcileAtPromotion({ ...deps, roots, gateChanged, still });
     if (gen !== pendingGen || !still()) return; // became a copy again meanwhile: still owed
     let changed = false;
     for (const r of ROOT_NAMES) if (result[r] === 'done' && owed.delete(r)) changed = true;
@@ -255,8 +247,7 @@ export async function createSharedFolders(deps: SharedFoldersDeps): Promise<Shar
       // eslint-disable-next-line no-await-in-loop
       if (base && !owed.has(root)) {
         // eslint-disable-next-line no-await-in-loop
-        await scanRoot({ ...deps, takeNote, explained: isExplained, gateChanged, still }, root, base);
-        for (const key of [...explained]) if (key.startsWith(`${root}/`)) explained.delete(key);
+        await scanRoot({ ...deps, gateChanged, still }, root, base);
       }
     }
     if ((await maxRev()) !== before) fire();
@@ -314,7 +305,7 @@ export async function createSharedFolders(deps: SharedFoldersDeps): Promise<Shar
     return rows[0] ? String(rows[0].id) : null;
   };
 
-  const captures = createCaptures({ deps, roots: () => roots, accountId, kick, pendingNotes, explained });
+  const captures = createCaptures({ deps, roots: () => roots, accountId, kick });
   const serve = createServe({
     deps,
     roots: () => roots,
@@ -327,11 +318,10 @@ export async function createSharedFolders(deps: SharedFoldersDeps): Promise<Shar
     },
     quick: async (root) => {
       const base = roots[root];
-      if (base && (await quickCheck({ ...deps, gateChanged }, root, base, (rel) => isExplained(root, rel))) === 'paused')
+      if (base && (await quickCheck({ ...deps, gateChanged }, root, base)) === 'paused')
         throw new SharedRootPaused(root, 'paused');
     },
     kick,
-    explained,
   });
   const api: SharedFolders = {
     mode,

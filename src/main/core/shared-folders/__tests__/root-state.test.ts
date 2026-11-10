@@ -58,6 +58,15 @@ describe('a paused root accepts nothing and stays paused', () => {
     expect(fs.readdirSync(sorted)).toEqual([]);
   });
 
+  it('a root emptied by this Mac\'s own move is not paused for a request', async () => {
+    const { d, incoming } = await populated();
+    write(path.join(incoming, 'in.pdf'), 'scan');
+    await scan(d);
+    fs.rmSync(path.join(incoming, 'in.pdf'));
+    await d.db.run(`INSERT INTO shared_pending(kind, root, rel_path) VALUES('moved', 'incoming', 'in.pdf')`);
+    await expect(d.svc.serve.stagingFile('incoming')).resolves.toContain('.kia-sync');
+  });
+
   it('open and remove are refused too', async () => {
     const { d, sorted } = await populated();
     unmount(sorted);

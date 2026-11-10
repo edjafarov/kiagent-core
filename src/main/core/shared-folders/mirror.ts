@@ -16,6 +16,7 @@ import {
   type MirrorRow,
 } from './leader-scan';
 import { safeAbs, STAGING_DIR, type SharedRoot } from './paths';
+import { DELETE_OP, noteFor } from './pending';
 import { judgeRoot, type GateDeps } from './root-state';
 import type { Roots, SharedFoldersDeps, SharedTransport } from './service';
 
@@ -115,21 +116,6 @@ async function mirrorRoot(
   )
     return;
 
-  const setMirror = async (
-    rel: string,
-    f: DiskFile,
-    sha: string,
-    capture: string | null,
-  ): Promise<void> => {
-    await d.db.run(UPSERT_MIRROR, [
-      root,
-      rel,
-      sha,
-      f.stats.size,
-      f.mtimeMs,
-      capture,
-    ]);
-  };
   const dropMirror = async (rel: string): Promise<void> => {
     await d.db.run(
       `DELETE FROM shared_mirror WHERE root = ? AND rel_path = ?`,
@@ -207,6 +193,10 @@ async function mirrorRoot(
     await forPath(rel, async () => {
       const f = disk.files.get(rel)!;
       const m = mirror.get(rel);
+      // A scan this Mac filed itself has no mirror entry yet: its capture id
+      // is in a note for these very bytes at this very path.
+      const note = m?.capture_id ? null : await noteFor(d.db, root, rel, f.sha);
+      const captureId = m?.capture_id ?? note?.capture_id ?? null;
       const answer = await viaTransport(
         transport.offer(
           {
@@ -214,7 +204,7 @@ async function mirrorRoot(
             relPath: rel,
             sha256: f.sha,
             base: m?.sha256 ?? null,
-            captureId: m?.capture_id ?? null,
+            captureId,
           },
           f.abs,
         ),
@@ -225,9 +215,13 @@ async function mirrorRoot(
         check(d);
         await d.trash(f.abs);
         await dropMirror(rel);
+        if (note) await d.db.run(DELETE_OP, [note.id]);
         return;
       }
-      await setMirror(rel, f, f.sha, m?.capture_id ?? null);
+      await d.db.batch([
+        { sql: UPSERT_MIRROR, params: [root, rel, f.sha, f.stats.size, f.mtimeMs, captureId] },
+        ...(note ? [{ sql: DELETE_OP, params: [note.id] }] : []),
+      ]);
     });
   }
   check(d);

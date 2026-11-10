@@ -2,6 +2,7 @@
  *  sorting has put the file. The note ("this file is that capture") lives on
  *  the local mirror entry and follows the file when it moves. */
 import { SyncReadOnly } from '../sync/role';
+import { recordGone, recordNote } from './pending';
 import { safeAbs, toRel, type SharedRoot } from './paths';
 import type {
   Roots,
@@ -15,18 +16,12 @@ export interface CaptureCtx {
   roots(): Roots;
   accountId(): Promise<string | null>;
   kick(): void;
-  /** Capture notes waiting for the scan to write the mirror entry of a moved file, by hash. */
-  pendingNotes: Map<string, string>;
-  /** Paths this device made go away; the scan believes an emptied folder when they explain it. */
-  explained: Set<string>;
 }
 
 type Captures = Pick<
   SharedFoldersApi,
   'registerCapture' | 'noteCapture' | 'moved' | 'fileOfCapture'
 >;
-
-const MAX_PENDING = 1000;
 
 const locate = (
   roots: Roots,
@@ -61,11 +56,17 @@ export function createCaptures(ctx: CaptureCtx): Captures {
           [at.root, at.rel],
         )
       )[0];
-      if (!m || String(m.sha256) !== sha256) return false;
-      await db.run(
-        `UPDATE shared_mirror SET capture_id = ? WHERE root = ? AND rel_path = ?`,
-        [captureId, at.root, at.rel],
-      );
+      if (m && String(m.sha256) === sha256) {
+        await db.run(
+          `UPDATE shared_mirror SET capture_id = ? WHERE root = ? AND rel_path = ?`,
+          [captureId, at.root, at.rel],
+        );
+        return true;
+      }
+      // No entry with these bytes yet (a scan has not listed the file, or this
+      // Mac is a copy that has not offered it): remembered until one appears.
+      await recordNote(db, { root: at.root, rel: at.rel }, sha256, captureId);
+      ctx.kick();
       return true;
     },
 
@@ -73,34 +74,20 @@ export function createCaptures(ctx: CaptureCtx): Captures {
       const roots = ctx.roots();
       const from = locate(roots, fromAbs);
       const to = locate(roots, toAbsPath);
-      if (from) ctx.explained.add(`${from.root}/${from.rel}`);
-      if (from && to) {
+      if (from) {
         const old = (
           await db.all(
             `SELECT sha256, capture_id FROM shared_mirror WHERE root = ? AND rel_path = ?`,
             [from.root, from.rel],
           )
         )[0];
-        if (old?.capture_id) {
-          const sha = String(old.sha256);
-          const now = (
-            await db.all(
-              `SELECT sha256 FROM shared_mirror WHERE root = ? AND rel_path = ?`,
-              [to.root, to.rel],
-            )
-          )[0];
-          if (now && String(now.sha256) === sha) {
-            await db.run(
-              `UPDATE shared_mirror SET capture_id = ? WHERE root = ? AND rel_path = ?`,
-              [String(old.capture_id), to.root, to.rel],
-            );
-          } else {
-            // The scan has not listed the new path yet; it takes the note when it does.
-            ctx.pendingNotes.set(sha, String(old.capture_id));
-            if (ctx.pendingNotes.size > MAX_PENDING)
-              ctx.pendingNotes.delete(ctx.pendingNotes.keys().next().value!);
-          }
-        }
+        const row = old
+          ? null
+          : (await db.all(`SELECT sha256 FROM shared_files WHERE root = ? AND rel_path = ?`, [from.root, from.rel]))[0];
+        const sha = String(old?.sha256 ?? row?.sha256 ?? '');
+        await recordGone(db, 'moved', { root: from.root, rel: from.rel }, sha, to);
+        // The note follows the bytes to where the file went.
+        if (old?.capture_id && to) await recordNote(db, to, sha, String(old.capture_id));
       }
       ctx.kick();
     },

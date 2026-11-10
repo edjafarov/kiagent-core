@@ -7,6 +7,7 @@ import path from 'node:path';
 
 import { SyncReadOnly } from '../sync/role';
 import { UPSERT_MIRROR } from './leader-scan';
+import { recordGone } from './pending';
 import { NEXT_REV } from './schema';
 import { normalizeRel, safeAbs, STAGING_DIR, toAbs, type SharedRoot } from './paths';
 import type { FileQuery, OfferAnswer, OfferMeta, Roots, SharedFoldersApi, SharedFoldersDeps } from './service';
@@ -28,8 +29,6 @@ export interface ServeCtx {
    *  `SharedRootPaused` when the root is not there or has just emptied. */
   quick(root: SharedRoot): Promise<void>;
   kick(): void;
-  /** Paths this device made go away (see the scan's empty-root rule). */
-  explained: Set<string>;
 }
 
 type Serve = SharedFoldersApi['serve'];
@@ -273,7 +272,7 @@ export function createServe(ctx: ServeCtx): Serve {
         if ((await shaAt(ctx, root, rel, abs)) !== q.sha256) return false;
         stillLeader(still, 'serve.remove');
         await ctx.deps.trash(abs);
-        ctx.explained.add(`${root}/${rel}`);
+        await recordGone(ctx.deps.db, 'removed', { root, rel }, q.sha256, null);
         ctx.kick();
         return true;
       });

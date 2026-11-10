@@ -42,11 +42,11 @@ describe('registerCapture and noteCapture', () => {
     write(path.join(incoming, 'scan.pdf'), 'bytes');
     await scan(d);
     const abs = path.join(incoming, 'scan.pdf');
-    expect(await d.svc.noteCapture('c1', abs, sha('other'))).toBe(false);
+    // other bytes than the entry has: remembered for those bytes, attached to nothing now
+    expect(await d.svc.noteCapture('c1', abs, sha('other'))).toBe(true);
     expect(await captureOf(d, 'incoming', 'scan.pdf')).toBeNull();
     expect(await d.svc.noteCapture('c1', abs, sha('bytes'))).toBe(true);
     expect(await captureOf(d, 'incoming', 'scan.pdf')).toBe('c1');
-    expect(await d.svc.noteCapture('c1', path.join(incoming, 'none.pdf'), sha('bytes'))).toBe(false);
     expect(await d.svc.noteCapture('c1', path.join(d.dir, 'elsewhere.pdf'), sha('bytes'))).toBe(false);
     expect(await d.svc.noteCapture('c1', path.join(incoming, '.kia-sync', 'x'), sha('bytes'))).toBe(false);
   });

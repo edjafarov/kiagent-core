@@ -1,6 +1,6 @@
 import type BetterSqlite3 from 'better-sqlite3';
 
-import { SHARED_FOLDERS_DDL } from '../shared-folders/schema';
+import { SHARED_FOLDERS_DDL, SHARED_PENDING_DDL } from '../shared-folders/schema';
 import { PDF_OCR_AFTER_STATUSES } from '@main/workers/convert/outcome';
 import { VISUAL_EXTS } from '@main/workers/vision/classify';
 import {
@@ -1417,6 +1417,10 @@ const MIGRATIONS: Migration[] = [
   // and Sorted folders and the registered scan captures are copied; the mirror
   // (what this Mac last had in agreement with the manifest) is local.
   SHARED_FOLDERS_DDL,
+  // v25: what this Mac moved, removed or noted in the shared folders and the
+  // next scan must still account for (a move not yet seen, a capture note not
+  // yet attached). Local, not synced.
+  SHARED_PENDING_DDL,
 ];
 
 /**
