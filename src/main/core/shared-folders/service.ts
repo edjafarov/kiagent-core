@@ -8,7 +8,7 @@ import { migrateLocalFolders, type LocalFolderAccess } from './migrate';
 import { scanRoot } from './leader-scan';
 import { mirrorPass } from './mirror';
 import { listSortable, reconcileAtPromotion } from './promote';
-import { normalizeRel, safeAbs, toRel, type SharedRoot } from './paths';
+import { nameKey, normalizeRel, safeAbs, toRel, type SharedRoot } from './paths';
 import { loadRootSet, OWED_KEY, PAUSED_KEY, quickCheck, ROOT_NAMES, saveRootSet, SharedRootPaused } from './root-state';
 import { createServe } from './serve';
 import { loadUnparsed, reportUnparsed, restamp, type Unparsed } from './unparsed';
@@ -95,6 +95,10 @@ export interface SharedFoldersDeps {
   /** The Mac's `local-folder` accounts, for the one-time move of the
    *  documents they hold under a folder that has become a shared root. */
   localFolders?: LocalFolderAccess;
+  /** The platform whose file-name rules apply; default `process.platform`.
+   *  On macOS and Windows, names that differ only in case (or Unicode
+   *  normalisation) are one file. Injected so tests cover both rules. */
+  platform?: NodeJS.Platform;
   /** How often a copy tries again without being told to (a failed transport,
    *  a join that finished). Default 60 000. */
   retryMs?: number;
@@ -330,7 +334,7 @@ export async function createSharedFolders(deps: SharedFoldersDeps): Promise<Shar
     },
     quick: async (root) => {
       const base = roots[root];
-      if (base && (await quickCheck({ ...deps, gateChanged }, root, base)) === 'paused')
+      if (base && (await quickCheck({ ...deps, gateChanged }, root, base, nameKey(deps.platform))) === 'paused')
         throw new SharedRootPaused(root, 'paused');
     },
     kick,

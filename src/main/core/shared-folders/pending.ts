@@ -1,6 +1,6 @@
 /** The pending operations table (see `SHARED_PENDING_DDL`). */
 import type { AppDb } from '../../db/app-db';
-import type { SharedRoot } from './paths';
+import type { NameKey, SharedRoot } from './paths';
 
 export interface PendingOp {
   id: number;
@@ -22,8 +22,8 @@ export async function loadOps(db: AppDb, root: SharedRoot): Promise<PendingOp[]>
 }
 
 /** The files of `root` whose disappearance this device explains. */
-export const explainedRels = (ops: readonly PendingOp[]): Set<string> =>
-  new Set(ops.filter((o) => o.kind !== 'note').map((o) => o.rel_path));
+export const explainedRels = (ops: readonly PendingOp[], key: NameKey = (rel) => rel): Set<string> =>
+  new Set(ops.filter((o) => o.kind !== 'note').map((o) => key(o.rel_path)));
 
 export async function recordGone(
   db: AppDb,

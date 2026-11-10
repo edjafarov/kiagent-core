@@ -6,7 +6,7 @@ import fs from 'node:fs';
 
 import type { AppDb } from '../../db/app-db';
 import { explainedRels, loadOps } from './pending';
-import { STAGING_DIR, type SharedRoot } from './paths';
+import { STAGING_DIR, type NameKey, type SharedRoot } from './paths';
 
 export const ROOT_NAMES: readonly SharedRoot[] = ['incoming', 'sorted'];
 
@@ -165,6 +165,7 @@ export async function quickCheck(
   d: GateDeps,
   root: SharedRoot,
   base: string,
+  key: NameKey = (rel) => rel,
 ): Promise<'ok' | 'paused'> {
   let top: string[];
   try {
@@ -178,8 +179,8 @@ export async function quickCheck(
     `SELECT rel_path FROM shared_files WHERE root = ? AND deleted = 0 AND missing_here = 0`,
     [root],
   )) as unknown as { rel_path: string }[];
-  const gone = explainedRels(await loadOps(d.db, root));
-  if (rows.every((r) => gone.has(r.rel_path))) return 'ok';
+  const gone = explainedRels(await loadOps(d.db, root), key);
+  if (rows.every((r) => gone.has(key(r.rel_path)))) return 'ok';
   await setPaused(d, root, true, 'lists no file at all');
   return 'paused';
 }

@@ -9,11 +9,11 @@ import { SyncReadOnly } from '../sync/role';
 import { UPSERT_MIRROR } from './leader-scan';
 import { recordGone } from './pending';
 import { NEXT_REV } from './schema';
-import { normalizeRel, safeAbs, STAGING_DIR, toAbs, type SharedRoot } from './paths';
+import { nameKey, normalizeRel, safeAbs, STAGING_DIR, toAbs, type SharedRoot } from './paths';
 import type { FileQuery, OfferAnswer, OfferMeta, Roots, SharedFoldersApi, SharedFoldersDeps } from './service';
 
 export interface ServeCtx {
-  deps: Pick<SharedFoldersDeps, 'db' | 'hashFile' | 'trash' | 'log'>;
+  deps: Pick<SharedFoldersDeps, 'db' | 'hashFile' | 'trash' | 'log' | 'platform'>;
   roots(): Roots;
   /** True while this device is the writable leader. */
   leader(): boolean;
@@ -97,6 +97,27 @@ export function createServe(ctx: ServeCtx): Serve {
       const rel = path.relative(path.join(base, STAGING_DIR), tmp);
       return rel !== '' && !rel.startsWith('..') && !path.isAbsolute(rel);
     });
+  const key = nameKey(ctx.deps.platform);
+  const folds = key('Ab') !== 'Ab';
+  /** The manifest row of a path: that spelling, or on macOS and Windows any
+   *  spelling of the name (a live row before a tombstone). */
+  const rowAt = async (
+    root: SharedRoot,
+    rel: string,
+  ): Promise<{ rel_path: string; sha256: string; deleted: number; missing_here: number } | undefined> => {
+    const db = ctx.deps.db;
+    const exact = (await db.all(
+      `SELECT rel_path, sha256, deleted, missing_here FROM shared_files WHERE root = ? AND rel_path = ?`,
+      [root, rel],
+    ))[0];
+    if (!folds || (exact && !exact.deleted)) return exact as never;
+    const k = key(rel);
+    const all = (await db.all(`SELECT rel_path, sha256, deleted, missing_here FROM shared_files WHERE root = ?`, [
+      root,
+    ])) as unknown as { rel_path: string; sha256: string; deleted: number; missing_here: number }[];
+    const hits = all.filter((r) => key(r.rel_path) === k);
+    return hits.find((r) => !r.deleted) ?? hits[0];
+  };
   const stillLeader = (still: () => boolean, what: string): void => {
     if (!still()) throw new SyncReadOnly(what);
   };
@@ -117,10 +138,7 @@ export function createServe(ctx: ServeCtx): Serve {
         await ctx.quick(root);
         // Only the version the manifest names, and only where this Mac holds
         // those bytes: a new leader's older copy of a file is not served.
-        const row = (await ctx.deps.db.all(
-          `SELECT sha256, deleted, missing_here FROM shared_files WHERE root = ? AND rel_path = ?`,
-          [root, rel],
-        ))[0];
+        const row = await rowAt(root, rel);
         if (!row || row.deleted || row.missing_here || String(row.sha256) !== q.sha256) return null;
         if ((await shaAt(ctx, root, rel, abs)) !== q.sha256) return null;
         return { path: abs, bytes: (await fs.promises.stat(abs)).size };
@@ -255,10 +273,7 @@ export function createServe(ctx: ServeCtx): Serve {
           () => false,
         );
         // eslint-disable-next-line no-await-in-loop
-        const listed = (await db.all(`SELECT 1 FROM shared_files WHERE root = ? AND rel_path = ? AND deleted = 0`, [
-          root,
-          candidate,
-        ])).length > 0;
+        const listed = (await rowAt(root, candidate))?.deleted === 0;
         if (taken || listed) continue;
         guard();
         // eslint-disable-next-line no-await-in-loop

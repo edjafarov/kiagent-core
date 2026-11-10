@@ -15,14 +15,15 @@ import {
   type FileRow,
   type MirrorRow,
 } from './leader-scan';
-import { safeAbs, STAGING_DIR, type SharedRoot } from './paths';
+import { groupByName, type Group as G } from './groups';
+import { nameKey, safeAbs, STAGING_DIR, type SharedRoot } from './paths';
 import { DELETE_OP, noteFor } from './pending';
 import { judgeRoot, type GateDeps } from './root-state';
 import type { Roots, SharedFoldersDeps, SharedTransport } from './service';
 
 export type MirrorDeps = Pick<
   SharedFoldersDeps,
-  'db' | 'hashFile' | 'trash' | 'log'
+  'db' | 'hashFile' | 'trash' | 'log' | 'platform'
 > &
   Pick<GateDeps, 'gateChanged'> & {
     roots: Roots;
@@ -37,7 +38,7 @@ const check = (d: MirrorDeps): void => {
 };
 
 type Row = FileRow & { bytes: number; mtime: string };
-
+type Group = G<DiskFile & { rel: string }, MirrorRow, Row>;
 /** The network failed: the pass ends and is retried later. Anything else that
  *  goes wrong is about one path, and only that path is skipped. */
 class TransportFailed extends Error {
@@ -89,32 +90,29 @@ async function mirrorRoot(
     await judgeRoot(d, root, { readable: false, rows: [], explained, evidence: true });
     return;
   }
-  const rows = new Map(
-    (
-      (await d.db.all(
-        `SELECT rel_path, sha256, bytes, mtime, missing_here, deleted FROM shared_files WHERE root = ?`,
-        [root],
-      )) as unknown as Row[]
-    ).map((r) => [r.rel_path, r]),
-  );
-  const mirror = new Map(
-    (
-      (await d.db.all(
-        `SELECT rel_path, sha256, bytes, mtime_ms, capture_id FROM shared_mirror WHERE root = ?`,
-        [root],
-      )) as unknown as MirrorRow[]
-    ).map((r) => [r.rel_path, r]),
-  );
-  const disk = await readDisk(d, base, mirror);
+  const key = nameKey(d.platform);
+  const rowList = (await d.db.all(
+    `SELECT rel_path, sha256, bytes, mtime, missing_here, deleted FROM shared_files WHERE root = ?`,
+    [root],
+  )) as unknown as Row[];
+  const mirrorList = (await d.db.all(
+    `SELECT rel_path, sha256, bytes, mtime_ms, capture_id FROM shared_mirror WHERE root = ?`,
+    [root],
+  )) as unknown as MirrorRow[];
+  const mirrorByKey = new Map(mirrorList.map((r) => [key(r.rel_path), r]));
+  const disk = await readDisk(d, base, mirrorByKey, key);
 
   // A root that is not trusted right now (an unmounted volume leaves an empty
   // mount point) sends nothing and removes nothing; a new copy with no file
   // yet is not that, it fetches.
   if (
-    (await judgeRoot(d, root, { readable: true, rows: rows.values(), disk, explained, evidence: mirror.size > 0 })) ===
+    (await judgeRoot(d, root, { readable: true, rows: rowList, disk, explained, evidence: mirrorList.length > 0 })) ===
     'paused'
   )
     return;
+
+  const groups = groupByName(key, [...disk.files].map(([rel, f]) => ({ ...f, rel })), mirrorList, rowList);
+  const seenKeys = new Set([...disk.seen].map(key));
 
   const dropMirror = async (rel: string): Promise<void> => {
     await d.db.run(
@@ -123,56 +121,51 @@ async function mirrorRoot(
     );
   };
 
-  const offers: string[] = [];
-  const trashes: string[] = [];
-  const removals: string[] = [];
-  const fetches: string[] = [];
+  const offers: Group[] = [];
+  const trashes: Group[] = [];
+  const removals: Group[] = [];
+  const fetches: Group[] = [];
   const refresh: BatchStep[] = [];
-  const drops: string[] = [];
+  const drops: Group[] = [];
 
-  const rels = new Set([
-    ...disk.files.keys(),
-    ...mirror.keys(),
-    ...rows.keys(),
-  ]);
-  for (const rel of [...rels].sort()) {
-    const f = disk.files.get(rel);
-    const m = mirror.get(rel);
-    const r = rows.get(rel);
+  for (const k of [...groups.keys()].sort()) {
+    const g = groups.get(k)!;
+    const { f, m, r } = g;
     // Unreadable, or possibly in a folder that could not be listed: no proof of absence.
-    if (!f && (disk.seen.has(rel) || disk.incomplete)) continue;
+    if (!f && (seenKeys.has(k) || disk.incomplete)) continue;
     const live = r && !r.deleted;
     const here = live && !r.missing_here; // the leader holds these bytes
+    const mrel = m?.rel_path ?? f?.rel ?? r?.rel_path ?? ''; // a mirror entry keeps its spelling
 
     if (f && m) {
       if (f.sha !== m.sha256)
-        offers.push(rel); // changed here: offered first, nothing else for this path
+        offers.push(g); // changed here: offered first, nothing else for this path
       else if (!r)
-        offers.push(rel); // the leader has never seen it
-      else if (r.deleted) trashes.push(rel);
+        offers.push(g); // the leader has never seen it
+      else if (r.deleted) trashes.push(g);
       else if (r.missing_here) {
-        if (r.sha256 === f.sha) offers.push(rel); // the leader lacks these bytes: supply them
+        if (r.sha256 === f.sha) offers.push(g); // the leader lacks these bytes: supply them
       } else {
-        if (r.sha256 !== f.sha) fetches.push(rel);
+        if (r.sha256 !== f.sha) fetches.push(g);
         if (m.bytes !== f.stats.size || m.mtime_ms !== f.mtimeMs)
           refresh.push({
             sql: UPSERT_MIRROR,
-            params: [root, rel, f.sha, f.stats.size, f.mtimeMs, m.capture_id],
+            params: [root, mrel, f.sha, f.stats.size, f.mtimeMs, m.capture_id],
           });
       }
     } else if (f) {
-      if (!live) offers.push(rel);
+      if (!live) offers.push(g);
       else if (r.sha256 === f.sha && !r.missing_here) {
         refresh.push({
           sql: UPSERT_MIRROR,
-          params: [root, rel, f.sha, f.stats.size, f.mtimeMs, null],
+          params: [root, mrel, f.sha, f.stats.size, f.mtimeMs, null],
         }); // adopt
-      } else offers.push(rel);
+      } else offers.push(g);
     } else if (m) {
-      if (here && r.sha256 === m.sha256) removals.push(rel);
-      else if (here) fetches.push(rel);
-      else if (!live) drops.push(rel);
-    } else if (here) fetches.push(rel);
+      if (here && r.sha256 === m.sha256) removals.push(g);
+      else if (here) fetches.push(g);
+      else if (!live) drops.push(g);
+    } else if (here) fetches.push(g);
   }
 
   const forPath = async (
@@ -188,20 +181,21 @@ async function mirrorRoot(
     }
   };
 
-  for (const rel of offers) {
+  for (const g of offers) {
+    const f = g.f!;
     // eslint-disable-next-line no-await-in-loop
-    await forPath(rel, async () => {
-      const f = disk.files.get(rel)!;
-      const m = mirror.get(rel);
+    await forPath(f.rel, async () => {
+      const { m, r } = g;
       // A scan this Mac filed itself has no mirror entry yet: its capture id
       // is in a note for these very bytes at this very path.
-      const note = m?.capture_id ? null : await noteFor(d.db, root, rel, f.sha);
+      const note = m?.capture_id ? null : await noteFor(d.db, root, f.rel, f.sha);
       const captureId = m?.capture_id ?? note?.capture_id ?? null;
       const answer = await viaTransport(
         transport.offer(
           {
             root,
-            relPath: rel,
+            // the leader's own spelling when it has the file, else ours
+            relPath: r?.rel_path ?? f.rel,
             sha256: f.sha,
             base: m?.sha256 ?? null,
             captureId,
@@ -210,60 +204,59 @@ async function mirrorRoot(
         ),
       );
       check(d);
+      const mrel = m?.rel_path ?? f.rel;
       if (answer === 'have-it') {
         if ((await d.hashFile(f.abs)) !== f.sha) return;
         check(d);
         await d.trash(f.abs);
-        await dropMirror(rel);
+        await dropMirror(mrel);
         if (note) await d.db.run(DELETE_OP, [note.id]);
         return;
       }
       await d.db.batch([
-        { sql: UPSERT_MIRROR, params: [root, rel, f.sha, f.stats.size, f.mtimeMs, captureId] },
+        { sql: UPSERT_MIRROR, params: [root, mrel, f.sha, f.stats.size, f.mtimeMs, captureId] },
         ...(note ? [{ sql: DELETE_OP, params: [note.id] }] : []),
       ]);
     });
   }
   check(d);
   if (refresh.length) await d.db.batch(refresh);
-  for (const rel of drops) {
+  for (const g of drops) {
     // eslint-disable-next-line no-await-in-loop
-    await dropMirror(rel);
+    await dropMirror(g.m!.rel_path);
   }
 
-  for (const rel of trashes) {
+  for (const g of trashes) {
+    const f = g.f!;
     // eslint-disable-next-line no-await-in-loop
-    await forPath(rel, async () => {
-      const abs = await safeAbs(base, rel);
-      const m = mirror.get(rel);
+    await forPath(f.rel, async () => {
+      const abs = await safeAbs(base, f.rel);
       // D = M proves the user did not touch it, also when this Mac missed an
       // edit before the deletion. Checked again just before it goes.
-      const now = await stillMirrored(d, abs, m);
+      const now = await stillMirrored(d, abs, g.m);
       if (now === 'changed') return;
       check(d);
       if (now === 'same') await d.trash(abs);
-      await dropMirror(rel);
+      await dropMirror(g.m!.rel_path);
     });
   }
 
-  for (const rel of removals) {
+  for (const g of removals) {
+    const m = g.m!;
     // eslint-disable-next-line no-await-in-loop
-    await forPath(rel, async () => {
-      const m = mirror.get(rel)!;
-      if ((await stillMirrored(d, await safeAbs(base, rel), m)) !== 'absent') return;
+    await forPath(m.rel_path, async () => {
+      if ((await stillMirrored(d, await safeAbs(base, m.rel_path), m)) !== 'absent') return;
       check(d);
       await viaTransport(
-        transport.remove({ root, relPath: rel, sha256: m.sha256 }),
+        transport.remove({ root, relPath: g.r!.rel_path, sha256: m.sha256 }),
       );
-      await dropMirror(rel);
+      await dropMirror(m.rel_path);
     });
   }
 
-  for (const rel of fetches) {
+  for (const g of fetches) {
     // eslint-disable-next-line no-await-in-loop
-    await forPath(rel, () =>
-      fetchOne(d, root, base, rel, rows.get(rel)!, mirror.get(rel), transport),
-    );
+    await forPath(g.r!.rel_path, () => fetchOne(d, root, base, g, transport));
   }
 }
 
@@ -271,11 +264,13 @@ async function fetchOne(
   d: MirrorDeps,
   root: SharedRoot,
   base: string,
-  rel: string,
-  r: Row,
-  m: MirrorRow | undefined,
+  g: Group,
   transport: SharedTransport,
 ): Promise<void> {
+  const r = g.r!;
+  const { m } = g;
+  // A file that is there keeps its own spelling; a new one gets the manifest's.
+  const rel = g.f?.rel ?? r.rel_path;
   const dest = await safeAbs(base, rel);
   const stage = path.join(base, STAGING_DIR);
   // Named by the hash, so a restart resumes at the length already there.
@@ -294,7 +289,7 @@ async function fetchOne(
   if (offset < r.bytes) {
     check(d);
     const got = await viaTransport(
-      transport.fetch({ root, relPath: rel, sha256: r.sha256 }, tmp, offset),
+      transport.fetch({ root, relPath: r.rel_path, sha256: r.sha256 }, tmp, offset),
     );
     if (got === 'gone') return; // the leader moved on: wait for the next rows
   }
@@ -316,7 +311,7 @@ async function fetchOne(
   const st = await fs.promises.stat(dest);
   await d.db.run(UPSERT_MIRROR, [
     root,
-    rel,
+    m?.rel_path ?? rel,
     r.sha256,
     st.size,
     Math.floor(st.mtimeMs),

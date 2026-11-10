@@ -9,6 +9,14 @@ export const STAGING_DIR = '.kia-sync';
 /** Posix separators and NFC: the form a `rel_path` is stored and compared in. */
 export const normalizeRel = (rel: string): string => rel.replaceAll('\\', '/').normalize('NFC');
 
+/** The key under which names are matched. macOS and Windows volumes are
+ *  usually case-insensitive, so `Taxes/a.pdf` and `taxes/a.pdf` are one file
+ *  there: the key is the NFC name in lower case. Elsewhere names match exactly.
+ *  Never a name to write to disk: spelling is kept as it is. */
+export type NameKey = (rel: string) => string;
+export const nameKey = (platform: NodeJS.Platform = process.platform): NameKey =>
+  platform === 'darwin' || platform === 'win32' ? (rel) => normalizeRel(rel).toLowerCase() : (rel) => rel;
+
 /** The manifest path of `abs` under `rootAbs`; null outside the root, for the
  *  root itself and for anything inside the staging directory. */
 export function toRel(rootAbs: string, abs: string): string | null {

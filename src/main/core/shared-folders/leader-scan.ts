@@ -5,13 +5,14 @@ import fs from 'node:fs';
 
 import type { BatchStep } from '../../db/app-db';
 import { walkRoot, type WalkTrouble } from '../../sources/local-folder/scanner';
-import { toRel, type SharedRoot } from './paths';
+import { nameKey, toRel, type NameKey, type SharedRoot } from './paths';
+import { groupByName } from './groups';
 import { DELETE_OP, explainedRels, loadOps } from './pending';
 import { judgeRoot, type GateDeps } from './root-state';
 import { NEXT_REV } from './schema';
 import type { SharedFoldersDeps } from './service';
 
-export type ScanDeps = Pick<SharedFoldersDeps, 'db' | 'hashFile' | 'log'> & Pick<GateDeps, 'gateChanged'> & {
+export type ScanDeps = Pick<SharedFoldersDeps, 'db' | 'hashFile' | 'log' | 'platform'> & Pick<GateDeps, 'gateChanged'> & {
   /** False once the role this pass started under has changed. Checked
    *  immediately before every manifest transaction. */
   still?: () => boolean;
@@ -61,7 +62,9 @@ export interface DiskFile {
 export async function readDisk(
   d: Pick<ScanDeps, 'hashFile'>,
   rootAbs: string,
+  /** By `key(rel)`. */
   mirror: ReadonlyMap<string, { sha256: string; bytes: number; mtime_ms: number }>,
+  key: NameKey = (rel) => rel,
 ): Promise<{ files: Map<string, DiskFile>; seen: Set<string>; incomplete: boolean }> {
   const trouble: WalkTrouble = { incomplete: false };
   const files = new Map<string, DiskFile>();
@@ -71,7 +74,7 @@ export async function readDisk(
     if (rel === null) continue;
     seen.add(rel);
     const mtimeMs = Math.floor(stats.mtimeMs);
-    const m = mirror.get(rel);
+    const m = mirror.get(key(rel));
     let sha: string;
     if (m && m.bytes === stats.size && m.mtime_ms === mtimeMs) sha = m.sha256;
     else {
@@ -97,97 +100,99 @@ export async function scanRoot(d: ScanDeps, root: SharedRoot, rootAbs: string): 
   }
   // What this device moved or removed, and the capture notes not attached yet:
   // remembered in the database until the transaction that commits what they explain.
+  const key = nameKey(d.platform);
   const ops = await loadOps(d.db, root);
-  const explainedSet = explainedRels(ops);
-  const explained = (rel: string): boolean => explainedSet.has(rel);
-  const notes = new Map(ops.filter((o) => o.kind === 'note').map((o) => [`${o.rel_path}\0${o.sha256}`, o]));
+  const explainedSet = explainedRels(ops, key);
+  const explained = (rel: string): boolean => explainedSet.has(key(rel));
+  const notes = new Map(ops.filter((o) => o.kind === 'note').map((o) => [`${key(o.rel_path)}\0${o.sha256}`, o]));
 
-  const rows = new Map(
-    ((await d.db.all(
-      `SELECT rel_path, sha256, bytes, missing_here, deleted FROM shared_files WHERE root = ?`, [root],
-    )) as unknown as FileRow[]).map((r) => [r.rel_path, r]),
-  );
-  const mirror = new Map(
-    ((await d.db.all(
-      `SELECT rel_path, sha256, bytes, mtime_ms, capture_id FROM shared_mirror WHERE root = ?`, [root],
-    )) as unknown as MirrorRow[]).map((r) => [r.rel_path, r]),
-  );
+  const rowList = (await d.db.all(
+    `SELECT rel_path, sha256, bytes, missing_here, deleted FROM shared_files WHERE root = ?`, [root],
+  )) as unknown as FileRow[];
+  const mirrorList = (await d.db.all(
+    `SELECT rel_path, sha256, bytes, mtime_ms, capture_id FROM shared_mirror WHERE root = ?`, [root],
+  )) as unknown as MirrorRow[];
   const flagged = (await d.db.all(`SELECT 1 FROM meta WHERE key = ?`, [INCOMING_SCANNED_KEY])).length > 0;
-  const park = root === 'incoming' && rows.size === 0 && !flagged ? 1 : 0;
+  const park = root === 'incoming' && rowList.length === 0 && !flagged ? 1 : 0;
 
-  const disk = await readDisk(d, rootAbs, mirror);
+  const disk = await readDisk(d, rootAbs, new Map(mirrorList.map((m) => [key(m.rel_path), m])), key);
   // A root that is not trusted right now (see `judgeRoot`: an unmounted volume
   // leaves an empty mount point) changes nothing: no tombstone, no mirror change.
-  if ((await judgeRoot(d, root, { readable: true, rows: rows.values(), disk, explained, evidence: true })) === 'paused')
+  if ((await judgeRoot(d, root, { readable: true, rows: rowList, disk, explained, evidence: true })) === 'paused')
     return;
   const trouble = { incomplete: disk.incomplete };
-  const seen = disk.seen;
+  const seenKeys = new Set([...disk.seen].map(key));
+  // One group per file, whatever the case of its name: a name that differs only
+  // in case is the same file on macOS and Windows, and gets no second live row.
+  const groups = groupByName(key, [...disk.files].map(([rel, f]) => ({ ...f, rel })), mirrorList, rowList);
   const units: BatchStep[][] = [];
   const unitOf = new Map<string, number>();
-  const put = (rel: string, steps: BatchStep[]): void => {
-    unitOf.set(rel, units.length);
+  const put = (k: string, steps: BatchStep[]): void => {
+    unitOf.set(k, units.length);
     units.push(steps);
   };
   const fresh: { rel: string; sha: string; bytes: number; mtimeMs: number; step: number }[] = [];
   const noted = new Map<string, string>();
 
-  for (const [rel, f] of disk.files) {
-    const { sha, stats, mtimeMs } = f;
-    const m = mirror.get(rel);
-    const r = rows.get(rel);
+  for (const [k, g] of groups) {
+    const { f, m, r } = g;
+    if (!f) continue;
+    const { sha, stats, mtimeMs, rel } = f;
+    const rrel = r?.rel_path ?? rel; // the manifest's spelling wins
+    const mrel = m?.rel_path ?? rel; // a mirror entry keeps its spelling
     const write = (mirrorCapture: string | null = m?.capture_id ?? null): BatchStep[] => {
       return [
-        { sql: UPSERT_ROW, params: [root, rel, sha, stats.size, f.iso, r ? 0 : park] },
-        { sql: UPSERT_MIRROR, params: [root, rel, sha, stats.size, mtimeMs, mirrorCapture] },
+        { sql: UPSERT_ROW, params: [root, rrel, sha, stats.size, f.iso, r ? 0 : park] },
+        { sql: UPSERT_MIRROR, params: [root, mrel, sha, stats.size, mtimeMs, mirrorCapture] },
       ];
     };
     const mirrorOnly = (): BatchStep[] =>
       m && m.sha256 === sha && m.bytes === stats.size && m.mtime_ms === mtimeMs
         ? []
-        : [{ sql: UPSERT_MIRROR, params: [root, rel, sha, stats.size, mtimeMs, m?.capture_id ?? null] }];
+        : [{ sql: UPSERT_MIRROR, params: [root, mrel, sha, stats.size, mtimeMs, m?.capture_id ?? null] }];
 
     if (!r) {
-      fresh.push({ rel, sha, bytes: stats.size, mtimeMs, step: units.length });
-      put(rel, write());
-    } else if (r.deleted) put(rel, write());
+      fresh.push({ rel: mrel, sha, bytes: stats.size, mtimeMs, step: units.length });
+      put(k, write());
+    } else if (r.deleted) put(k, write());
     else if (r.missing_here) {
-      if (sha === r.sha256) put(rel, write());
+      if (sha === r.sha256) put(k, write());
       else if (m && m.sha256 === sha) {
         // an older version of the row's file: not the leader's to publish
-      } else put(rel, write());
+      } else put(k, write());
     } else if (sha === r.sha256) {
       const step = mirrorOnly();
-      if (step.length) put(rel, step);
-    } else put(rel, write());
+      if (step.length) put(k, step);
+    } else put(k, write());
 
     // A capture note for these very bytes at this very path joins the mirror
     // entry in the transaction that writes (or finds) it, and is used up there.
-    const note = notes.get(`${rel}\0${sha}`);
+    const note = notes.get(`${key(rel)}\0${sha}`);
     if (note) {
       const steps: BatchStep[] = [];
       if (!m?.capture_id)
         steps.push({
           sql: `UPDATE shared_mirror SET capture_id = ? WHERE root = ? AND rel_path = ? AND capture_id IS NULL`,
-          params: [note.capture_id, root, rel],
+          params: [note.capture_id, root, mrel],
         });
       steps.push({ sql: DELETE_OP, params: [note.id] });
-      const at = unitOf.get(rel);
+      const at = unitOf.get(k);
       if (at !== undefined) units[at].push(...steps);
-      else put(rel, steps);
+      else put(k, steps);
     }
   }
 
   if (!trouble.incomplete) {
-    const gone: MirrorRow[] = [];
-    for (const [rel, m] of mirror) if (!seen.has(rel)) gone.push(m);
+    const gone: MirrorRow[] = mirrorList.filter((m) => !seenKeys.has(key(m.rel_path)));
     const used = new Set<number>();
-    for (const [rel, r] of rows) {
-      if (seen.has(rel) || r.deleted || r.missing_here) continue;
+    for (const [k, g] of groups) {
+      const r = g.r;
+      if (!r || g.f || seenKeys.has(k) || r.deleted || r.missing_here) continue;
       // The move or removal that explains this absence is used up with the tombstone.
-      const why = ops.filter((o) => o.kind !== 'note' && o.rel_path === rel);
+      const why = ops.filter((o) => o.kind !== 'note' && key(o.rel_path) === key(r.rel_path));
       for (const o of why) used.add(o.id);
       units.push([
-        { sql: `UPDATE shared_files SET deleted = 1, rev = ${NEXT_REV} WHERE root = ? AND rel_path = ?`, params: [root, rel] },
+        { sql: `UPDATE shared_files SET deleted = 1, rev = ${NEXT_REV} WHERE root = ? AND rel_path = ?`, params: [root, r.rel_path] },
         ...why.map((o) => ({ sql: DELETE_OP, params: [o.id] })),
       ]);
     }
@@ -195,11 +200,11 @@ export async function scanRoot(d: ScanDeps, root: SharedRoot, rootAbs: string): 
     // file is back) is dropped.
     for (const o of ops) {
       if (o.kind === 'note' || used.has(o.id)) continue;
-      const r = rows.get(o.rel_path);
-      if (!r || r.deleted || r.missing_here || seen.has(o.rel_path)) units.push([{ sql: DELETE_OP, params: [o.id] }]);
+      const r = groups.get(key(o.rel_path))?.r;
+      if (!r || r.deleted || r.missing_here || seenKeys.has(key(o.rel_path))) units.push([{ sql: DELETE_OP, params: [o.id] }]);
     }
     for (const m of gone) {
-      const row = rows.get(m.rel_path);
+      const row = groups.get(key(m.rel_path))?.r;
       if (row?.missing_here) continue;
       units.push([{ sql: `DELETE FROM shared_mirror WHERE root = ? AND rel_path = ?`, params: [root, m.rel_path] }]);
     }
@@ -212,9 +217,8 @@ export async function scanRoot(d: ScanDeps, root: SharedRoot, rootAbs: string): 
     }
   }
 
-  // A file that came from another root has its note in the service's hands.
+  // A rename on this Mac: the note of the entry that vanished follows the bytes.
   for (const f of fresh) {
-    if (mirror.has(f.rel)) continue;
     const capture = noted.get(f.sha);
     if (!capture) continue;
     noted.delete(f.sha);
