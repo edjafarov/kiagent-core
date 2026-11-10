@@ -11,6 +11,7 @@ import { listSortable, reconcileAtPromotion } from './promote';
 import { normalizeRel, safeAbs, toRel, type SharedRoot } from './paths';
 import { loadRootSet, OWED_KEY, PAUSED_KEY, quickCheck, ROOT_NAMES, saveRootSet, SharedRootPaused } from './root-state';
 import { createServe } from './serve';
+import { loadUnparsed, reportUnparsed, restamp, type Unparsed } from './unparsed';
 import { watchRoot, type RootWatcher } from './watch';
 
 export type { SharedRoot } from './paths';
@@ -52,6 +53,11 @@ export interface SharedFoldersApi {
    *  reconcile finished (the sorter asks `listForSorting` again). */
   onChange(cb: () => void): () => void;
   listForSorting(): Promise<string[]>;
+  /** The source could not turn these rows into documents (the file was not
+   *  readable, or not the bytes the row names). They get a new revision, so
+   *  the source sees them again, once the file can be opened and the file's
+   *  stat has changed or a minute has passed since they were reported. */
+  reportUnparsed(refs: { root: SharedRoot; relPath: string }[]): Promise<void>;
   /** False while the root is owed its reconcile (a new leader that has not
    *  checked it yet, or whose folder is not there, or lists nothing): nothing is scanned,
    *  sorted, served or indexed for it. Synchronous: the source reads it per row. */
@@ -109,6 +115,7 @@ export const ROOTS_META_KEY = 'shared-folders:roots';
  *  reconciles first. Local, so it survives a restart between the two. */
 export const RECONCILE_PENDING_KEY = OWED_KEY;
 export const SHARED_SOURCE = 'shared-folder';
+
 
 const isRoot = (s: string): s is SharedRoot => s === 'incoming' || s === 'sorted';
 
@@ -187,6 +194,8 @@ export async function createSharedFolders(deps: SharedFoldersDeps): Promise<Shar
     else paused.delete(root);
     fire();
   };
+  // Rows the source could not parse; see `reportUnparsed`. Local, persisted.
+  const unparsed: Unparsed = await loadUnparsed(deps.db);
   let pendingGen = 0;
   const markPending = async (): Promise<void> => {
     pendingGen += 1;
@@ -250,6 +259,7 @@ export async function createSharedFolders(deps: SharedFoldersDeps): Promise<Shar
         await scanRoot({ ...deps, gateChanged, still }, root, base);
       }
     }
+    if (still()) await restamp({ ...deps, roots, usable: (r) => api.usable(r), still }, unparsed);
     if ((await maxRev()) !== before) fire();
   };
   const run = (): void => {
@@ -274,7 +284,9 @@ export async function createSharedFolders(deps: SharedFoldersDeps): Promise<Shar
   };
   // A copy tries again now and then: the transport may have failed, or a join finished.
   const retry = setInterval(() => {
-    if (!closed && transport && mode() === 'copy') kick();
+    if (closed) return;
+    if (transport && mode() === 'copy') kick();
+    else if (mode() === 'leader' && unparsed.size > 0) kick();
   }, deps.retryMs ?? 60_000);
   retry.unref?.();
   deps.sync.onApplied((tables) => {
@@ -407,6 +419,7 @@ export async function createSharedFolders(deps: SharedFoldersDeps): Promise<Shar
       return false;
     },
     usable: (root) => !owed.has(root) && !paused.has(root),
+    reportUnparsed: (refs) => reportUnparsed({ ...deps, roots }, unparsed, refs),
     listForSorting: async () => {
       if (mode() !== 'leader' || !roots.incoming) return [];
       return enqueue(async () => {

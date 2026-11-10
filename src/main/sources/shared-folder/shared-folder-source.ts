@@ -42,7 +42,7 @@ export const descriptor: SourceDescriptor = {
 /** What the source needs from the host; absent until the host has built it. */
 export interface SharedFolderHost {
   db: AppDb;
-  sharedFolders: Pick<SharedFoldersApi, 'roots' | 'pathOf' | 'onChange' | 'usable'>;
+  sharedFolders: Pick<SharedFoldersApi, 'roots' | 'pathOf' | 'onChange' | 'usable' | 'reportUnparsed'>;
 }
 
 /** `rev` is the highest manifest revision handled. `roots` are the roots that
@@ -185,6 +185,7 @@ export function createSharedFolderSource(
           if (rows.length === 0 && !first) break;
           const items: SharedFileItem[] = [];
           const deletions: ExternalRef[] = [];
+          const unparsed: { root: SharedRoot; relPath: string }[] = [];
           for (const row of rows) {
             if (row.deleted) deletions.push({ externalId: sharedExternalId(row.root, row.rel_path), type: 'file' });
             else if (!row.missing_here) {
@@ -192,9 +193,15 @@ export function createSharedFolderSource(
               // eslint-disable-next-line no-await-in-loop
               const item = base ? await itemFor(h, row, base) : null;
               if (item) items.push(item);
-              else session.log('info', `${row.root}/${row.rel_path} is not readable here yet; it is listed again when it changes`);
+              else if (base) {
+                // The cursor moves past this row: the service gives it a new
+                // revision when the file can be read, so it is not lost.
+                unparsed.push({ root: row.root, relPath: row.rel_path });
+                session.log('info', `${row.root}/${row.rel_path} is not readable here yet; it is listed again when it can be`);
+              }
             }
           }
+          if (unparsed.length) await h.sharedFolders.reportUnparsed(unparsed);
           if (rows.length) rev = rows[rows.length - 1].rev;
           first = false;
           const done = rows.length < PAGE;

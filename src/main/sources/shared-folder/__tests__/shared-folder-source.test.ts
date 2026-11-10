@@ -407,3 +407,85 @@ describe('older bytes are never indexed as the current file', () => {
     expect(docs[0].metadata).toMatchObject({ sha256: sha('hello world') });
   });
 });
+
+describe('a file that could not be read is indexed when it can be', () => {
+  const rev = async (d: Device, rel: string) =>
+    Number((await d.db.all(`SELECT rev FROM shared_files WHERE rel_path = ?`, [rel]))[0]?.rev);
+
+  it('is listed again once it is readable, and not more than once per interval while it stays unreadable', async () => {
+    const { d, sorted } = await leader();
+    const file = path.join(sorted, 'a.txt');
+    write(file, 'locked for now');
+    await scan(d);
+    const first = await pullAll(d, null);
+    expect(ids(first.docs)).toEqual(['sorted/a.txt']);
+    // the file is touched by another program: unreadable when the row is parsed again
+    await d.db.run(`UPDATE shared_files SET rev = rev + 100 WHERE rel_path = 'a.txt'`);
+    fs.chmodSync(file, 0o000);
+    try {
+      const second = await pullAll(d, first.cursor);
+      expect(second.docs).toEqual([]);
+      const stamped = await rev(d, 'a.txt');
+      expect(stamped).toBeGreaterThan(100);
+      d.clock.t += 120_000;
+      await scan(d); // still unreadable: nothing is stamped again
+      expect(await rev(d, 'a.txt')).toBe(stamped);
+      fs.chmodSync(file, 0o644);
+      await scan(d); // readable now, and more than an interval has passed
+      expect(await rev(d, 'a.txt')).toBeGreaterThan(stamped);
+      const third = await pullAll(d, second.cursor);
+      expect(ids(third.docs)).toEqual(['sorted/a.txt']);
+    } finally {
+      fs.chmodSync(file, 0o644);
+    }
+  });
+
+  it('a file that fails again is stamped at most once per interval', async () => {
+    const { d, sorted } = await leader();
+    write(path.join(sorted, 'a.txt'), 'x');
+    await scan(d);
+    const host = hostOf(d);
+    const stamp = async () => Number((await d.db.all(`SELECT rev FROM shared_files`))[0].rev);
+    await host.sharedFolders.reportUnparsed([{ root: 'sorted', relPath: 'a.txt' }]);
+    const r0 = await stamp();
+    await scan(d);
+    expect(await stamp()).toBe(r0); // too soon: the file did not change
+    d.clock.t += 61_000;
+    await scan(d);
+    const r1 = await stamp();
+    expect(r1).toBeGreaterThan(r0);
+    await host.sharedFolders.reportUnparsed([{ root: 'sorted', relPath: 'a.txt' }]); // failed again
+    await scan(d);
+    expect(await stamp()).toBe(r1);
+    write(path.join(sorted, 'a.txt'), 'x'); // touched: the stat changed
+    fs.utimesSync(path.join(sorted, 'a.txt'), new Date('2027-01-01'), new Date('2027-01-01'));
+    await scan(d);
+    expect(await stamp()).toBeGreaterThan(r1);
+  });
+
+  it('is tried again by the leader\'s own timer, without any file event', async () => {
+    const d = await device('leader', { retryMs: 20 });
+    const { sorted } = await withRoots(d);
+    write(path.join(sorted, 'a.txt'), 'x');
+    await scan(d);
+    await d.svc.reportUnparsed([{ root: 'sorted', relPath: 'a.txt' }]);
+    const before = Number((await d.db.all(`SELECT rev FROM shared_files`))[0].rev);
+    d.clock.t += 61_000;
+    await new Promise((r) => setTimeout(r, 120));
+    await d.svc.settled();
+    expect(Number((await d.db.all(`SELECT rev FROM shared_files`))[0].rev)).toBeGreaterThan(before);
+  });
+
+  it('survives a restart', async () => {
+    const { d, sorted } = await leader();
+    write(path.join(sorted, 'a.txt'), 'x');
+    await scan(d);
+    await d.svc.reportUnparsed([{ root: 'sorted', relPath: 'a.txt' }]);
+    const before = Number((await d.db.all(`SELECT rev FROM shared_files`))[0].rev);
+    const again = await d.restart();
+    d.clock.t += 61_000;
+    again.kick();
+    await again.settled();
+    expect(Number((await d.db.all(`SELECT rev FROM shared_files`))[0].rev)).toBeGreaterThan(before);
+  });
+});
