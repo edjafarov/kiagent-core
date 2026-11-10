@@ -274,6 +274,20 @@ describe('onSecret', () => {
     expect(seen).toEqual(['secret:x:y']);
   });
 
+  it('a listener that throws does not fail the import or the other listeners', async () => {
+    const b = await device('b');
+    asFollower(b);
+    const seen: string[] = [];
+    b.svc.onSecret(() => {
+      throw new Error('boom');
+    });
+    b.svc.onSecret((k) => void seen.push(k));
+    await expect(
+      b.svc.importSecrets([{ accountId: 'secret:x:y', epoch: 1, n: 1, value: 'v' }]),
+    ).resolves.toEqual({ applied: 1 });
+    expect(seen).toEqual(['secret:x:y']);
+  });
+
   it('an import whose store write fails tells nobody', async () => {
     const b = await device('b');
     asFollower(b);

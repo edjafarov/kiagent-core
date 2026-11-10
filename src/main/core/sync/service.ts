@@ -1024,7 +1024,14 @@ export function createSyncService(deps: SyncServiceDeps): SyncService {
       );
       for (const e of entries) {
         if (!e.accountId.startsWith('secret:')) continue;
-        for (const cb of secretListeners) cb(e.accountId);
+        for (const cb of secretListeners) {
+          // The rows are already stored: a listener must not fail the import.
+          try {
+            cb(e.accountId);
+          } catch (err) {
+            log('warn', `sync: a secret listener failed: ${String(err)}`);
+          }
+        }
       }
       return r;
     },
