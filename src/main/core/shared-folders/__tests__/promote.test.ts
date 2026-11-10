@@ -269,12 +269,14 @@ describe('a root that is not there is still owed its reconcile', () => {
   it('an unmounted root stays owed; when it returns the rows are reconciled, not tombstoned', async () => {
     const { d, incoming } = await setup();
     await putRow(d, 'never-fetched.pdf', 'bytes');
+    await putRow(d, 'kept.pdf', 'kept');
     await putRow(d, 'dead.pdf', 'bye', { deleted: 1 });
     fs.rmSync(incoming, { recursive: true });
     d.sync.set('leader');
     await d.svc.settled();
     expect(await rows(d)).toMatchObject([
       { rel_path: 'dead.pdf', deleted: 1, rev: 3 },
+      { rel_path: 'kept.pdf', deleted: 0, missing_here: 0, rev: 3 },
       { rel_path: 'never-fetched.pdf', deleted: 0, missing_here: 0, rev: 3 },
     ]);
     expect(await owed(d)).toHaveLength(1);
@@ -282,11 +284,13 @@ describe('a root that is not there is still owed its reconcile', () => {
     // the volume comes back with a file of its own and the old tombstone's file
     write(path.join(incoming, 'dead.pdf'), 'bye');
     write(path.join(incoming, 'own.pdf'), 'own');
+    write(path.join(incoming, 'kept.pdf'), 'kept');
     await putMirror(d, 'dead.pdf', 'bye');
     d.svc.kick();
     await d.svc.settled();
     expect(await rows(d)).toMatchObject([
       { rel_path: 'dead.pdf', deleted: 1 },
+      { rel_path: 'kept.pdf', deleted: 0, missing_here: 0 },
       { rel_path: 'never-fetched.pdf', deleted: 0, missing_here: 1 },
       { rel_path: 'own.pdf', deleted: 0, missing_here: 0 },
     ]);

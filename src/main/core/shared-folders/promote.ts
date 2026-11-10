@@ -13,10 +13,10 @@ import {
   type MirrorRow,
 } from './leader-scan';
 import { toAbs, type SharedRoot } from './paths';
-import { emptyIsSuspect, ROOT_NAMES } from './root-state';
+import { judgeRoot, ROOT_NAMES, type GateDeps } from './root-state';
 import type { Roots, SharedFoldersDeps } from './service';
 
-export type PromoteDeps = Pick<SharedFoldersDeps, 'db' | 'hashFile' | 'trash' | 'log'> & {
+export type PromoteDeps = Pick<SharedFoldersDeps, 'db' | 'hashFile' | 'trash' | 'log'> & Pick<GateDeps, 'gateChanged'> & {
   roots: Roots;
   /** True for a file this device itself moved or removed (see the empty-root rule). */
   explained?: (root: SharedRoot, rel: string) => boolean;
@@ -30,12 +30,13 @@ export type ReconcileResult = 'done' | 'owed';
 type Row = FileRow & { parked: number };
 
 async function reconcileRoot(d: PromoteDeps, root: SharedRoot, base: string): Promise<ReconcileResult> {
+  const explained = (rel: string): boolean => d.explained?.(root, rel) ?? false;
   if (!(await readable(base))) {
-    d.log('warn', `${root} folder is missing or unreadable; its reconcile is still owed`);
+    await judgeRoot(d, root, { readable: false, rows: [], explained, evidence: true });
     return 'owed';
   }
   const rows = new Map(
-    ((await d.db.all(`SELECT rel_path, sha256, missing_here, deleted, parked FROM shared_files WHERE root = ?`, [
+    ((await d.db.all(`SELECT rel_path, sha256, bytes, missing_here, deleted, parked FROM shared_files WHERE root = ?`, [
       root,
     ])) as unknown as Row[]).map((r) => [r.rel_path, r]),
   );
@@ -48,10 +49,11 @@ async function reconcileRoot(d: PromoteDeps, root: SharedRoot, base: string): Pr
   const disk = await readDisk(d, base, mirror);
   // An empty mount point is not an empty folder: this Mac had files here and
   // now lists none while the manifest has live ones.
-  if (mirror.size > 0 && emptyIsSuspect(rows.values(), disk, (rel) => d.explained?.(root, rel) ?? false)) {
-    d.log('warn', `${root} folder lists no file at all; its reconcile is still owed`);
+  if (
+    (await judgeRoot(d, root, { readable: true, rows: rows.values(), disk, explained, evidence: mirror.size > 0 })) ===
+    'paused'
+  )
     return 'owed';
-  }
   const steps: BatchStep[] = [];
 
   /** The leader's file now. `parked` is only for a new row: an existing row keeps its flag. */

@@ -6,10 +6,10 @@ import fs from 'node:fs';
 import type { BatchStep } from '../../db/app-db';
 import { walkRoot, type WalkTrouble } from '../../sources/local-folder/scanner';
 import { toRel, type SharedRoot } from './paths';
-import { emptyIsSuspect } from './root-state';
+import { judgeRoot, type GateDeps } from './root-state';
 import type { SharedFoldersDeps } from './service';
 
-export type ScanDeps = Pick<SharedFoldersDeps, 'db' | 'hashFile' | 'log'> & {
+export type ScanDeps = Pick<SharedFoldersDeps, 'db' | 'hashFile' | 'log'> & Pick<GateDeps, 'gateChanged'> & {
   /** A capture note waiting for a file with this hash to be listed (it was moved between roots). */
   takeNote?: (sha: string) => string | null;
   /** `<root>/<rel>` of files this device itself moved or removed since the last
@@ -20,13 +20,11 @@ export type ScanDeps = Pick<SharedFoldersDeps, 'db' | 'hashFile' | 'log'> & {
 export const INCOMING_SCANNED_KEY = 'shared-folders:incoming-scanned';
 
 export interface FileRow {
-  rel_path: string; sha256: string; missing_here: number; deleted: number;
+  rel_path: string; sha256: string; bytes: number; missing_here: number; deleted: number;
 }
 export interface MirrorRow {
   rel_path: string; sha256: string; bytes: number; mtime_ms: number; capture_id: string | null;
 }
-
-const complained = new WeakMap<object, Set<string>>();
 
 export async function readable(rootAbs: string): Promise<boolean> {
   try {
@@ -93,17 +91,15 @@ export async function readDisk(
  *  (an unmounted volume is not an empty folder), and tombstones nothing when
  *  the walk could not read every folder. */
 export async function scanRoot(d: ScanDeps, root: SharedRoot, rootAbs: string): Promise<void> {
-  const told = complained.get(d.db) ?? complained.set(d.db, new Set()).get(d.db)!;
+  const explained = (rel: string): boolean => d.explained?.(root, rel) ?? false;
   if (!(await readable(rootAbs))) {
-    if (!told.has(root)) d.log('warn', `${root} folder is missing or unreadable; its listing is left as it is`);
-    told.add(root);
+    await judgeRoot(d, root, { readable: false, rows: [], explained, evidence: true });
     return;
   }
-  told.delete(root);
 
   const rows = new Map(
     ((await d.db.all(
-      `SELECT rel_path, sha256, missing_here, deleted FROM shared_files WHERE root = ?`, [root],
+      `SELECT rel_path, sha256, bytes, missing_here, deleted FROM shared_files WHERE root = ?`, [root],
     )) as unknown as FileRow[]).map((r) => [r.rel_path, r]),
   );
   const mirror = new Map(
@@ -118,18 +114,10 @@ export async function scanRoot(d: ScanDeps, root: SharedRoot, rootAbs: string): 
   );
 
   const disk = await readDisk(d, rootAbs, mirror);
-  // An empty root is not believed: an unmounted volume leaves an empty mount
-  // point. A root that has live rows and now lists no file at all changes
-  // nothing (no tombstone, no mirror change) until a file shows up again.
-  // Unless every one of them left through this device's own hands (the sorter
-  // empties Incoming by moving files out).
-  if (emptyIsSuspect(rows.values(), disk, (rel) => d.explained?.(root, rel) ?? false)) {
-    if (!told.has(`empty:${root}`))
-      d.log('warn', `${root} folder lists no file at all; its listing is left as it is`);
-    told.add(`empty:${root}`);
+  // A root that is not trusted right now (see `judgeRoot`: an unmounted volume
+  // leaves an empty mount point) changes nothing: no tombstone, no mirror change.
+  if ((await judgeRoot(d, root, { readable: true, rows: rows.values(), disk, explained, evidence: true })) === 'paused')
     return;
-  }
-  told.delete(`empty:${root}`);
   const trouble = { incomplete: disk.incomplete };
   const seen = disk.seen;
   const units: BatchStep[][] = [];

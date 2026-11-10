@@ -9,7 +9,7 @@ import { scanRoot } from './leader-scan';
 import { mirrorPass } from './mirror';
 import { listSortable, reconcileAtPromotion } from './promote';
 import { normalizeRel, toAbs, toRel, type SharedRoot } from './paths';
-import { loadRootSet, OWED_KEY, ROOT_NAMES, saveRootSet, SharedRootPaused } from './root-state';
+import { loadRootSet, OWED_KEY, PAUSED_KEY, quickCheck, ROOT_NAMES, saveRootSet, SharedRootPaused } from './root-state';
 import { createServe } from './serve';
 import { watchRoot, type RootWatcher } from './watch';
 
@@ -53,7 +53,7 @@ export interface SharedFoldersApi {
   onChange(cb: () => void): () => void;
   listForSorting(): Promise<string[]>;
   /** False while the root is owed its reconcile (a new leader that has not
-   *  checked it yet, or whose folder is not there): nothing is scanned,
+   *  checked it yet, or whose folder is not there, or lists nothing): nothing is scanned,
    *  sorted, served or indexed for it. Synchronous: the source reads it per row. */
   usable(root: SharedRoot): boolean;
   moved(fromAbs: string, toAbs: string): Promise<void>;
@@ -157,6 +157,13 @@ export async function createSharedFolders(deps: SharedFoldersDeps): Promise<Shar
   // The roots whose reconcile at promotion is owed. Persisted, so a restart
   // (or a volume that is not mounted yet) does not forget it.
   const owed = await loadRootSet(deps.db, OWED_KEY);
+  // The roots that are paused (not there, unreadable, suddenly empty).
+  const paused = await loadRootSet(deps.db, PAUSED_KEY);
+  const gateChanged = (root: SharedRoot, on: boolean): void => {
+    if (on) paused.add(root);
+    else paused.delete(root);
+    fire();
+  };
   let pendingGen = 0;
   const markPending = async (): Promise<void> => {
     pendingGen += 1;
@@ -189,7 +196,7 @@ export async function createSharedFolders(deps: SharedFoldersDeps): Promise<Shar
     if (owed.size === 0) return;
     reconciling ??= (async () => {
       const gen = pendingGen;
-      const result = await reconcileAtPromotion({ ...deps, roots, explained: isExplained });
+      const result = await reconcileAtPromotion({ ...deps, roots, explained: isExplained, gateChanged });
       if (gen !== pendingGen) return; // became a copy again meanwhile: still owed
       let changed = false;
       for (const r of ROOT_NAMES) if (result[r] === 'done' && owed.delete(r)) changed = true;
@@ -209,7 +216,7 @@ export async function createSharedFolders(deps: SharedFoldersDeps): Promise<Shar
     if (mode() === 'copy') {
       // A device that is still joining has not finished receiving its copy.
       if (!transport || (await joining())) return;
-      await mirrorPass({ ...deps, roots }, transport);
+      await mirrorPass({ ...deps, roots, gateChanged }, transport);
       return;
     }
     if (mode() !== 'leader') return;
@@ -227,7 +234,7 @@ export async function createSharedFolders(deps: SharedFoldersDeps): Promise<Shar
       // eslint-disable-next-line no-await-in-loop
       if (base && !owed.has(root)) {
         // eslint-disable-next-line no-await-in-loop
-        await scanRoot({ ...deps, takeNote, explained: isExplained }, root, base);
+        await scanRoot({ ...deps, takeNote, explained: isExplained, gateChanged }, root, base);
         for (const key of [...explained]) if (key.startsWith(`${root}/`)) explained.delete(key);
       }
     }
@@ -294,6 +301,12 @@ export async function createSharedFolders(deps: SharedFoldersDeps): Promise<Shar
     ready: reconcileIfPending,
     refuse: (root) => {
       if (owed.has(root)) throw new SharedRootPaused(root, 'owed');
+      if (paused.has(root)) throw new SharedRootPaused(root, 'paused');
+    },
+    quick: async (root) => {
+      const base = roots[root];
+      if (base && (await quickCheck({ ...deps, gateChanged }, root, base, (rel) => isExplained(root, rel))) === 'paused')
+        throw new SharedRootPaused(root, 'paused');
     },
     kick,
     explained,
@@ -380,11 +393,11 @@ export async function createSharedFolders(deps: SharedFoldersDeps): Promise<Shar
       }
       return false;
     },
-    usable: (root) => !owed.has(root),
+    usable: (root) => !owed.has(root) && !paused.has(root),
     listForSorting: async () => {
       if (mode() !== 'leader' || !roots.incoming) return [];
       await reconcileIfPending();
-      if (mode() !== 'leader' || owed.has('incoming')) return [];
+      if (mode() !== 'leader' || !api.usable('incoming')) return [];
       return listSortable(deps, roots.incoming);
     },
     serve,

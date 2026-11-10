@@ -19,6 +19,9 @@ export interface ServeCtx {
   ready(): Promise<void>;
   /** Throws `SharedRootPaused` while the root may not be touched. */
   refuse(root: SharedRoot): void;
+  /** The check a request gets before anything is read or written: throws
+   *  `SharedRootPaused` when the root is not there or has just emptied. */
+  quick(root: SharedRoot): Promise<void>;
   kick(): void;
   /** Paths this device made go away (see the scan's empty-root rule). */
   explained: Set<string>;
@@ -93,7 +96,7 @@ export function createServe(ctx: ServeCtx): Serve {
       need('serve.open');
       await ctx.ready();
       const { root, rel, abs } = locate(ctx, q.root, q.relPath);
-      ctx.refuse(root);
+      await ctx.quick(root);
       if ((await shaAt(ctx, root, rel, abs)) !== q.sha256) return null;
       return { path: abs, bytes: (await fs.promises.stat(abs)).size };
     },
@@ -104,6 +107,7 @@ export function createServe(ctx: ServeCtx): Serve {
       const base = ctx.roots()[root];
       if (!base) throw new Error(`shared-folders: the ${root} folder is not set on this Mac`);
       ctx.refuse(root);
+      await ctx.quick(root);
       const dir = path.join(base, STAGING_DIR);
       await fs.promises.mkdir(dir, { recursive: true });
       return path.join(dir, `in-${randomUUID()}`);
@@ -125,8 +129,14 @@ export function createServe(ctx: ServeCtx): Serve {
         await drop();
         throw new Error('shared-folders: the offered bytes do not match their hash');
       }
-      await ctx.ready();
-      ctx.refuse(root);
+      try {
+        await ctx.ready();
+        ctx.refuse(root);
+        await ctx.quick(root);
+      } catch (err) {
+        await drop();
+        throw err;
+      }
       const db = ctx.deps.db;
       const withSha = (await db.all(
         `SELECT root, rel_path, missing_here FROM shared_files
@@ -230,7 +240,7 @@ export function createServe(ctx: ServeCtx): Serve {
       need('serve.remove');
       await ctx.ready();
       const { root, rel, abs } = locate(ctx, q.root, q.relPath);
-      ctx.refuse(root);
+      await ctx.quick(root);
       if ((await shaAt(ctx, root, rel, abs)) !== q.sha256) return false;
       await ctx.deps.trash(abs);
       ctx.explained.add(`${root}/${rel}`);

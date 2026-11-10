@@ -16,12 +16,14 @@ import {
   type MirrorRow,
 } from './leader-scan';
 import { STAGING_DIR, toAbs, type SharedRoot } from './paths';
+import { judgeRoot, type GateDeps } from './root-state';
 import type { Roots, SharedFoldersDeps, SharedTransport } from './service';
 
 export type MirrorDeps = Pick<
   SharedFoldersDeps,
   'db' | 'hashFile' | 'trash' | 'log'
-> & { roots: Roots };
+> &
+  Pick<GateDeps, 'gateChanged'> & { roots: Roots };
 
 type Row = FileRow & { bytes: number; mtime: string };
 
@@ -39,16 +41,6 @@ const viaTransport = async <T>(p: Promise<T>): Promise<T> => {
     throw new TransportFailed(err);
   }
 };
-
-const told = new WeakMap<object, Set<string>>();
-const tellOnce = (d: MirrorDeps, key: string, msg: string): void => {
-  const set = told.get(d.db) ?? told.set(d.db, new Set()).get(d.db)!;
-  if (set.has(key)) return;
-  set.add(key);
-  d.log('warn', msg);
-};
-const forget = (d: MirrorDeps, key: string): void =>
-  void told.get(d.db)?.delete(key);
 
 /** Does the path still hold exactly what M describes (or nothing)? Used just
  *  before a downloaded file replaces it and before a mirrored removal. */
@@ -81,16 +73,11 @@ async function mirrorRoot(
   base: string,
   transport: SharedTransport,
 ): Promise<void> {
-  const emptyKey = `empty:${root}`;
+  const explained = (): boolean => false; // a copy never sorts, and its own removals leave no live row
   if (!(await readable(base))) {
-    tellOnce(
-      d,
-      `gone:${root}`,
-      `${root} folder is missing or unreadable; not mirrored`,
-    );
+    await judgeRoot(d, root, { readable: false, rows: [], explained, evidence: true });
     return;
   }
-  forget(d, `gone:${root}`);
   const rows = new Map(
     (
       (await d.db.all(
@@ -109,19 +96,14 @@ async function mirrorRoot(
   );
   const disk = await readDisk(d, base, mirror);
 
-  // An empty root is not believed: a volume that is not mounted leaves an
-  // empty mount point. This Mac had files here, the leader lists some, and
-  // none is on disk now. Nothing is sent or removed for the root.
-  const live = [...rows.values()].some((r) => !r.deleted);
-  if (disk.seen.size === 0 && !disk.incomplete && mirror.size > 0 && live) {
-    tellOnce(
-      d,
-      emptyKey,
-      `${root} folder lists no file at all; left alone until it does`,
-    );
+  // A root that is not trusted right now (an unmounted volume leaves an empty
+  // mount point) sends nothing and removes nothing; a new copy with no file
+  // yet is not that, it fetches.
+  if (
+    (await judgeRoot(d, root, { readable: true, rows: rows.values(), disk, explained, evidence: mirror.size > 0 })) ===
+    'paused'
+  )
     return;
-  }
-  forget(d, emptyKey);
 
   const setMirror = async (
     rel: string,

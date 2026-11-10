@@ -390,7 +390,7 @@ describe('a root that is not there, or looks empty', () => {
     expect(c.trashed).toEqual([]);
     expect(fs.existsSync(c.sorted)).toBe(false); // not even re-created by a fetch
     expect((await entries(c)).map((e) => e.rel_path)).toEqual(['a.txt']);
-    expect(c.logs.filter((l) => l.includes('not mirrored'))).toHaveLength(1);
+    expect(c.logs.filter((l) => l.includes('missing or unreadable'))).toHaveLength(1);
   });
 
   it('a root that lists no file at all sends no deletion and removes nothing', async () => {
