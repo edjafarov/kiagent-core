@@ -431,4 +431,38 @@ describe('a reconcile that could not finish is still owed', () => {
     expect(await rows(d)).toMatchObject([{ deleted: 1 }]);
     expect(await owed(d)).toEqual([]);
   });
+
+  it('a Trash that fails once is retried on the timer: the root becomes ok with no other event', async () => {
+    let failing = true;
+    const d = await device('copy', {
+      retryMs: 20,
+      trash: async (p) => {
+        if (failing) {
+          failing = false;
+          throw new Error('busy');
+        }
+        d.trashed.push(p);
+        fs.rmSync(p, { force: true });
+      },
+    });
+    const { incoming } = await withRoots(d);
+    const f = path.join(incoming, 'a.pdf');
+    write(f, 'bye');
+    await putMirror(d, 'a.pdf', 'bye');
+    await putRow(d, 'a.pdf', 'bye', { deleted: 1 });
+    d.sync.set('leader');
+    await d.svc.settled();
+    expect(await owed(d)).toHaveLength(1);
+    expect(d.svc.rootStatus('incoming')).toBe('owed');
+    // no kick, no file event: only the timer
+    for (let i = 0; i < 100 && d.svc.rootStatus('incoming') !== 'ok'; i += 1) {
+      // eslint-disable-next-line no-await-in-loop
+      await new Promise((r) => setTimeout(r, 20));
+    }
+    await d.svc.settled();
+    expect(d.svc.rootStatus('incoming')).toBe('ok');
+    expect(d.svc.usable('incoming')).toBe(true);
+    expect(d.trashed).toEqual([f]);
+    expect(await owed(d)).toEqual([]);
+  });
 });

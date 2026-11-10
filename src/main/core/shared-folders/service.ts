@@ -346,7 +346,7 @@ export async function createSharedFolders(deps: SharedFoldersDeps): Promise<Shar
   const retry = setInterval(() => {
     if (closed) return;
     if (transport && mode() === 'copy') kick();
-    else if (mode() === 'leader' && (unparsed.size > 0 || ROOT_NAMES.some((r) => roots[r] && gates.get(r) !== 'ok'))) kick();
+    else if (mode() === 'leader' && (unparsed.size > 0 || ROOT_NAMES.some((r) => roots[r] && (gates.get(r) !== 'ok' || owed.has(r))))) kick();
   }, deps.retryMs ?? 60_000);
   retry.unref?.();
   deps.sync.onApplied((tables) => {
