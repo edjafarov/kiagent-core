@@ -618,7 +618,7 @@ TEXT and attention timestamps are INTEGER Unix milliseconds.`,
     {
       name: 'source',
       // CI-enforced against registerBundledSources — see schema-doc-drift.test.ts.
-      values: ['gmail', 'imap', 'local-folder'],
+      values: ['gmail', 'imap', 'local-folder', 'shared-folder'],
       notes: 'Which source ingested the document (on accounts.source).',
     },
     {
@@ -635,7 +635,7 @@ TEXT and attention timestamps are INTEGER Unix milliseconds.`,
         'note',
       ],
       notes:
-        'email.thread + attachment (gmail); email.message (imap); file (local-folder); calendar.event (google-calendar extension); meeting.transcript (meetings extension). local-folder also expands mailboxes, ZIPs, vCard and Evernote exports into child documents (parent_id = the container file): email.message, file, contact.card, note.',
+        'email.thread + attachment (gmail); email.message (imap); file (local-folder, shared-folder); calendar.event (google-calendar extension); meeting.transcript (meetings extension). local-folder also expands mailboxes, ZIPs, vCard and Evernote exports into child documents (parent_id = the container file): email.message, file, contact.card, note.',
     },
   ],
 };

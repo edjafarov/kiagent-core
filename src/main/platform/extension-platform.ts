@@ -304,6 +304,8 @@ export interface ExtensionPlatformDeps {
   sync?: SyncService;
   /** The store behind `host.prefs` (the app's `CorePrefs`). */
   prefs?: SurfaceDeps['prefs'];
+  /** The store behind `host.secrets` (`store.secrets`). */
+  secrets?: SurfaceDeps['secrets'];
   /** The user's extension set (`core.extensions`, spec 7.9). Absent: the
    *  platform neither records nor reconciles. */
   extensionSet?: ExtensionSetStore;
@@ -1233,6 +1235,7 @@ export function createExtensionPlatform(
             attention: deps.attention,
             sync: deps.sync,
             prefs: deps.prefs,
+            secrets: deps.secrets,
             callUi: async (name, payload) => {
               const r = await api.callUi(e.manifest.id, name, payload);
               if (r.ok) return r.value;

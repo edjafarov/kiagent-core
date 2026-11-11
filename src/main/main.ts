@@ -23,6 +23,7 @@ import type {
   Account,
   AppState,
   AccountId,
+  FolderScopeUpdate,
   ProjectionHandle,
   SchedulerEnv,
   Seq,
@@ -75,6 +76,8 @@ import { parseGitHubRef, formatGitHubRef } from './marketplace/github-ref';
 import { createMarketplaceCatalog } from './marketplace/catalog';
 import type { MarketplaceCatalog } from './marketplace/catalog';
 import { buildMainApi } from './main-api';
+import { createSharedFolders, sha256File } from './core/shared-folders';
+import { ownLocalFolders } from './core/shared-folders/local-folder-access';
 import { createBusyRegistry } from './core/busy';
 import { wireOutboxPush } from './outbox-push';
 import { wireSyncAppliedPush } from './sync-applied-push';
@@ -157,6 +160,13 @@ import type { LocalAsrProvider } from './providers/local-asr';
 import { CURATED_TIERS, modelTotalBytes } from './providers/local-llm/models';
 import type { LocalLlmProvider } from './providers/local-llm/provider';
 import { registerBundledSources } from './sources';
+import { readFolderRoots } from './sources/local-folder/folder-roots';
+import {
+  SHARED_IDENTIFIER,
+  SHARED_SOURCE_ID,
+  type SharedFolderHost,
+} from './sources/shared-folder';
+import { descriptor as sharedFolderDescriptor } from './sources/shared-folder/shared-folder-source';
 import { countFiles } from './sources/local-folder/scanner';
 import {
   listChildren,
@@ -1261,6 +1271,8 @@ app
         path.join(__dirname, 'sqlRunner.js'),
         path.join(__dirname, 'sqlRunner.bundle.dev.js'),
       ].find((f) => fs.existsSync(f)) ?? path.join(__dirname, 'sqlRunner.js');
+    // Late-bound: the shared-folders service is built further down.
+    let sharedSourceHost: SharedFolderHost | null = null;
     mcp = await startMcp({
       query: p.readsFor('mcp'),
       sqlExecutor: createSqlRunner({
@@ -1285,6 +1297,8 @@ app
         masterName: () => p.sync.masterName(),
       }),
       calendar: calendarOut,
+      localPathOf: async (doc) =>
+        (await sharedSourceHost?.sharedFolders.pathOf(doc)) ?? null,
       admission: p.admission,
     });
     bootTimer.mark('mcp');
@@ -1428,6 +1442,7 @@ app
       broker,
       p.converter,
       path.join(app.getPath('userData'), 'expand-tmp'),
+      () => sharedSourceHost,
     );
     for (const [sourceId, refresher] of bundledRefreshers)
       p.refreshers.set(sourceId, refresher);
@@ -1465,9 +1480,73 @@ app
     // through `outbound`, so having two instances is intentional, not a
     // duplication bug.
     const outboundRoutes = createOutboundRoutes(outbound, calendarOut);
+    const sharedFolders = await createSharedFolders({
+      // Before start-up: a local-folder scan the migration restarts must
+      // already see the shared folders it leaves alone.
+      publish: (api) => {
+        sharedSourceHost = { db: p.db, sharedFolders: api };
+      },
+      db: p.db,
+      sync: p.sync,
+      hashFile: sha256File,
+      trash: (file) => shell.trashItem(file),
+      now: () => Date.now(),
+      log: (level, msg) => p.logSink.log('shared-folders', level, msg),
+      ensureAccount: async () => {
+        const account = await p.store.createAccount({
+          source: SHARED_SOURCE_ID,
+          identifier: SHARED_IDENTIFIER,
+          config: {},
+          status: 'connecting',
+          cadence: sharedFolderDescriptor.cadence,
+        });
+        runAccount(p, account);
+      },
+      // Only this device's own local folders: the accounts table holds the
+      // other Macs' too, often with the very same absolute paths.
+      localFolders: ownLocalFolders({
+        accounts: () => p.store.read.accounts(),
+        deviceId: () => p.sync.deviceId(),
+        roots: (a) => readFolderRoots(a as never).map((r) => r.id),
+        // Read fresh each time: the account's loop restarts after each call.
+        // applyScope awaits the old loop's stop() (the pull and its reconcile),
+        // so nothing built under the old exclusions commits afterwards, then
+        // restarts the loop, whose walks read the exclusions anew.
+        quiesce: async (accountId) => {
+          const account = await p.store.account(accountId as AccountId);
+          if (!account) return;
+          await p.engine.applyScope(
+            account.id,
+            {
+              config: account.config as FolderScopeUpdate['config'],
+              cursor: account.cursor,
+              archiveScopeRootIds: [],
+              archiveRefs: [],
+            },
+            JSON.stringify(account.config),
+          );
+        },
+        archive: async (accountId, refs) => {
+          const account = await p.store.account(accountId as AccountId);
+          if (!account) return;
+          await p.engine.applyScope(
+            account.id,
+            {
+              config: account.config as FolderScopeUpdate['config'],
+              cursor: account.cursor,
+              archiveScopeRootIds: [],
+              archiveRefs: refs,
+            },
+            JSON.stringify(account.config),
+          );
+        },
+      }),
+    });
+    sharedSourceHost = { db: p.db, sharedFolders };
     extensionsPlatform = createExtensionPlatform({
       sync: p.sync,
       prefs: p.prefs,
+      secrets: p.store.secrets,
       // The user's extension set lives in user_prefs; only a device that can
       // write the table changes it.
       extensionSet: {
@@ -1513,6 +1592,7 @@ app
           readMessageEvidence: (input) => p.engine.readMessageEvidence(input),
           ownerMail,
           documents: documentBytes,
+          sharedFolders,
           inference: p.inference,
           busy,
           runAccount: (account) => runAccount(p, account),

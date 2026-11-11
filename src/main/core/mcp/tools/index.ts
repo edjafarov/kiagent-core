@@ -12,6 +12,7 @@ import type { McpTool, Query } from '@shared/contracts';
 import type { CalendarToolApi } from '@main/calendar-out/service';
 import type { OutboundToolApi } from '@main/outbound/service';
 
+import type { LocalPathOf } from './local-path';
 import { countDescription, countInputSchema, makeCountTool } from './count';
 import {
   digitalMemoryInfoDescription,
@@ -98,6 +99,7 @@ export function buildBuiltinTools(
   query: Query,
   outbound?: OutboundToolApi,
   calendar?: CalendarToolApi,
+  localPathOf?: LocalPathOf,
 ): McpTool[] {
   const out = outbound ?? unavailableOutbound;
   const cal = calendar ?? unavailableCalendar;
@@ -108,14 +110,14 @@ export function buildBuiltinTools(
       description: searchDescription,
       inputSchema: searchInputSchema,
       tier: 'standard',
-      call: makeSearchTool(query),
+      call: makeSearchTool(query, localPathOf),
     },
     {
       name: 'get',
       description: getDescription,
       inputSchema: getInputSchema,
       tier: 'standard',
-      call: makeGetTool(query),
+      call: makeGetTool(query, localPathOf),
     },
     {
       name: 'count',
@@ -129,7 +131,7 @@ export function buildBuiltinTools(
       description: getRelatedDescription,
       inputSchema: getRelatedInputSchema,
       tier: 'standard',
-      call: makeGetRelatedTool(query),
+      call: makeGetRelatedTool(query, localPathOf),
     },
     {
       name: 'digital_memory_info',

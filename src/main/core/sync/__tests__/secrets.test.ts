@@ -220,5 +220,127 @@ it('v16 adds the stamp columns to a vault that has none, once', async () => {
   migrate(c);
   migrate(c);
   expect(c.prepare(`SELECT epoch, n FROM vault`).get()).toEqual({ epoch: 0, n: 0 });
-  expect(c.prepare(`SELECT value FROM meta WHERE key = 'schemaVersion'`).get()).toEqual({ value: '23' });
+  expect(c.prepare(`SELECT value FROM meta WHERE key = 'schemaVersion'`).get()).toEqual({ value: '25' });
+});
+
+describe('account secrets', () => {
+  it('save then load round-trips; a missing key is null', async () => {
+    const a = await device('a');
+    await a.store.secrets.save('secret:x:y', 'v');
+    expect(await a.store.secrets.load('secret:x:y')).toBe('v');
+    expect(await a.store.secrets.load('secret:x:none')).toBeNull();
+  });
+
+  it('a tracking leader stamps the row with the epoch and the next n', async () => {
+    const a = await device('a');
+    a.conn().prepare(`UPDATE sync_state SET epoch = 2`).run();
+    enableTracking(a.conn());
+    await a.store.vault.save('login', { t: 1 } as never);
+    await a.store.secrets.save('secret:x:y', 'v');
+    expect(stamp(a, 'secret:x:y')).toEqual({ epoch: 2, n: 2 });
+    await a.store.secrets.save('secret:x:y', 'v2');
+    expect(stamp(a, 'secret:x:y')).toEqual({ epoch: 2, n: 3 });
+  });
+
+  it('travels through export and import to a follower', async () => {
+    const a = await device('a');
+    const b = await device('b');
+    enableTracking(a.conn());
+    await a.store.secrets.save('secret:x:y', 'v');
+    const got = await a.svc.exportSecrets({ epoch: 0, n: 0 });
+    expect(got).toContainEqual(expect.objectContaining({ accountId: 'secret:x:y', value: 'v' }));
+    asFollower(b);
+    await b.svc.importSecrets(got);
+    expect(await b.store.secrets.load('secret:x:y')).toBe('v');
+  });
+
+  it('refuses a key that is not a secret key', async () => {
+    const a = await device('a');
+    await expect(a.store.secrets.save('gmail-1', 'v')).rejects.toThrow('not a secret key');
+    await expect(a.store.secrets.load('gmail-1')).rejects.toThrow('not a secret key');
+  });
+});
+
+describe('a secret is never stored as plain text', () => {
+  it('refuses the save when the strict keystore fails, and stores nothing', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sync-secrets-strict-'));
+    const db = await openDb(path.join(dir, 'a.db'));
+    migrate(db._conn!);
+    const ks = keystore('strict');
+    const store = openStore(db, {
+      ...ks,
+      encryptStrict: () => {
+        throw new Error('no keystore');
+      },
+      detectLanguages: () => ['eng'],
+    });
+    await expect(store.secrets.save('secret:x:y', 'v')).rejects.toThrow('no keystore');
+    expect(db._conn!.prepare(`SELECT count(*) AS c FROM vault`).get()).toEqual({ c: 0 });
+    await db.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+});
+
+describe('onSecret', () => {
+  it('tells the listener once per imported account secret, not for logins', async () => {
+    const b = await device('b');
+    asFollower(b);
+    const seen: string[] = [];
+    b.svc.onSecret((k) => void seen.push(k));
+    await b.svc.importSecrets([
+      { accountId: 'secret:x:y', epoch: 1, n: 1, value: 'v' },
+      { accountId: 'gmail-1', epoch: 1, n: 2, value: '{}' },
+    ]);
+    expect(seen).toEqual(['secret:x:y']);
+  });
+
+  it('a listener that throws does not fail the import or the other listeners', async () => {
+    const b = await device('b');
+    asFollower(b);
+    const seen: string[] = [];
+    b.svc.onSecret(() => {
+      throw new Error('boom');
+    });
+    b.svc.onSecret((k) => void seen.push(k));
+    await expect(
+      b.svc.importSecrets([{ accountId: 'secret:x:y', epoch: 1, n: 1, value: 'v' }]),
+    ).resolves.toEqual({ applied: 1 });
+    expect(seen).toEqual(['secret:x:y']);
+  });
+
+  it('stops telling a listener that unsubscribed', async () => {
+    const b = await device('b');
+    asFollower(b);
+    const seen: string[] = [];
+    const off = b.svc.onSecret((k) => void seen.push(k));
+    off();
+    await b.svc.importSecrets([{ accountId: 'secret:x:y', epoch: 1, n: 1, value: 'v' }]);
+    expect(seen).toEqual([]);
+  });
+
+  it('an import whose store write fails tells nobody', async () => {
+    const b = await device('b');
+    asFollower(b);
+    jest.spyOn(b.store, 'importSyncSecrets').mockRejectedValueOnce(new Error('disk full'));
+    const seen: string[] = [];
+    b.svc.onSecret((k) => void seen.push(k));
+    await expect(
+      b.svc.importSecrets([{ accountId: 'secret:x:y', epoch: 1, n: 1, value: 'v' }]),
+    ).rejects.toThrow(/disk full/);
+    expect(seen).toEqual([]);
+  });
+
+  it('an import whose encryption fails tells nobody', async () => {
+    const b = await device('b', { failStrict: (n) => n === 2 });
+    asFollower(b);
+    const seen: string[] = [];
+    b.svc.onSecret((k) => void seen.push(k));
+    await expect(
+      b.svc.importSecrets([
+        { accountId: 'secret:x:y', epoch: 1, n: 1, value: 'v' },
+        { accountId: 'secret:x:z', epoch: 1, n: 2, value: 'v' },
+      ]),
+    ).rejects.toThrow(/keystore/);
+    expect(seen).toEqual([]);
+  });
 });

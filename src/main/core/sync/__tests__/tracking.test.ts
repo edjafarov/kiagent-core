@@ -91,6 +91,8 @@ it('every core table is classified as copied, local or derived', () => {
     'attention_items',
     'attention_revisions',
     'user_prefs',
+    'shared_files',
+    'shared_capture_files',
   ]);
 });
 

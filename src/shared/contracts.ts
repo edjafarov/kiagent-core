@@ -465,6 +465,12 @@ export interface Store {
     load(account: AccountId): Promise<Credentials | null>;
     delete(account: AccountId): Promise<void>;
   };
+  /** Account-wide secrets: vault rows keyed `secret:<extension>:<name>`, so they
+   *  travel to followers like a login. The value is an opaque string. */
+  secrets: {
+    save(key: string, value: string): Promise<void>;
+    load(key: string): Promise<string | null>;
+  };
   identity: {
     get(): Promise<Identity | null>;
     set(i: Identity): Promise<void>;
@@ -1737,6 +1743,9 @@ export type Cap =
   /** Reads and writes this extension's own settings, which follow the user to
    *  every device (alpha-cent spec 7.9). */
   | 'prefs'
+  /** Keeps one account-wide secret per name, stored in the vault so it follows
+   *  the account to every device. Privileged. */
+  | 'secrets'
   /** Copies this device's data to and from a sibling. Privileged. */
   | 'sync'
   /** May deliver outbound messages through the host's send pipeline — the
@@ -2008,6 +2017,20 @@ export interface CapSurfaces {
       set(name: string, value: unknown): Promise<void>;
       /** Called when another device changed one of this extension's settings. */
       onChange(cb: (name: string, value: unknown) => void): () => void;
+    };
+  };
+  /** Account-wide secrets, bundled-tier only. Stored as the vault row
+   *  `secret:<extension id>:<name>`, so they travel to followers like a login.
+   *  `name` matches `/^[a-z0-9-]{1,40}$/`. */
+  secrets: {
+    secrets: {
+      /** `null` when nothing was stored under `name`. */
+      get(name: string): Promise<string | null>;
+      /** Rejects with `SyncReadOnly` on a device that is a read-only copy. */
+      put(name: string, value: string): Promise<void>;
+      /** Called after this extension's own `put` and when a secret of this
+       *  extension arrives from the leader. */
+      onChange(cb: (name: string) => void): () => void;
     };
   };
   /** Privileged, bundled-tier only (alpha-cent spec 7.6). */

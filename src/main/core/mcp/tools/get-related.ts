@@ -8,6 +8,7 @@
  * 200-message thread's full bodies would blow the response budget; callers
  * that need a full body follow up with `get`.
  */
+import { sourceUrlOf, type LocalPathOf } from './local-path';
 import type { Document, DocumentId, Query } from '@shared/contracts';
 
 export const GET_RELATED_RELATIONS = ['children', 'parent'] as const;
@@ -66,23 +67,24 @@ function resolveOffset(raw: unknown): number {
   return n;
 }
 
-function toSummary(
+async function toSummary(
   d: Document,
   sourceOf: Map<string, string>,
-): GetRelatedSummary {
+  localPathOf?: LocalPathOf,
+): Promise<GetRelatedSummary> {
   return {
     id: d.id,
     source: sourceOf.get(d.accountId) ?? 'unknown',
     type: d.type,
     title: d.title,
-    source_url: d.url ?? null,
+    source_url: await sourceUrlOf(d, sourceOf.get(d.accountId), localPathOf),
     parent_id: d.parentId,
     created_at: d.createdAt,
     snippet: d.markdown ? d.markdown.slice(0, SNIPPET_MAX_CHARS) : null,
   };
 }
 
-export function makeGetRelatedTool(query: Query) {
+export function makeGetRelatedTool(query: Query, localPathOf?: LocalPathOf) {
   return async function getRelated(
     args: Record<string, unknown>,
   ): Promise<GetRelatedSummary[]> {
@@ -102,15 +104,15 @@ export function makeGetRelatedTool(query: Query) {
       const limit = resolveLimit(a.limit);
       const offset = resolveOffset(a.offset);
       const children = await query.children(id);
-      return children
-        .slice(offset, offset + limit)
-        .map((d) => toSummary(d, sourceOf));
+      return Promise.all(
+        children.slice(offset, offset + limit).map((d) => toSummary(d, sourceOf, localPathOf)),
+      );
     }
     if (a.relation === 'parent') {
       const doc = await query.document(id);
       if (!doc?.parentId) return [];
       const parent = await query.document(doc.parentId);
-      return parent ? [toSummary(parent, sourceOf)] : [];
+      return parent ? [await toSummary(parent, sourceOf, localPathOf)] : [];
     }
     throw new Error(`get_related: unknown relation '${a.relation}'`);
   };

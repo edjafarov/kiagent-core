@@ -46,6 +46,7 @@ import {
 } from './registry';
 import { attachResourceHandlers } from './resources';
 import { buildBuiltinTools } from './tools';
+import type { LocalPathOf } from './tools/local-path';
 import type { SqlExecutorHandle, SqlRunnerDiagnostics } from './sql-runner';
 import { createRawSqlTools } from './tools/raw-sql';
 import { currentTransport, runWithTransport } from './transport-context';
@@ -74,6 +75,8 @@ export interface McpDeps {
   outbound?: OutboundService;
   /** Calendar drafting (list_calendars / find_free_time / draft_event). */
   calendar?: CalendarOutService;
+  /** Where a shared-folder document lives on this Mac (for `source_url`). */
+  localPathOf?: LocalPathOf;
   /** Defaults to `PORT_CANDIDATES`. Tests that start a REAL server (as
    *  opposed to driving handlers in-process) should override this to `[0]`
    *  so the OS assigns an ephemeral port instead of racing every other
@@ -303,7 +306,7 @@ export async function startMcp(deps: McpDeps): Promise<McpServerHandle> {
   const rawSql = createRawSqlTools(sql.exec);
   const foreground: Foreground = (fn) => inForeground(deps.admission, fn);
   const registry = createToolRegistry([
-    ...buildBuiltinTools(deps.query, deps.outbound, deps.calendar),
+    ...buildBuiltinTools(deps.query, deps.outbound, deps.calendar, deps.localPathOf),
     ...rawSql.tools,
   ]);
   const outboundRoutes = deps.outbound

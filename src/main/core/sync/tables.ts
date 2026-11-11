@@ -18,6 +18,8 @@ export const COPIED_CORE_TABLES: readonly string[] = [
   'attention_items',
   'attention_revisions',
   'user_prefs',
+  'shared_files',
+  'shared_capture_files',
 ];
 
 export const LOCAL_CORE_TABLES: readonly string[] = [
@@ -26,6 +28,8 @@ export const LOCAL_CORE_TABLES: readonly string[] = [
   'consumers',
   'meta',
   'schedule',
+  'shared_mirror',
+  'shared_pending',
   'sync_imported',
   'sync_moved',
   'sync_offers',

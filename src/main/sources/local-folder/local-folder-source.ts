@@ -49,6 +49,8 @@ import {
   buildItem,
   chunkBySize,
   containerOf,
+  isExcluded,
+  type ExcludedDirs,
   entryReadCost,
   toAbsPosix,
   walkPaths,
@@ -325,6 +327,7 @@ async function* backfillRoot(
   working: LocalFolderCursor,
   exps: Record<string, Expansion>,
   scratchDir?: string,
+  excluded?: ExcludedDirs,
 ): AsyncGenerator<
   Batch<LocalFolderCursor, LocalFolderItem>,
   LocalFolderCursor
@@ -334,7 +337,7 @@ async function* backfillRoot(
   const visited = new Set<string>();
   const trouble: WalkTrouble = { incomplete: false };
   async function* seen(): AsyncGenerator<ScannedEntry> {
-    for await (const e of walkRoot(root, trouble)) {
+    for await (const e of walkRoot(root, trouble, excluded)) {
       // Containers only: the walk must not hold one string per file.
       if (containerOf(e.absPath)) visited.add(toAbsPosix(e.absPath));
       yield e;
@@ -402,6 +405,7 @@ async function* incrementalRescanRoot(
   fromVersion: number,
   exps: Record<string, Expansion>,
   scratchDir?: string,
+  excluded?: ExcludedDirs,
 ): AsyncGenerator<
   Batch<LocalFolderCursor, LocalFolderItem>,
   LocalFolderCursor
@@ -410,7 +414,7 @@ async function* incrementalRescanRoot(
   const visited = new Set<string>();
   const trouble: WalkTrouble = { incomplete: false };
   async function* changed(): AsyncGenerator<ScannedEntry> {
-    for await (const e of walkRoot(root, trouble)) {
+    for await (const e of walkRoot(root, trouble, excluded)) {
       // Containers are inspected on every rescan, watermark or not: the
       // record decides (an mbox's mtime moves on every flag change, and an
       // outdated expander version re-expands). Unchanged → not yielded.
@@ -475,6 +479,9 @@ export interface LocalFolderDeps {
    *  expands (the app passes `<userData>/expand-tmp`). Without it nested
    *  members are listed by name only. */
   scratchDir?: string;
+  /** Absolute folders whose files another source owns (the shared folders).
+   *  Read on every use: they can change while an account runs. */
+  excluded?: () => ExcludedDirs;
 }
 
 let inlineDeps: LocalFolderDeps | null = null;
@@ -507,7 +514,7 @@ export async function* pull(
   // Started BEFORE any scan or expansion work (see startWatcher).
   const watcher =
     isWatchEnabled(session.account) && !session.signal.aborted
-      ? startWatcher(rootPaths, session.signal)
+      ? startWatcher(rootPaths, session.signal, undefined, deps.excluded)
       : null;
   try {
     yield* scanThenDrive();
@@ -549,7 +556,7 @@ export async function* pull(
     if (rootPaths.some((root) => !working?.roots?.[root])) {
       for (const root of rootPaths) {
         // eslint-disable-next-line @typescript-eslint/no-unused-vars, no-await-in-loop
-        for await (const _path of walkPaths(root)) {
+        for await (const _path of walkPaths(root, undefined, deps.excluded?.())) {
           if (session.signal.aborted) return;
           estimateTotal += 1;
         }
@@ -571,6 +578,7 @@ export async function* pull(
           working,
           exps,
           scratchDir,
+          deps.excluded?.(),
         );
       } else {
         working = yield* incrementalRescanRoot(
@@ -581,6 +589,7 @@ export async function* pull(
           fromVersion,
           exps,
           scratchDir,
+          deps.excluded?.(),
         );
       }
     }
@@ -611,6 +620,7 @@ export async function* pull(
       if (session.signal.aborted) return;
       let progressed = false;
       const ev = watcher?.take();
+      if (ev && isExcluded(ev.absPath, deps.excluded?.())) continue;
       if (ev) {
         progressed = true;
         // eslint-disable-next-line no-await-in-loop
@@ -757,12 +767,15 @@ async function eventBatch(
 export async function fetchBytes(
   session: Session,
   doc: Document,
+  excluded?: ExcludedDirs,
 ): Promise<Uint8Array | null> {
   const rootPaths = getRootPaths(session.account).map((p) => path.resolve(p));
   const absPathRaw = doc.metadata?.absPath;
   if (typeof absPathRaw !== 'string') return null;
   const absPath = path.resolve(absPathRaw);
   if (!rootPaths.some((root) => isUnder(absPath, root))) return null;
+  // A shared folder's files are another source's: no bytes from here.
+  if (isExcluded(absPath, excluded)) return null;
   try {
     const stat = await fs.promises.stat(absPath);
     const d = decideLocalFile(absPath, stat.size);
@@ -786,6 +799,7 @@ export async function fetchBytes(
  */
 export async function* reconcile(
   session: Session,
+  excluded?: ExcludedDirs,
 ): AsyncIterable<ExternalRef[]> {
   const rootPaths = getRootPaths(session.account);
   await assertRootsAvailable(rootPaths);
@@ -796,7 +810,7 @@ export async function* reconcile(
     const trouble: WalkTrouble = { incomplete: false };
     // eslint-disable-next-line no-await-in-loop
     for await (const page of chunkBySize(
-      walkRoot(root, trouble),
+      walkRoot(root, trouble, excluded),
       500,
       Infinity,
       () => 0,
@@ -900,8 +914,8 @@ export function createLocalFolderSource(
     connect,
     pull: (session, cursor) => pull(session, cursor, deps),
     toDocument,
-    fetchBytes,
-    reconcile,
+    fetchBytes: (session, doc) => fetchBytes(session, doc, deps.excluded?.()),
+    reconcile: (session) => reconcile(session, deps.excluded?.()),
     manageFolders,
   };
 }

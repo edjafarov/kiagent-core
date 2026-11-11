@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 import { decideFileIndexing } from '@shared/file-indexability';
+import { isUnder, normalizePathSeparators } from '@shared/folder-paths';
 
 import { DEFAULT_EXCLUDE_GLOBS } from './exclude-globs';
 import {
@@ -35,6 +36,25 @@ export function chunk<T>(items: readonly T[], size: number): T[][] {
   for (let i = 0; i < items.length; i += size)
     out.push(items.slice(i, i + size));
   return out;
+}
+
+/** Absolute directory paths this source must leave alone (the shared
+ *  folders: another source owns their files). */
+export type ExcludedDirs = readonly string[];
+
+const caseFold = process.platform === 'win32' || process.platform === 'darwin';
+const comparable = (p: string): string => {
+  const s = normalizePathSeparators(path.resolve(p));
+  return caseFold ? s.toLowerCase() : s;
+};
+
+/** THE predicate for the shared subtrees: the walk (it does not descend), the
+ *  watcher's `ignored`, the event batch filter and `fetchBytes` all ask it.
+ *  True for a path that is one of `dirs` or lies anywhere under one. */
+export function isExcluded(abs: string, dirs: ExcludedDirs | undefined): boolean {
+  if (!dirs || dirs.length === 0) return false;
+  const p = comparable(abs);
+  return dirs.some((d) => isUnder(p, comparable(d)));
 }
 
 /** Set by a walk that skipped a directory it could not read (or that
@@ -183,7 +203,10 @@ function typeUnknown(d: fs.Dirent): boolean {
 export async function* walkPaths(
   rootPath: string,
   trouble?: WalkTrouble,
+  excluded?: ExcludedDirs,
 ): AsyncGenerator<string> {
+  // A root that is, or lies inside, an excluded folder lists nothing.
+  if (isExcluded(rootPath, excluded)) return;
   const open: fs.Dir[] = [];
   const descend = async (dir: string): Promise<void> => {
     try {
@@ -227,11 +250,13 @@ export async function* walkPaths(
       }
       if (isDir) {
         // eslint-disable-next-line no-await-in-loop
-        if (!EXCLUDED.dir(dirent.name)) await descend(absPath);
+        if (!EXCLUDED.dir(dirent.name) && !isExcluded(absPath, excluded))
+          await descend(absPath);
       } else if (
         isFile &&
         !EXCLUDED.file(dirent.name) &&
-        isIngestible(absPath)
+        isIngestible(absPath) &&
+        !isExcluded(absPath, excluded)
       ) {
         yield path.sep === '/' ? absPath : toAbsPosix(absPath);
       }
@@ -256,8 +281,9 @@ export async function* walkPaths(
 export async function* walkRoot(
   rootPath: string,
   trouble?: WalkTrouble,
+  excluded?: ExcludedDirs,
 ): AsyncGenerator<ScannedEntry> {
-  for await (const absPath of walkPaths(rootPath, trouble)) {
+  for await (const absPath of walkPaths(rootPath, trouble, excluded)) {
     let stats: fs.Stats;
     try {
       // eslint-disable-next-line no-await-in-loop

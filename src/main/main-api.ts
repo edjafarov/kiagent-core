@@ -12,6 +12,7 @@ import type {
 } from '@shared/contracts';
 import { coveringRoots, isUnder } from '@shared/folder-paths';
 
+import type { SharedFoldersApi } from './core/shared-folders';
 import { createBusyRegistry, type BusyRegistry } from './core/busy';
 import type { McpServerHandle } from './core/mcp/server';
 import type { CoreStore } from './core/store/store';
@@ -61,6 +62,9 @@ export interface MainProcessApi {
       path: string,
     ): Promise<{ status: 'covered' | 'added' | 'created'; accountId: string }>;
   };
+  /** Shared folders (phone phase 3): the Incoming and Sorted folders that
+   *  belong to the account. Core-owned; documents and remote-mcp use it. */
+  sharedFolders: SharedFoldersApi;
   mcp: {
     /** The loopback port actually bound (null if the server never bound —
      *  should not happen once `startMcp` has resolved). */
@@ -202,6 +206,8 @@ export interface BuildMainApiDeps {
   /** One registry for the app run, shared across every extension's API. A
    *  private one is made when absent (tests, single-extension hosts). */
   busy?: BusyRegistry;
+  /** The shared-folders service; absent in hosts that have none. */
+  sharedFolders?: SharedFoldersApi;
   /** Starts the loop for an account created by localFolders.ensureRoot. */
   runAccount?(account: Account): void;
   /** Narrow bridge to the engine's folder-scope transaction. */
@@ -211,6 +217,35 @@ export interface BuildMainApiDeps {
     configAtOpen: string,
   ): Promise<void>;
 }
+
+/** What `sharedFolders` is in a host without the service: nothing is shared. */
+const unavailableSharedFolders = (): SharedFoldersApi => {
+  const no = (): never => {
+    throw new Error('shared folders are unavailable in this host');
+  };
+  return {
+    setRoots: no,
+    roots: () => ({ incoming: null, sorted: null }),
+    enabled: () => false,
+    setTransport: no,
+    kick: () => {},
+    resolve: async () => null,
+    pathOf: async () => null,
+    parked: async () => false,
+    onChange: () => () => {},
+    usable: () => false,
+    rootStatus: () => 'unset',
+    reattach: no,
+    reportUnparsed: async () => {},
+    listForSorting: async () => [],
+    listPresent: async () => [],
+    moved: async () => {},
+    registerCapture: no,
+    noteCapture: async () => false,
+    fileOfCapture: async () => null,
+    serve: { open: no, stagingFile: no, offer: no, remove: no },
+  };
+};
 
 export function buildMainApi(deps: BuildMainApiDeps): MainProcessApi {
   const pluginIdPattern = /^[a-z0-9-]+\.[a-z0-9-]+$/;
@@ -255,6 +290,7 @@ export function buildMainApi(deps: BuildMainApiDeps): MainProcessApi {
       save: (accountId, creds) => deps.store.vault.save(accountId, creds),
       delete: (accountId) => deps.store.vault.delete(accountId),
     },
+    sharedFolders: deps.sharedFolders ?? unavailableSharedFolders(),
     localFolders: {
       roots: async () => {
         const result: Array<{ accountId: string; roots: string[] }> = [];

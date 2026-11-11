@@ -122,6 +122,7 @@ export const NS_METHODS: Record<string, string[]> = {
   commands: ['register'],
   attention: ['publish', 'resolve'],
   prefs: ['get', 'set', 'watch', 'unwatch'],
+  secrets: ['get', 'put', 'watch', 'unwatch'],
   sync: [...SYNC_SURFACE_METHODS],
 };
 
@@ -237,6 +238,32 @@ function buildRemoteHost(
             if (!set!.delete(wrapped)) return;
             if (set!.size === 0) {
               eventCbs.delete(PREFS_EVENT);
+              void callHost(endpoint, cap, 'unwatch', []).catch(() => {});
+            }
+          };
+        },
+      };
+      continue;
+    }
+    if (cap === 'secrets') {
+      const SECRETS_EVENT = 'platform.secrets.change';
+      host.secrets = {
+        get: (name: unknown) => callHost(endpoint, cap, 'get', [name]),
+        put: (name: unknown, value: unknown) =>
+          callHost(endpoint, cap, 'put', [name, value]).then(() => undefined),
+        onChange(cb: (name: string) => void) {
+          let set = eventCbs.get(SECRETS_EVENT);
+          if (!set) {
+            set = new Set();
+            eventCbs.set(SECRETS_EVENT, set);
+            void callHost(endpoint, cap, 'watch', []).catch(() => {});
+          }
+          const wrapped = (p: unknown) => cb((p as { name: string }).name);
+          set.add(wrapped);
+          return () => {
+            if (!set!.delete(wrapped)) return;
+            if (set!.size === 0) {
+              eventCbs.delete(SECRETS_EVENT);
               void callHost(endpoint, cap, 'unwatch', []).catch(() => {});
             }
           };

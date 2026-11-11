@@ -962,3 +962,33 @@ describe('buildMainApi vault', () => {
     expect(vaultSaveArgs).toEqual([['ext:x/y', { secret: '{"a":1}' }]]);
   });
 });
+
+describe('buildMainApi sharedFolders', () => {
+  const build = (sharedFolders?: unknown) => {
+    const { mcp } = stubMcp();
+    const { tray } = stubTray();
+    return buildMainApi({
+      store: stubStore().store,
+      mcp,
+      app: stubApp(),
+      dataDir: '/fake/data',
+      tray,
+      ui: { openWindow: () => {} },
+      outbound: stubOutbound(true).outbound,
+      sharedFolders: sharedFolders as never,
+    });
+  };
+
+  it('hands the service to the extension as given', () => {
+    const service = { roots: () => ({ incoming: '/i', sorted: '/s' }) };
+    expect(build(service).sharedFolders).toBe(service);
+  });
+
+  it('shares nothing in a host without the service', async () => {
+    const api = build().sharedFolders;
+    expect(api.roots()).toEqual({ incoming: null, sorted: null });
+    await expect(api.resolve('/x')).resolves.toBeNull();
+    await expect(api.listForSorting()).resolves.toEqual([]);
+    expect(() => api.setTransport(null)).toThrow('unavailable');
+  });
+});

@@ -1,5 +1,6 @@
 import type BetterSqlite3 from 'better-sqlite3';
 
+import { SHARED_FOLDERS_DDL, SHARED_PENDING_DDL } from '../shared-folders/schema';
 import { PDF_OCR_AFTER_STATUSES } from '@main/workers/convert/outcome';
 import { VISUAL_EXTS } from '@main/workers/vision/classify';
 import {
@@ -13,6 +14,7 @@ import {
 } from '@shared/folder-paths';
 
 import { buildStemView } from '../stemming';
+import { ensureSyncTriggers } from '../sync/tracking';
 import { corpusTooNewMessage } from './corpus-refusal';
 import { META_LEDGER_REKEYED } from './maintenance-keys';
 
@@ -1411,6 +1413,14 @@ const MIGRATIONS: Migration[] = [
       .get();
     if (!have) db.exec(`ALTER TABLE sync_state ADD COLUMN head_pending INTEGER NOT NULL DEFAULT 0`);
   },
+  // v24: shared folders (phone phase 3). The leader's manifest of the Incoming
+  // and Sorted folders and the registered scan captures are copied; the mirror
+  // (what this Mac last had in agreement with the manifest) is local.
+  SHARED_FOLDERS_DDL,
+  // v25: what this Mac moved, removed or noted in the shared folders and the
+  // next scan must still account for (a move not yet seen, a capture note not
+  // yet attached). Local, not synced.
+  SHARED_PENDING_DDL,
 ];
 
 /**
@@ -1575,4 +1585,6 @@ export function migrate(db: BetterSqlite3.Database): void {
       META_LEDGER_REKEYED,
     );
   ensureQueryIndexes(db);
+  // A leader that tracked before a copied table existed gets its triggers now.
+  ensureSyncTriggers(db);
 }

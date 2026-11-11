@@ -1,6 +1,6 @@
 # Extension API reference
 
-This document currently documents `host.attention`, manifest `fileRoots` and
+This document currently documents `host.attention`, `host.secrets`, manifest `fileRoots` and
 the folder-scope additions of platform 2.4.0.
 
 ## `host.attention`
@@ -24,6 +24,21 @@ reads the resulting feed. Mutations may reject with `ATTENTION_TX_FAILED` or
 `ATTENTION_OUTCOME_UNKNOWN`; a closed attention database rejects publish and
 resolve with `ATTENTION_DB_UNAVAILABLE`; after service shutdown they reject
 with `ATTENTION_DISPOSED`.
+
+## `host.secrets`
+
+Bundled extensions granted the `secrets` capability (rejected for any other tier)
+keep one account-wide secret per name:
+
+```ts
+await host.secrets.get(name); // string | null
+await host.secrets.put(name, value); // rejects with SyncReadOnly on a read-only copy
+const off = host.secrets.onChange((name) => {}); // own put, or a secret arriving from the leader
+```
+
+`name` matches `/^[a-z0-9-]{1,40}$/`. The value is stored encrypted as the vault
+row `secret:<extension id>:<name>`, so it travels to the other devices like a
+login. The extension id is the caller's own and is never an argument.
 
 ## Manifest `fileRoots` (platform 2.3.0)
 

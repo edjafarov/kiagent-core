@@ -57,6 +57,9 @@ import {
   type ReconcileCounts,
   type RekeyPageResult,
 } from './write-tx';
+function assertSecretKey(key: string): void {
+  if (!key.startsWith('secret:')) throw new Error('not a secret key');
+}
 
 export type { AccountRow, DocRow } from './rows';
 export { CORPUS_LANGUAGES_SQL } from './corpus-query';
@@ -176,6 +179,9 @@ function backupAssets(
 export interface StoreDeps {
   /** Credential blob encryption (Electron safeStorage in production). */
   encrypt(plain: string): Buffer;
+  /** Like `encrypt`, but throws when the keystore is unavailable instead of
+   *  storing plain text. Account secrets use it when it is supplied. */
+  encryptStrict?(plain: string): Buffer;
   decrypt(blob: Buffer): string;
   /** Cheap language detection for search stemming (ISO-639-3). */
   detectLanguages(text: string): string[];
@@ -955,6 +961,28 @@ export function openStore(db: AppDb, deps: StoreDeps): CoreStore {
           [account],
         );
         await db.run(`DELETE FROM vault WHERE account_id = ? AND NOT (${TRACKING})`, [account]);
+      },
+    },
+
+    secrets: {
+      async save(key, value) {
+        assertSecretKey(key);
+        await db.run(
+          `INSERT INTO vault(account_id, blob, epoch, n) VALUES(?, ?, ${STAMP_EPOCH}, ${STAMP_N})
+           ON CONFLICT(account_id) DO UPDATE SET blob = excluded.blob,
+             epoch = CASE WHEN ${TRACKING} THEN excluded.epoch ELSE vault.epoch END,
+             n = CASE WHEN ${TRACKING} THEN excluded.n ELSE vault.n END`,
+          // Never plain text: a secret is refused when the keystore is not there.
+          [key, (deps.encryptStrict ?? deps.encrypt)(value)],
+        );
+      },
+      async load(key) {
+        assertSecretKey(key);
+        const r = (
+          await db.all(`SELECT blob FROM vault WHERE account_id = ?`, [key])
+        )[0] as { blob: Buffer } | undefined;
+        if (!r || r.blob.length === 0) return null;
+        return deps.decrypt(r.blob);
       },
     },
 

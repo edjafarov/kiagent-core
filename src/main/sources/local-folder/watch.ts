@@ -5,6 +5,7 @@ import chokidar from 'chokidar';
 
 import { DEFAULT_EXCLUDE_GLOBS } from './exclude-globs';
 import { isIngestible } from './ingestible';
+import { isExcluded, type ExcludedDirs } from './scanner';
 
 export type FsEvent =
   | { kind: 'add' | 'change'; absPath: string }
@@ -109,9 +110,17 @@ export function startWatcher(
   rootPaths: string[],
   signal: AbortSignal,
   busy: BusyRecheck = BUSY_RECHECK,
+  /** The shared subtrees, read on every path (they can change while the
+   *  watcher runs): another source owns what lies under them. */
+  excluded?: () => ExcludedDirs,
 ): Watcher {
+  const base = WATCH_ENUMERATION_OPTIONS.ignored;
   const watcher = chokidar.watch(rootPaths, {
     ...WATCH_ENUMERATION_OPTIONS,
+    ignored: [
+      ...(Array.isArray(base) ? base : base ? [base] : []),
+      (p: string) => isExcluded(p, excluded?.()),
+    ],
     ignoreInitial: true,
   });
   const queue: FsEvent[] = [];
@@ -132,6 +141,8 @@ export function startWatcher(
   // exist. Filtering all three keeps the watcher's view of the tree identical
   // to the scanner's (`walkPaths`), which is the invariant reconcile depends on.
   const onEvent = (kind: FsEvent['kind']) => (p: string) => {
+    // chokidar's `ignored` is not asked again for a folder already watched.
+    if (isExcluded(p, excluded?.())) return;
     // A Thunderbird mailbox is admitted by its `.msf` sibling. If the
     // mailbox was written first, its own event was filtered; the index's
     // arrival is what admits it.
