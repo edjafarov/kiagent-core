@@ -323,4 +323,32 @@ describe('engine.project leadKinds', () => {
     await waitUntil(() => states.at(-1)?.accounts.includes(created) ?? false);
     await handle.stop();
   });
+
+  it('reinit() reads the state again from current rows, without the feed', async () => {
+    releaseMain();
+    const states: State[] = [];
+    let inits = 0;
+    const handle = engine().project(
+      projection({
+        async init(read) {
+          inits += 1;
+          return { accounts: [], docs: await read.count({}) };
+        },
+      }),
+      record(states),
+    );
+    await waitUntil(() => states.length >= 1);
+    expect(inits).toBe(1);
+    handle.reinit();
+    await waitUntil(() => inits === 2 && states.length >= 2);
+    // Twice in a row while one read is pending: at most one more read each.
+    handle.reinit();
+    handle.reinit();
+    await waitUntil(() => inits >= 3);
+    await handle.stop();
+    const after = inits;
+    handle.reinit();
+    await new Promise((r) => setTimeout(r, 50));
+    expect(inits).toBe(after);
+  });
 });

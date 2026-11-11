@@ -67,6 +67,21 @@ describe('commit reports whether it logged (#135)', () => {
     ).toBe(false);
   });
 
+  it('return() ends a parked feed at once, and a later commit makes it read nothing', async () => {
+    const it = store.feed(await store.headSeq())[Symbol.asyncIterator]();
+    const next = it.next();
+    await settle(); // parked on the nudge
+    await it.return!();
+    await expect(next).resolves.toEqual({ done: true, value: undefined });
+    const spy = jest.spyOn(db, 'all');
+    await store.commit({ account: accountId, documents: [doc('b')], cursor: 1 });
+    await settle();
+    expect(
+      spy.mock.calls.filter(([sql]) => /FROM changes WHERE seq > \?/.test(sql as string)).length,
+    ).toBe(0);
+    await expect(it.next()).resolves.toEqual({ done: true, value: undefined });
+  });
+
   it('a parked feed is not woken by a cursor-only consumer commit, and is by a document commit', async () => {
     const it = store.feed(await store.headSeq())[Symbol.asyncIterator]();
     const next = it.next();

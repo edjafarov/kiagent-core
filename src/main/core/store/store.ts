@@ -844,10 +844,15 @@ export function openStore(db: AppDb, deps: StoreDeps): CoreStore {
       return {
         [Symbol.asyncIterator]() {
           let cursor = after;
+          // return() ends a parked next() at once: without this, an abandoned
+          // feed kept its commit listener and read once more on the next
+          // commit (a projection reinit abandons one per call).
+          let ended = false;
+          let parked: (() => void) | null = null;
           return {
             async next(): Promise<IteratorResult<Change[]>> {
               for (;;) {
-                if (closed) return { done: true, value: undefined };
+                if (closed || ended) return { done: true, value: undefined };
                 // Arm the wakeup BEFORE reading. `materialize` is a worker-RPC
                 // macrotask once the DB is off-thread, so a producer `commit`
                 // (which fires `nudge.emit('commit')`) can land while we read.
@@ -882,10 +887,21 @@ export function openStore(db: AppDb, deps: StoreDeps): CoreStore {
                   // iteration. The wait path keeps it — that's the wakeup.
                   if (!waiting) nudge.removeListener('commit', fire);
                 }
+                if (ended) {
+                  nudge.removeListener('commit', fire);
+                  return { done: true, value: undefined };
+                }
+                parked = () => {
+                  nudge.removeListener('commit', fire);
+                  fire();
+                };
                 await woke;
+                parked = null;
               }
             },
             async return(): Promise<IteratorResult<Change[]>> {
+              ended = true;
+              parked?.();
               return { done: true, value: undefined };
             },
           };

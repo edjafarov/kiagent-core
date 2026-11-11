@@ -23,6 +23,7 @@ import type {
   Account,
   AppState,
   AccountId,
+  ProjectionHandle,
   SchedulerEnv,
   Seq,
 } from '@shared/contracts';
@@ -175,6 +176,9 @@ let mcp: McpServerHandle | null = null;
 let extensionsPlatform: ExtensionPlatform | null = null;
 let attentionService: AttentionService | null = null;
 let attentionPush: ReturnType<typeof wireAttentionPush> | null = null;
+/** The renderer's app-state projection, once started (a follower's applied
+ *  deltas read it again). */
+let appProjection: ProjectionHandle | null = null;
 const fileRoots = createFileRootRegistry();
 let bundledProviders: {
   localLlm: LocalLlmProvider;
@@ -1102,6 +1106,7 @@ app
     wireSyncAppliedPush(p.sync, {
       attentionHint: () => attentionPush?.hint(),
       broadcast,
+      reproject: () => appProjection?.reinit(),
     });
     const attention = createAttentionService({
       db: p.db,
@@ -1611,7 +1616,7 @@ app
       () => processingStatus.refreshWaiting(),
     );
     bootTimer.mark('ipc');
-    p.engine.project(projection, (state: AppState, seq: Seq) => {
+    appProjection = p.engine.project(projection, (state: AppState, seq: Seq) => {
       rev += 1;
       // Onboarding step 1: any account that has ever reached 'live'. Also
       // covers startup — the projection's init() snapshot flows through here.

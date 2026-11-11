@@ -816,9 +816,16 @@ export function createExtensionPlatform(
         warn: (msg) => deps.logSink.log(`sender:${sourceId}`, 'warn', msg),
       });
     } catch (err) {
-      if (sourceErrorCode(err) !== 'auth') throw err;
-      const account = await deps.store.account(accountId);
       const name = deps.sources.get(sourceId)?.descriptor.name ?? sourceId;
+      // Anything else failed before the sender was called (the refresh of an
+      // expired token, say): provably not sent, so the outbox offers Retry
+      // instead of "delivery uncertain" (the `not sent: ` contract).
+      if (sourceErrorCode(err) !== 'auth') {
+        throw new Error(
+          `not sent: the ${name} sign-in could not be renewed just now — check the connection and try again`,
+        );
+      }
+      const account = await deps.store.account(accountId);
       throw new Error(
         `your ${name} sign-in has expired — reconnect ${account?.identifier ?? 'the account'} in Settings`,
       );
