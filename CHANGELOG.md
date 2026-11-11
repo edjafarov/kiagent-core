@@ -1,5 +1,45 @@
 # Changelog
 
+## [0.124.0](https://github.com/edjafarov/kiagent-core/compare/v0.123.2...v0.124.0) (2026-11-11)
+
+### Features
+
+* **platform:** secrets capability for bundled extensions ([ac6d8a3](https://github.com/edjafarov/kiagent-core/commit/ac6d8a3cc7a26f50c7285c0cdcda256674f93c42))
+* **shared-folders:** a copy mirrors the leader's folders ([230f6f4](https://github.com/edjafarov/kiagent-core/commit/230f6f4b48d78128eeb3898a8d137947fe5661a3))
+* **shared-folders:** a new leader reconciles before it sorts ([78129b4](https://github.com/edjafarov/kiagent-core/commit/78129b449c4cabe0181dc540d57fecd1ef2da74e))
+* **shared-folders:** local folders skip the shared ones ([a48e15a](https://github.com/edjafarov/kiagent-core/commit/a48e15a3c394a27896bd56bbed9dfac18dc5c13c))
+* **shared-folders:** one document per shared file ([07e2ef9](https://github.com/edjafarov/kiagent-core/commit/07e2ef9daa6f6c67c0200787e493f5d6eeb71fd7))
+* **shared-folders:** only an account with more than one computer shares folders ([d6ee6e2](https://github.com/edjafarov/kiagent-core/commit/d6ee6e2641c8643315d53b63d8cd41e317add066))
+* **shared-folders:** tables and path rules ([44c7b13](https://github.com/edjafarov/kiagent-core/commit/44c7b13dd819c600752112374a294b782ce29556))
+* **shared-folders:** the leader answers offers; captures are recognised ([e3677fd](https://github.com/edjafarov/kiagent-core/commit/e3677fd137b66f2660a20ddac03084849e8ac8a7))
+* **shared-folders:** the leader lists its two folders ([e4dce99](https://github.com/edjafarov/kiagent-core/commit/e4dce995ff117e41da4bad6d427f464e325766d8))
+* **shared-folders:** the service and its API ([3a62f4e](https://github.com/edjafarov/kiagent-core/commit/3a62f4e258a2c9b407314ba1cf44b9038be743fd))
+* **store:** account secrets on the vault ([5e79a89](https://github.com/edjafarov/kiagent-core/commit/5e79a89f767c0f009187b587cd9fb7e3936e40a2))
+* **sync:** notify when an account secret is imported ([130766f](https://github.com/edjafarov/kiagent-core/commit/130766fbbc8ac045bf50852d3fe4c853d53d011f))
+
+### Bug Fixes
+
+* **secrets:** never store a secret as plain text; unsubscribe secret listeners ([e622175](https://github.com/edjafarov/kiagent-core/commit/e622175e8155c512e0aa72e2eda4fed36cbea620))
+* **shared-folders:** a copy that cannot reach the leader does not hash everything every minute ([cbb252e](https://github.com/edjafarov/kiagent-core/commit/cbb252ecd1f83c92191509e2f69b84c36b67aa05))
+* **shared-folders:** a file that could not be read is indexed when it can be ([362f829](https://github.com/edjafarov/kiagent-core/commit/362f82963e237f23a663b62447abccb358fc52d6))
+* **shared-folders:** a local-folder scan under way cannot index a shared file a second time ([1d44199](https://github.com/edjafarov/kiagent-core/commit/1d44199b3ff70a43c8bdaae1f1cc22c615de6fd3))
+* **shared-folders:** a mirror pass stops when its folder goes away ([db954e6](https://github.com/edjafarov/kiagent-core/commit/db954e655d1ee850d72d8fcd516c0716f122d9ec))
+* **shared-folders:** a parked file can still be sorted when the user asks ([071d3f0](https://github.com/edjafarov/kiagent-core/commit/071d3f0a351aab3a70358ec05f6c3dc5c955c863))
+* **shared-folders:** a paused root accepts nothing and stays paused ([3963fc7](https://github.com/edjafarov/kiagent-core/commit/3963fc7aa7ceb24480e437814406743136e716b7))
+* **shared-folders:** a received path cannot leave the root through a symlink ([4401cf7](https://github.com/edjafarov/kiagent-core/commit/4401cf78b77182663bc93b3c6517ba30be1465a2))
+* **shared-folders:** a reconcile that could not finish is still owed ([d2a1b4d](https://github.com/edjafarov/kiagent-core/commit/d2a1b4df6e3b48b30705a130eaff64ce0910d67b))
+* **shared-folders:** a root that is not there is still owed its reconcile ([186a666](https://github.com/edjafarov/kiagent-core/commit/186a66607005731bdce84caae81492368d49acf4))
+* **shared-folders:** an owed reconcile is retried on the timer ([a5c3ae4](https://github.com/edjafarov/kiagent-core/commit/a5c3ae4af21726c2a59b461f690530c925bb99f9))
+* **shared-folders:** moves, removals and capture notes are remembered until applied ([b941ad1](https://github.com/edjafarov/kiagent-core/commit/b941ad17e0c47447b88e320ce68a5617dc90542a))
+* **shared-folders:** names that differ only in case are one file ([9eb2f52](https://github.com/edjafarov/kiagent-core/commit/9eb2f52da4548756eef1aeaeaad523f7ab546d2c))
+* **shared-folders:** older bytes are never served or indexed as the current file ([e1fa327](https://github.com/edjafarov/kiagent-core/commit/e1fa3273c4ab9f422c0633e9017dfb800a6ffdc0))
+* **shared-folders:** one queue, and the role is checked at every write ([05fc9e2](https://github.com/edjafarov/kiagent-core/commit/05fc9e225cb42159d607577f6252b4f5bcc64e02))
+* **shared-folders:** review follow-ups: owed-only reconcile, fold-aware resolve, checks right before the write ([3fce441](https://github.com/edjafarov/kiagent-core/commit/3fce4412396e62f19b34364ca92d8029a9610ecf))
+* **shared-folders:** the migration touches only this Mac's local folders ([a0f385f](https://github.com/edjafarov/kiagent-core/commit/a0f385fdf0dcf800fc36cf3368625c0228c9de9e))
+* **shared-folders:** the open-file path is only given for the right bytes ([3b01e46](https://github.com/edjafarov/kiagent-core/commit/3b01e46147171d48ac8e4ef45ac090bf10b53f2d))
+* **shared-folders:** the service is published before its start-up work ([fe7e01c](https://github.com/edjafarov/kiagent-core/commit/fe7e01cffd6c1bb647857337fe33ea2bf918a1a9))
+* **sync:** a failing secret listener does not fail the import ([2325a06](https://github.com/edjafarov/kiagent-core/commit/2325a06d1d6d3905c5b091f9bafcd2ca33449d82))
+
 ## [0.123.2](https://github.com/edjafarov/kiagent-core/compare/v0.123.1...v0.123.2) (2026-11-09)
 
 ### Bug Fixes
