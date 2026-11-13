@@ -166,4 +166,68 @@ describe('foreground entry/exit (#147 §2)', () => {
       fs.rmSync(dir, { recursive: true, force: true });
     }
   });
+
+  it('a foreground:false tool is not wrapped, a normal one still is (registry)', async () => {
+    const a = admission();
+    const seen: Record<string, number> = {};
+    const tool = (name: string, foreground?: false): McpTool => ({
+      name,
+      description: '',
+      inputSchema: {},
+      ...(foreground === false ? { foreground } : {}),
+      call: async () => {
+        seen[name] = a.snapshot().foregroundInFlight;
+        return 'ok';
+      },
+    });
+    const { mcp, handlers } = capture();
+    attachToolHandlers(
+      mcp,
+      createToolRegistry([tool('plain'), tool('free', false)]),
+      { log: () => {} } as never,
+      undefined,
+      undefined,
+      (fn) =>
+        (async () => {
+          const leave = a.foreground();
+          try {
+            return await fn();
+          } finally {
+            leave();
+          }
+        })(),
+    );
+    await handlers[1]({ params: { name: 'free', arguments: {} } });
+    await handlers[1]({ params: { name: 'plain', arguments: {} } });
+    expect(seen).toEqual({ free: 0, plain: 1 });
+  });
+
+  it('callTool does not wrap a foreground:false tool', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'kiagent-fg-'));
+    const seed = await openDb(path.join(dir, 'kiagent.db'));
+    await seed.close();
+    const a = admission();
+    const handle = await startMcp({
+      query: fakeQuery(),
+      sqlExecutor: createTestSqlExecutor(path.join(dir, 'kiagent.db')),
+      logSink: { log: () => {} },
+      dataDir: dir,
+      portCandidates: [0],
+      admission: a,
+    });
+    try {
+      const seen: number[] = [];
+      handle.registerTool({ ...probeTool(a, seen), foreground: false });
+      const out = await handle.callTool(
+        'probe',
+        {},
+        { transport: 'agent', allowTools: ['probe'], client: 't' },
+      );
+      expect(out.ok).toBe(true);
+      expect(seen).toEqual([0]);
+    } finally {
+      await handle.stop();
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });

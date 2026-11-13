@@ -41,6 +41,7 @@ import {
   attachToolHandlers,
   createToolRegistry,
   invokeTool,
+  runTool,
   type Foreground,
   type ToolCallOutcome,
 } from './registry';
@@ -598,7 +599,7 @@ export async function startMcp(deps: McpDeps): Promise<McpServerHandle> {
 
     callTool(name, args, opts) {
       return runWithTransport(opts.transport, () =>
-        foreground(() =>
+        runTool(registry.get(name), foreground, () =>
           invokeTool(
             registry,
             deps.logSink,

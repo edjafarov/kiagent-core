@@ -1907,6 +1907,9 @@ export interface McpTool {
    *  callable exactly like a 'standard' one, and a tool's reach is bounded
    *  solely by the caps its module was granted at install. */
   readonly tier?: 'standard' | 'powerful';
+  /** Calls run as foreground work (pausing background ingest) unless a tool
+   *  sets this to false — for a tool that waits on that very work (`refresh`). */
+  readonly foreground?: boolean;
   call(args: Record<string, unknown>): Promise<unknown>;
 }
 
