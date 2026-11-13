@@ -40,6 +40,7 @@ describe('trusted attention renderer sender', () => {
         'calendar-out:retry',
         'calendar-out:discard',
         'calendar-out:restore',
+        'calendar-out:update-event',
       ]),
     );
   });

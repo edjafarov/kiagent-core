@@ -722,6 +722,9 @@ describe('service.dayView', () => {
       timeZone: BER,
     };
     writers.register('google-calendar', {
+      updateEvent: async () => {
+        throw new Error('unused');
+      },
       listCalendars: async () => [cal],
       createEvent: async () => {
         throw new Error('unused');

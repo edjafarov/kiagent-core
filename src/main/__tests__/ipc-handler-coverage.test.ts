@@ -120,6 +120,7 @@ describe('attention IPC composition', () => {
         'calendar-out:retry',
         'calendar-out:discard',
         'calendar-out:restore',
+        'calendar-out:update-event',
       ]),
     );
   });

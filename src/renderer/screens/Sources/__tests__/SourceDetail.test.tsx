@@ -174,16 +174,22 @@ describe('SourceDetail: the page', () => {
     expect(onBack).toHaveBeenCalled();
   });
 
-  it('a paused source says so and resumes', () => {
+  it('a paused source says so and resumes, showing the click took', async () => {
     setAccount('paused');
     render(<SourceDetail accountId={'a1' as Account['id']} onBack={noop} />);
-    fireEvent.click(screen.getByRole('button', { name: 'Resume' }));
+    const resume = screen.getByRole('button', { name: 'Resume' });
+    fireEvent.click(resume);
+    expect(resume).toHaveAttribute('aria-busy', 'true');
     expect(invoke()).toHaveBeenCalledWith('accounts:resume', {
       accountId: 'a1',
     });
+    expect(await screen.findByText('Resumed')).toHaveAttribute(
+      'role',
+      'status',
+    );
   });
 
-  it('the menu syncs and pauses; Remove lives in its own card', () => {
+  it('the menu syncs and pauses; Remove lives in its own card', async () => {
     render(<SourceDetail accountId={'a1' as Account['id']} onBack={noop} />);
     fireEvent.click(screen.getByRole('button', { name: 'Source actions' }));
     expect(
@@ -193,6 +199,7 @@ describe('SourceDetail: the page', () => {
     expect(invoke()).toHaveBeenCalledWith('accounts:pause', {
       accountId: 'a1',
     });
+    expect(await screen.findByText('Paused')).toHaveAttribute('role', 'status');
   });
 
   it('Browse opens the items as a sub-view with its own way back', () => {

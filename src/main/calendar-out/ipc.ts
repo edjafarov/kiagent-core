@@ -32,6 +32,7 @@ export function calendarOutInvokeHandlers(deps: {
   | 'calendar-out:discard'
   | 'calendar-out:restore'
   | 'calendar-out:list-calendars'
+  | 'calendar-out:update-event'
   | 'calendar-out:day-view'
 > {
   const { service, store } = deps;
@@ -66,6 +67,7 @@ export function calendarOutInvokeHandlers(deps: {
       await service.restoreById(id);
     },
     'calendar-out:list-calendars': () => service.listCalendars({}),
+    'calendar-out:update-event': (patch) => service.updateEvent(patch),
     'calendar-out:day-view': ({ id, revision }) =>
       service.dayViewById(id, revision),
   };

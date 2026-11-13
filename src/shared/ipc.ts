@@ -10,6 +10,7 @@ import type {
   Document,
   DocumentId,
   EventIntent,
+  EventPatch,
   FolderCount,
   FolderNode,
   Identity,
@@ -80,6 +81,12 @@ export type CalendarConfirmOutcome =
   | { kind: 'created'; event: CreatedEvent }
   | { kind: 'failed' | 'unknown'; error: string }
   | { kind: 'changed' | 'gone' | 'discarded' };
+
+/** The outcome of changing an existing event; `reason` is a sentence for
+ *  the user (never an error code). */
+export type CalendarUpdateOutcome =
+  | { ok: true }
+  | { ok: false; reason: string };
 
 /** A calendar an event can be added to (mirror of main's CalendarListItem). */
 export interface CalendarListEntry {
@@ -668,6 +675,13 @@ export interface Invokes {
   'calendar-out:discard': { req: { id: string }; res: void };
   'calendar-out:restore': { req: { id: string }; res: void };
   'calendar-out:list-calendars': { req: void; res: CalendarListEntry[] };
+  /** Change an existing event (title, time, location) at its provider.
+   *  `reason` is a sentence for the user. Guests are told by the provider,
+   *  so only the app's own renderer may call it (sender-validated). */
+  'calendar-out:update-event': {
+    req: EventPatch;
+    res: CalendarUpdateOutcome;
+  };
   /** The review page's day view for one draft at the revision the sheet
    *  shows; null = no day view (stale revision, not a draft, timed out). */
   'calendar-out:day-view': {
@@ -937,6 +951,7 @@ const INVOKE_CHANNEL_MAP = {
   'calendar-out:discard': 0,
   'calendar-out:restore': 0,
   'calendar-out:list-calendars': 0,
+  'calendar-out:update-event': 0,
   'calendar-out:day-view': 0,
   'mcp:info': 0,
   'mcp:connect-client': 0,

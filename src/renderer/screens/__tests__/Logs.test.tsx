@@ -117,9 +117,26 @@ describe('Logs page', () => {
   it('exports and says where', async () => {
     setup();
     await screen.findByText('Request from Claude');
-    await act(async () => {
-      fireEvent.click(screen.getByRole('button', { name: /Export/ }));
-    });
+    const exportBtn = screen.getByRole('button', { name: /Export/ });
+    fireEvent.click(exportBtn);
+    expect(exportBtn).toHaveAttribute('aria-busy', 'true');
+    await act(async () => undefined);
     expect(screen.getByText('Exported to /tmp/logs.txt')).toBeInTheDocument();
+    expect(exportBtn).not.toHaveAttribute('aria-busy');
+  });
+
+  it('Copy says Copied once the text is on the clipboard', async () => {
+    const writeText = jest.fn(() => Promise.resolve());
+    Object.defineProperty(navigator, 'clipboard', {
+      value: { writeText },
+      configurable: true,
+    });
+    setup();
+    await screen.findByText('Request from Claude');
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /Copy/ }));
+    });
+    expect(writeText).toHaveBeenCalled();
+    expect(screen.getByRole('button', { name: /Copied/ })).toBeInTheDocument();
   });
 });

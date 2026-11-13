@@ -1,6 +1,6 @@
 // What a user can do to one source, shared by the list's panel and the
 // source's page: the ··· menu, the remove confirmation and the one fix.
-import React, { useRef, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import type { AccountId, AppState } from '@shared/contracts';
 import {
   Button,
@@ -25,18 +25,52 @@ export function syncNow(accountId: AccountId): Promise<void> {
   return window.kiagent.invoke('accounts:sync-now', { accountId });
 }
 
-/** Runs a status's fix; reconnecting is the caller's flow. */
+/** Runs a status's fix; reconnecting is the caller's flow. Resolves when
+ *  the request is accepted (a sync is started, not finished). */
 export function runFix(
   entry: SourceEntry,
   fix: SourceFix,
   onReconnect: () => void,
-): void {
-  if (fix === 'reconnect') onReconnect();
-  else if (fix === 'resume')
-    void window.kiagent.invoke('accounts:resume', {
+): Promise<void> {
+  if (fix === 'reconnect') {
+    onReconnect();
+    return Promise.resolve();
+  }
+  if (fix === 'resume')
+    return window.kiagent.invoke('accounts:resume', {
       accountId: entry.account.id,
     });
-  else void syncNow(entry.account.id);
+  return syncNow(entry.account.id);
+}
+
+const STATUS_MS = 2000;
+
+/** A short confirmation line for actions that only start something. */
+function useStatusLine(): {
+  line: React.ReactElement;
+  flash: (text: string) => void;
+} {
+  const [text, setText] = useState('');
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(
+    () => () => {
+      if (timer.current) clearTimeout(timer.current);
+    },
+    [],
+  );
+  const flash = (next: string): void => {
+    setText(next);
+    if (timer.current) clearTimeout(timer.current);
+    timer.current = setTimeout(() => setText(''), STATUS_MS);
+  };
+  return {
+    line: (
+      <span role="status" className="t-meta">
+        {text}
+      </span>
+    ),
+    flash,
+  };
 }
 
 /** A status's fixes as buttons; the main one is primary. The page's
@@ -50,6 +84,7 @@ export function FixButtons(props: {
 }): React.ReactElement {
   const [main] = props.fixes;
   const order = props.primaryLast ? [...props.fixes].reverse() : props.fixes;
+  const { line, flash } = useStatusLine();
   return (
     <>
       {order.map((fix) => (
@@ -59,11 +94,20 @@ export function FixButtons(props: {
           variant={
             fix === main && props.tone === 'err' ? 'primary' : 'secondary'
           }
-          onClick={() => runFix(props.entry, fix, props.onReconnect)}
+          onAction={() =>
+            runFix(props.entry, fix, props.onReconnect).then(
+              () => {
+                if (fix !== 'reconnect')
+                  flash(fix === 'resume' ? 'Resumed' : 'Sync started');
+              },
+              () => flash("Couldn't start"),
+            )
+          }
         >
           {FIX_WORDS[fix]}
         </Button>
       ))}
+      {line}
     </>
   );
 }
@@ -112,23 +156,25 @@ export function SourceMenu(props: {
   const anchor = useRef<HTMLButtonElement>(null);
   const [open, setOpen] = useState(false);
   const [removing, setRemoving] = useState(false);
+  const { line, flash } = useStatusLine();
   const paused = a.status === 'paused';
   const items: MenuEntry[] = [
     {
       key: 'sync',
       label: 'Sync now',
       icon: 'refresh-cw',
-      onSelect: () => void syncNow(a.id),
+      onSelect: () => void syncNow(a.id).then(() => flash('Sync started')),
     },
     {
       key: 'pause',
       label: paused ? 'Resume' : 'Pause',
       icon: paused ? 'play' : 'pause',
       onSelect: () =>
-        void window.kiagent.invoke(
-          paused ? 'accounts:resume' : 'accounts:pause',
-          { accountId: a.id },
-        ),
+        void window.kiagent
+          .invoke(paused ? 'accounts:resume' : 'accounts:pause', {
+            accountId: a.id,
+          })
+          .then(() => flash(paused ? 'Resumed' : 'Paused')),
     },
     ...(props.onReconnect
       ? [
@@ -155,6 +201,7 @@ export function SourceMenu(props: {
   ];
   return (
     <>
+      {line}
       <IconButton
         ref={anchor}
         icon="more"

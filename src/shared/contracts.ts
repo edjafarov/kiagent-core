@@ -1144,15 +1144,47 @@ export interface CreatedEvent {
   note: string | null;
 }
 
+/** A change to an event that already exists (platform 2.21.0). Only the
+ *  fields present change; `start`, `end` and `timeZone` travel together
+ *  (ISO instants with offset, the IANA zone the user thinks in, as
+ *  EventIntent). `location: null` clears the location. The event is
+ *  addressed by `accountId` + `calendarId` + `eventId`; for a recurring
+ *  event `eventId` is the occurrence's own id, so the patch changes that
+ *  occurrence only. Timed events only: there is no all-day or description
+ *  field on purpose. */
+export interface EventPatch {
+  accountId: AccountId;
+  calendarId: string;
+  eventId: string;
+  title?: string;
+  start?: string;
+  end?: string;
+  timeZone?: string;
+  location?: string | null;
+}
+
+export interface UpdatedEvent {
+  eventId: string;
+  htmlLink: string | null;
+}
+
 /** Calendar writes for one source id (platform 2.16.0). Like Sender,
  *  `createEvent` is reachable ONLY after a confirmation gate. Credentials
  *  arrive in ctx: an extension runs out-of-process with no vault access. */
 export interface CalendarWriter {
   listCalendars(ctx: SenderContext): Promise<WritableCalendar[]>;
   createEvent(intent: EventIntent, ctx: SenderContext): Promise<CreatedEvent>;
+  /** Platform 2.21.0. Optional: a connector built before it lacks the
+   *  method, and the host answers with an error starting `unsupported:`. A
+   *  provider failure is thrown with a message fit to show the user. */
+  updateEvent?(patch: EventPatch, ctx: SenderContext): Promise<UpdatedEvent>;
 }
 
-export const CALENDAR_WRITER_OPS = ['listCalendars', 'createEvent'] as const;
+export const CALENDAR_WRITER_OPS = [
+  'listCalendars',
+  'createEvent',
+  'updateEvent',
+] as const;
 export type CalendarWriterOp = (typeof CALENDAR_WRITER_OPS)[number];
 
 export const DRAFT_MIRROR_OPS = [
@@ -1907,6 +1939,9 @@ export interface McpTool {
    *  callable exactly like a 'standard' one, and a tool's reach is bounded
    *  solely by the caps its module was granted at install. */
   readonly tier?: 'standard' | 'powerful';
+  /** Calls run as foreground work (pausing background ingest) unless a tool
+   *  sets this to false — for a tool that waits on that very work (`refresh`). */
+  readonly foreground?: boolean;
   call(args: Record<string, unknown>): Promise<unknown>;
 }
 

@@ -125,6 +125,17 @@ function toolToWire(tool: McpTool): Record<string, unknown> {
  *  stdio sibling, which has none. */
 export type Foreground = <T>(fn: () => Promise<T>) => Promise<T>;
 
+/** Runs one tool call as foreground work, unless the tool opts out with
+ *  `foreground: false` (it waits on the background work foreground pauses).
+ *  The ONE rule both wrap sites use: `attachToolHandlers` and `callTool`. */
+export function runTool<T>(
+  tool: McpTool | undefined,
+  foreground: Foreground | undefined,
+  fn: () => Promise<T>,
+): Promise<T> {
+  return foreground && tool?.foreground !== false ? foreground(fn) : fn();
+}
+
 export function attachToolHandlers(
   mcp: McpServer,
   registry: ToolRegistry,
@@ -152,7 +163,7 @@ export function attachToolHandlers(
         onActivity,
         allow,
       );
-    const out = await (foreground ? foreground(call) : call());
+    const out = await runTool(registry.get(req.params.name), foreground, call);
     // isError (not a thrown protocol error) so the calling LLM sees the
     // real message instead of a generic JSON-RPC failure.
     return out.ok

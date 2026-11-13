@@ -15,8 +15,13 @@ export { Rows, Row, DayGroup } from './rows';
 export type { RowSize } from './rows';
 export { DataTable } from './DataTable';
 export type { DataColumn } from './DataTable';
-export { Button, IconButton, TextButton } from './buttons';
-export type { ButtonVariant, ButtonProps, IconButtonProps } from './buttons';
+export { Button, IconButton, TextButton, useCopy } from './buttons';
+export type {
+  ButtonVariant,
+  ButtonProps,
+  IconButtonProps,
+  TextButtonProps,
+} from './buttons';
 export { TextField, Select, TextArea, CopyField, CodeBlock } from './fields';
 export type { TextFieldProps, SelectProps, TextAreaProps } from './fields';
 export { Segmented } from './Segmented';

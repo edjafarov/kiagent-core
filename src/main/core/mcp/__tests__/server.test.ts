@@ -98,6 +98,7 @@ const BUILTIN_TOOL_NAMES = [
   'list_calendars',
   'list_outbox',
   'query_sql',
+  'refresh',
   'revise_draft',
   'schedule_drafts',
   'search',

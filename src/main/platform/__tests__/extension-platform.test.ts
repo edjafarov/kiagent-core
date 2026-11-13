@@ -60,6 +60,11 @@ const FIXTURE_SENDER_UNDECLARED = path.join(
   'ext-sender-undeclared',
 );
 const FIXTURE_CALWRITER = path.join(__dirname, 'fixtures', 'ext-calwriter');
+const FIXTURE_CALWRITER_OLD = path.join(
+  __dirname,
+  'fixtures',
+  'ext-calwriter-old',
+);
 const FIXTURE_CALWRITER_NOCAP = path.join(
   __dirname,
   'fixtures',
@@ -3186,6 +3191,68 @@ describe('createExtensionPlatform', () => {
         expect(c.ctx).toEqual({
           credentials: { accessToken: 'FAKE-CAL-TOKEN' },
         });
+    });
+
+    it('updateEvent round-trips with the credentials in ctx; a provider error comes back as its message', async () => {
+      await platform.start();
+      await install(FIXTURE_CALWRITER, 'test.calwriter');
+      const account = await store.createAccount({
+        source: 'calsrc',
+        identifier: 'cal-account',
+        config: {},
+        status: 'live',
+      });
+      await store.vault.save(account.id, { accessToken: 'FAKE-CAL-TOKEN' });
+      const w = writerRegistry.get('calsrc')!;
+      const patch = {
+        accountId: account.id,
+        calendarId: 'primary@cal',
+        eventId: 'ev-1',
+        title: 'Moved',
+        start: '2026-11-04T10:00:00+01:00',
+        end: '2026-11-04T11:00:00+01:00',
+        timeZone: 'Europe/Berlin',
+        location: null,
+      };
+      await expect(w.updateEvent(patch)).resolves.toEqual({
+        eventId: 'ev-1',
+        htmlLink: 'https://cal.test/ev-1',
+      });
+      await expect(w.updateEvent({ ...patch, title: 'BOOM' })).rejects.toThrow(
+        'permission: not yours',
+      );
+      const { calls } = (await tools.get('writer_calls')!.call({})) as {
+        calls: Array<{ op: string; patch?: unknown; ctx: unknown }>;
+      };
+      expect(calls[0]).toEqual({
+        tag: 'calsrc',
+        op: 'updateEvent',
+        patch,
+        ctx: { credentials: { accessToken: 'FAKE-CAL-TOKEN' } },
+      });
+    });
+
+    it('a writer without updateEvent answers with an unsupported: error, not a TypeError', async () => {
+      await platform.start();
+      await install(FIXTURE_CALWRITER_OLD, 'test.calwriter-old');
+      const account = await store.createAccount({
+        source: 'calsrc',
+        identifier: 'cal-account',
+        config: {},
+        status: 'live',
+      });
+      await store.vault.save(account.id, { accessToken: 'FAKE-CAL-TOKEN' });
+      const w = writerRegistry.get('calsrc')!;
+      await expect(
+        w.updateEvent({
+          accountId: account.id,
+          calendarId: 'primary@cal',
+          eventId: 'ev-1',
+          title: 'x',
+        }),
+      ).rejects.toThrow(/^unsupported: /);
+      // The old writer still creates: only the new op is missing.
+      await expect(w.listCalendars(account.id)).resolves.toHaveLength(1);
     });
 
     it('deactivation unregisters the writer', async () => {

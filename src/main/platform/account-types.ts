@@ -1,7 +1,9 @@
 import type { Query, QueryAccount } from '@shared/contracts';
 
 export type SourceLookup = {
-  get(id: string): { descriptor: { documentTypes: string[] } } | undefined;
+  get(
+    id: string,
+  ): { descriptor: { documentTypes: string[]; name?: string } } | undefined;
 };
 
 /** The extension-facing query: every account names the document types its

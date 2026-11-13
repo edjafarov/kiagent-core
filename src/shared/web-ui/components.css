@@ -26,6 +26,8 @@
 }
 .btn:hover { background: var(--bg-muted); border-color: var(--border-strong); }
 .btn:focus-visible { outline: none; border-color: var(--border-focus); box-shadow: 0 0 0 3px rgba(167,139,250,0.18); }
+.btn { transition: background-color 80ms, transform 80ms; }
+.btn:active:not(:disabled) { background: var(--border-strong); transform: translateY(1px); }
 .btn.sm { height: 22px; padding: 0 8px; font-size: 11px; gap: 4px; }
 .btn.primary {
   background: var(--accent-solid);
@@ -42,8 +44,16 @@
   color: var(--error-solid);
 }
 .btn.destructive:hover { background: var(--error-subtle); }
+/* Pressed, per variant: after the hover rules, which a mouse press also matches. */
+.btn.primary:active:not(:disabled) { background: var(--accent-solid-hover); border-color: var(--accent-solid-hover); filter: brightness(0.92); }
+.btn.ghost:active:not(:disabled) { background: var(--border-strong); }
+.btn.destructive:active:not(:disabled) { background: var(--error-subtle); filter: brightness(0.96); }
 .btn svg { flex-shrink: 0; }
 .btn[disabled], .btn.disabled { opacity: 0.4; cursor: not-allowed; }
+@media (prefers-reduced-motion: reduce) {
+  .btn { transition: none; }
+  .btn:active:not(:disabled) { transform: none; }
+}
 
 /* ── Pills ────────────────────────────────────────────────────── */
 .pill {

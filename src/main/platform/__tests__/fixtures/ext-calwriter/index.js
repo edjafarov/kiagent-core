@@ -34,6 +34,14 @@ const writer = (tag) => ({
       note: null,
     };
   },
+  async updateEvent(patch, ctx) {
+    calls.push({ tag, op: 'updateEvent', patch, ctx });
+    if (patch.title === 'BOOM') throw new Error('permission: not yours');
+    return {
+      eventId: patch.eventId,
+      htmlLink: 'https://cal.test/' + patch.eventId,
+    };
+  },
 });
 
 module.exports = {

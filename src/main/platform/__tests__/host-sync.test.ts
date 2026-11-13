@@ -34,8 +34,8 @@ const manifest = JSON.parse(
   fs.readFileSync(path.join(FIXTURE, 'manifest.json'), 'utf8'),
 );
 
-it('the platform API is 2.20.0: 2.18.0 added the join methods, 2.19.0 the queued-settings methods, 2.20.0 host.role and the sync.role event', () => {
-  expect(PLATFORM_API_VERSION).toBe('2.20.0');
+it('the platform API is 2.21.0: 2.18.0 added the join methods, 2.19.0 the queued-settings methods, 2.20.0 host.role and the sync.role event, 2.21.0 CalendarWriter.updateEvent', () => {
+  expect(PLATFORM_API_VERSION).toBe('2.21.0');
 });
 
 it('a marketplace extension declaring sync is refused, a bundled one is accepted', () => {

@@ -334,8 +334,9 @@ describe('LocalProcessing: providers only when one needs the user', () => {
       name: /download now/i,
     });
 
+    fireEvent.click(button);
+    expect(button).toHaveAttribute('aria-busy', 'true');
     await act(async () => {
-      fireEvent.click(button);
       await Promise.resolve();
       await Promise.resolve();
     });

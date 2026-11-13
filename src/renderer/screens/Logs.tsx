@@ -8,7 +8,14 @@ import React, {
 } from 'react';
 import { useView } from '@renderer/state/view';
 import { Icon } from '@shared/web-ui/icon-sprite';
-import { Button, Page, Select, Status, TextField } from '@shared/web-ui/ui';
+import {
+  Button,
+  Page,
+  Select,
+  Status,
+  TextField,
+  useCopy,
+} from '@shared/web-ui/ui';
 import type { LogLevel, LogRecord } from '@shared/contracts';
 import './Logs.css';
 
@@ -163,14 +170,14 @@ export function Logs(): React.ReactElement {
     setFrozen(null);
   }, []);
 
+  const { copied, copy: copyText } = useCopy();
   const copy = useCallback(() => {
-    const text = visible.map(recordToPlainText).join('\n');
-    void navigator.clipboard?.writeText(text);
-  }, [visible]);
+    void copyText(visible.map(recordToPlainText).join('\n'));
+  }, [visible, copyText]);
 
   const doExport = useCallback(() => {
     setExportMsg('Exporting…');
-    window.kiagent
+    return window.kiagent
       .invoke('logs:export', undefined)
       .then((path) => setExportMsg(`Exported to ${path}`))
       .catch((err) =>
@@ -230,9 +237,10 @@ export function Logs(): React.ReactElement {
           {paused ? 'Resume' : 'Pause'}
         </Button>
         <Button size="sm" variant="ghost" onClick={copy}>
-          <Icon name="copy" size={12} /> Copy
+          <Icon name={copied ? 'check' : 'copy'} size={12} />{' '}
+          {copied ? 'Copied' : 'Copy'}
         </Button>
-        <Button size="sm" variant="ghost" onClick={doExport}>
+        <Button size="sm" variant="ghost" onAction={doExport}>
           <Icon name="external" size={12} /> Export
         </Button>
         <Button size="sm" variant="ghost" onClick={clear}>

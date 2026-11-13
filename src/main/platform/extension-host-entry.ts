@@ -548,6 +548,10 @@ export function runExtensionHost(
         const [op, ...rest] = args as [string, ...unknown[]];
         if (!(CALENDAR_WRITER_OPS as readonly string[]).includes(op))
           throw new Error(`unknown calendar op ${op}`);
+        // An op the contract names but this connector predates (2.21.0
+        // updateEvent is optional): a marked error, never a raw TypeError.
+        if (typeof writer[op as keyof CalendarWriter] !== 'function')
+          throw new Error(`unsupported: calendar op ${op} for ${method}`);
         return (
           writer[op as keyof CalendarWriter] as (
             ...a: unknown[]

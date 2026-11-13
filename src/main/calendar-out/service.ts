@@ -6,8 +6,13 @@
  * to `creating` by compare-and-set. The tool layer gets `CalendarToolApi`
  * only — it can list, look and draft, never create.
  */
-import type { AccountId, EventIntent, Prefs } from '@shared/contracts';
-import type { CalendarDayView } from '@shared/ipc';
+import type {
+  AccountId,
+  EventIntent,
+  EventPatch,
+  Prefs,
+} from '@shared/contracts';
+import type { CalendarDayView, CalendarUpdateOutcome } from '@shared/ipc';
 
 import type { LogSink } from '../core/engine/engine';
 import { currentTransport } from '../core/mcp/transport-context';
@@ -62,6 +67,10 @@ export interface CalendarOutService extends CalendarToolApi {
   retryById(id: string): Promise<EventConfirmOutcome>;
   discardById(id: string): Promise<EventDraftRow | null>;
   restoreById(id: string): Promise<EventDraftRow | null>;
+  /** Changes an event that already exists (title, time, location). Never
+   *  throws: `reason` is a sentence for the user. Reached only from the
+   *  app's sender-validated IPC, never from a tool. */
+  updateEvent(patch: EventPatch): Promise<CalendarUpdateOutcome>;
   listPending(): Promise<EventDraftView[]>;
   /** The day model for the review page; null = no day view (listing failed,
    *  too many candidates, or the page deadline passed). Rejects on errors. */
@@ -99,6 +108,25 @@ export function classifyWriterError(
   return { status: 'unknown', error: `${msg} — ${UNKNOWN_COPY}` };
 }
 
+/** Why a patch cannot be sent, as a sentence for the user; null = fine. */
+function invalidPatch(p: EventPatch): string | null {
+  const times = [p.start, p.end, p.timeZone].filter((v) => v !== undefined);
+  if (times.length !== 0 && times.length !== 3)
+    return 'A new time needs a start, an end and a time zone.';
+  if (p.title === undefined && p.location === undefined && times.length === 0)
+    return 'Nothing to change.';
+  if (p.title !== undefined && !p.title.trim())
+    return 'The title cannot be empty.';
+  if (p.start !== undefined && p.end !== undefined) {
+    const s = Date.parse(p.start);
+    const e = Date.parse(p.end);
+    if (Number.isNaN(s) || Number.isNaN(e))
+      return 'The start or end is not a valid time.';
+    if (e <= s) return 'The event must end after it starts.';
+  }
+  return null;
+}
+
 export function createCalendarOutService(deps: {
   store: CoreStore;
   writers: CalendarWriterRegistry;
@@ -113,9 +141,11 @@ export function createCalendarOutService(deps: {
   pageDeadlineMs?: number;
   /** The review sheet's deadline (default SHEET_DEADLINE_MS). */
   sheetDeadlineMs?: number;
-  /** After an event is created: ask its account to sync now, so the event
-   *  shows up in the app's Calendar without waiting for the next cadence. */
-  onCreated?: (account: { id: AccountId; source: string }) => void;
+  /** True on a read-only copy of the data (no writer is found there). */
+  readOnly?: () => boolean;
+  /** After an event is created or changed: ask its account to sync now, so
+   *  the app's Calendar shows it without waiting for the next cadence. */
+  onChanged?: (account: { id: AccountId; source: string }) => void;
 }): CalendarOutService {
   const { store } = deps;
   const now = deps.now ?? (() => new Date());
@@ -253,7 +283,7 @@ export function createCalendarOutService(deps: {
       const event = await writer.createEvent(intent);
       await store.eventDrafts.finishCreate(row.id, event);
       try {
-        deps.onCreated?.({ id: row.accountId, source: account.source });
+        deps.onChanged?.({ id: row.accountId, source: account.source });
       } catch {
         // Only a nudge; the next cadence sync picks the event up anyway.
       }
@@ -282,6 +312,50 @@ export function createCalendarOutService(deps: {
       if (!started) return { kind: 'changed' };
       return runCreate(started);
     });
+
+  const updateEvent = async (
+    patch: EventPatch,
+  ): Promise<CalendarUpdateOutcome> => {
+    const invalid = invalidPatch(patch);
+    if (invalid) return { ok: false, reason: invalid };
+    const account = await store.account(patch.accountId);
+    if (!account)
+      return { ok: false, reason: 'This account is no longer connected.' };
+    const email = account.identifier;
+    const writer = deps.writers.get(account.source);
+    if (!writer)
+      return {
+        ok: false,
+        reason: deps.readOnly?.()
+          ? 'This computer is a read-only copy.'
+          : `Kia can't change events in ${email} right now — is its connector installed and enabled?`,
+      };
+    try {
+      await writer.updateEvent(patch);
+    } catch (e) {
+      const msg = (e as Error)?.message ?? String(e);
+      deps.logSink.log(
+        'calendar-out',
+        'warn',
+        `update ${patch.eventId} (${account.source}) failed: ${msg}`,
+      );
+      if (/^unsupported:/.test(msg)) {
+        const name =
+          deps.sources.get(account.source)?.descriptor.name ?? account.source;
+        return {
+          ok: false,
+          reason: `Update the ${name} connector to edit events.`,
+        };
+      }
+      return { ok: false, reason: msg };
+    }
+    try {
+      deps.onChanged?.({ id: account.id, source: account.source });
+    } catch {
+      // Only a nudge; the next cadence sync picks the change up anyway.
+    }
+    return { ok: true };
+  };
 
   const verify = async (token: string) => {
     const t = verifyEventToken(await deps.ctx().secret(), token);
@@ -341,6 +415,7 @@ export function createCalendarOutService(deps: {
 
     discardById: (id) => withDraft(id, () => store.eventDrafts.discard(id)),
     restoreById: (id) => withDraft(id, () => store.eventDrafts.restore(id)),
+    updateEvent,
 
     async listPending() {
       const cals = await calendarSnapshot();

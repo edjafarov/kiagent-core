@@ -56,6 +56,9 @@ describe('event review pages under /outbox/event/', () => {
     });
     const writers = createCalendarWriterRegistry();
     writers.register('google-calendar', {
+      updateEvent: async () => {
+        throw new Error('unused');
+      },
       listCalendars: async () => [
         {
           id: 'fam',
@@ -268,6 +271,9 @@ describe('review page: bounded listing + similar-event disclosure', () => {
       timeZone: 'Europe/Berlin',
     });
     writers.register('google-calendar', {
+      updateEvent: async () => {
+        throw new Error('unused');
+      },
       listCalendars: () =>
         hang
           ? new Promise<never>(() => {})
