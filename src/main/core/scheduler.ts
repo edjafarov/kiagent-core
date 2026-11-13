@@ -16,6 +16,8 @@ export interface CoreScheduler extends Scheduler {
     run: () => Promise<void>,
   ): Promise<void>;
   unregister(id: string): Promise<void>;
+  /** Is a job registered under `id` right now (from memory)? */
+  has(id: string): boolean;
   start(): void;
   stop(): void;
 }
@@ -132,6 +134,7 @@ export function createScheduler(
       jobs.delete(id);
       await store.scheduleDelete(id);
     },
+    has: (id) => jobs.has(id),
     async jobs() {
       const persisted = new Map(
         (await store.scheduleAll()).map((r) => [r.jobId, r]),

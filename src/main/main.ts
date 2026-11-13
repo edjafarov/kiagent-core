@@ -1300,6 +1300,28 @@ app
       localPathOf: async (doc) =>
         (await sharedSourceHost?.sharedFolders.pathOf(doc)) ?? null,
       admission: p.admission,
+      sync: {
+        accounts: async () =>
+          (await p.readsFor('mcp').accounts()).map((a) => ({
+            id: a.id as string,
+            source: a.source,
+            identifier: a.identifier,
+            status: a.status,
+            lastSyncAt: a.lastSyncAt ?? null,
+            lastError: a.lastError ?? null,
+          })),
+        // The engine gate's own rule (sync/role.ts gateEngine).
+        runsHere: (id) =>
+          !p.sync.ownedByOther(id) &&
+          (!p.sync.readOnly() || p.sync.ownsAccount(id)),
+        syncedOn: () =>
+          p.sync.readOnly()
+            ? (p.sync.masterName() ?? 'another device')
+            : 'another device',
+        hasJob: (jobId) => p.scheduler.has(jobId),
+        trigger: (jobId) => p.scheduler.trigger(jobId),
+        isRunning: (id) => p.engine.isRunning(id as AccountId),
+      },
     });
     bootTimer.mark('mcp');
     // Acceptance aid (§6): KIA_READ_DIAG_FILE=/path makes the app rewrite its

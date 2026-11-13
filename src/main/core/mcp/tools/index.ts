@@ -13,6 +13,12 @@ import type { CalendarToolApi } from '@main/calendar-out/service';
 import type { OutboundToolApi } from '@main/outbound/service';
 
 import type { LocalPathOf } from './local-path';
+import {
+  makeRefreshTool,
+  refreshDescription,
+  refreshInputSchema,
+  type McpSyncApi,
+} from './refresh';
 import { countDescription, countInputSchema, makeCountTool } from './count';
 import {
   digitalMemoryInfoDescription,
@@ -88,6 +94,22 @@ const unavailableCalendar: CalendarToolApi = {
   findFreeTime: unavailable,
   draftEvent: unavailable,
 };
+/** No sync backend on this transport (a stdio sibling): the tool lists, and
+ *  a call says why it cannot run. */
+const unavailableSync: McpSyncApi = {
+  accounts: unavailableRefresh,
+  runsHere: () => false,
+  syncedOn: () => 'another device',
+  hasJob: () => false,
+  trigger: unavailableRefresh,
+  isRunning: () => false,
+};
+async function unavailableRefresh(): Promise<never> {
+  throw new Error(
+    'Refresh is unavailable on this transport right now — the KIAgent app ' +
+      'must be running; its HTTP MCP server handles refresh.',
+  );
+}
 async function unavailable(): Promise<never> {
   throw new Error(
     'Outbound drafting is unavailable on this transport right now — the ' +
@@ -100,6 +122,7 @@ export function buildBuiltinTools(
   outbound?: OutboundToolApi,
   calendar?: CalendarToolApi,
   localPathOf?: LocalPathOf,
+  sync?: McpSyncApi,
 ): McpTool[] {
   const out = outbound ?? unavailableOutbound;
   const cal = calendar ?? unavailableCalendar;
@@ -139,6 +162,14 @@ export function buildBuiltinTools(
       inputSchema: digitalMemoryInfoInputSchema,
       tier: 'standard',
       call: async () => digitalMemoryInfo(),
+    },
+    {
+      name: 'refresh',
+      description: refreshDescription,
+      inputSchema: refreshInputSchema,
+      tier: 'standard',
+      foreground: false,
+      call: makeRefreshTool(sync ?? unavailableSync),
     },
     {
       name: 'draft_reply',
@@ -210,4 +241,5 @@ export type { SearchArgs, SearchHit } from './search';
 export type { McpDocument } from './get';
 export type { CountGroupBy } from './count';
 export type { GetRelatedRelation, GetRelatedSummary } from './get-related';
+export type { McpSyncApi } from './refresh';
 export type { DigitalMemoryAccount } from './digital-memory-info';

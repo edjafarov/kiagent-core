@@ -48,6 +48,7 @@ import {
 import { attachResourceHandlers } from './resources';
 import { buildBuiltinTools } from './tools';
 import type { LocalPathOf } from './tools/local-path';
+import type { McpSyncApi } from './tools/refresh';
 import type { SqlExecutorHandle, SqlRunnerDiagnostics } from './sql-runner';
 import { createRawSqlTools } from './tools/raw-sql';
 import { currentTransport, runWithTransport } from './transport-context';
@@ -78,6 +79,10 @@ export interface McpDeps {
   calendar?: CalendarOutService;
   /** Where a shared-folder document lives on this Mac (for `source_url`). */
   localPathOf?: LocalPathOf;
+  /** What the `refresh` tool drives: the accounts, the scheduler and the
+   *  engine, plus whether an account runs on this device. Absent in tests;
+   *  the tool then reports itself unavailable. */
+  sync?: McpSyncApi;
   /** Defaults to `PORT_CANDIDATES`. Tests that start a REAL server (as
    *  opposed to driving handlers in-process) should override this to `[0]`
    *  so the OS assigns an ephemeral port instead of racing every other
@@ -307,7 +312,13 @@ export async function startMcp(deps: McpDeps): Promise<McpServerHandle> {
   const rawSql = createRawSqlTools(sql.exec);
   const foreground: Foreground = (fn) => inForeground(deps.admission, fn);
   const registry = createToolRegistry([
-    ...buildBuiltinTools(deps.query, deps.outbound, deps.calendar, deps.localPathOf),
+    ...buildBuiltinTools(
+      deps.query,
+      deps.outbound,
+      deps.calendar,
+      deps.localPathOf,
+      deps.sync,
+    ),
     ...rawSql.tools,
   ]);
   const outboundRoutes = deps.outbound
