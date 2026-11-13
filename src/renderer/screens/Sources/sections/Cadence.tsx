@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { Button, Card, CardHeader, Select } from '@shared/web-ui/ui';
 import type { Account, Cadence as CadenceValue } from '@shared/contracts';
 import type { ScheduledJob } from '@shared/ipc';
@@ -40,6 +40,14 @@ function keyFor(cadence: CadenceValue | undefined): string {
 
 const jobIdFor = (a: Account): string => `source:${a.source}:${a.id}`;
 
+/** How long Run now stays busy waiting for the sync to land. */
+export const RUN_WAIT_MS = 60_000;
+const RUN_POLL_MS = 1_000;
+
+/** The later of two ISO times (either may be missing). */
+const later = (x?: string | null, y?: string | null): string | null =>
+  !x ? (y ?? null) : !y ? x : Date.parse(x) >= Date.parse(y) ? x : y;
+
 /**
  * Sync frequency. The legacy Cadence section was two focused/unfocused
  * polling-interval selects, self-hiding for non-`pollable` connectors — the
@@ -55,6 +63,17 @@ export function Cadence(props: { account: Account }): React.ReactElement {
   const jobId = jobIdFor(a);
   const [job, setJob] = useState<ScheduledJob | null>(null);
   const [pending, setPending] = useState(false);
+  const [checking, setChecking] = useState(false);
+  // The account prop is pushed live; Run now waits on its lastSyncAt.
+  const accountRef = useRef(a);
+  accountRef.current = a;
+  const mounted = useRef(true);
+  useEffect(
+    () => () => {
+      mounted.current = false;
+    },
+    [],
+  );
 
   const refreshJob = async (): Promise<void> => {
     const jobs = await window.kiagent.invoke('scheduler:jobs', undefined);
@@ -79,13 +98,24 @@ export function Cadence(props: { account: Account }): React.ReactElement {
     }
   }
 
+  /** Starts the sync, then stays busy until the account's lastSyncAt moves
+   *  (the run landed) or RUN_WAIT_MS passes — a manual run never touches
+   *  the scheduler's lastRun, so without this nothing on the page changed. */
   async function runNow(): Promise<void> {
-    setPending(true);
+    const before = a.lastSyncAt ?? null;
+    setChecking(true);
     try {
       await syncNow(a.id);
-      await refreshJob();
+      const until = Date.now() + RUN_WAIT_MS;
+      while (
+        mounted.current &&
+        Date.now() < until &&
+        (accountRef.current.lastSyncAt ?? null) === before
+      )
+        await new Promise((r) => setTimeout(r, RUN_POLL_MS));
+      if (mounted.current) await refreshJob();
     } finally {
-      setPending(false);
+      if (mounted.current) setChecking(false);
     }
   }
 
@@ -132,14 +162,16 @@ export function Cadence(props: { account: Account }): React.ReactElement {
             ? 'Paused — resume it from the menu'
             : a.status === 'needsReauth'
               ? 'Paused until you sign in again'
-              : [
-                  `Last checked ${formatRelative(job?.lastRun)}`,
+              : checking
+                ? 'Checking now…'
+                : [
+                  `Last checked ${formatRelative(later(job?.lastRun, a.lastSyncAt))}`,
                   job?.nextRun ? `next ${formatUntil(job.nextRun)}` : null,
                 ]
                   .filter(Boolean)
                   .join(' · ')}
         </span>
-        <Button size="sm" disabled={pending} onClick={() => void runNow()}>
+        <Button size="sm" disabled={pending} onAction={runNow} done>
           Run now
         </Button>
       </div>
