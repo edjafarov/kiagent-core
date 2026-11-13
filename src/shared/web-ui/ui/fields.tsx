@@ -1,6 +1,6 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React from 'react';
 import { Icon } from '../icon-sprite';
-import { Button } from './buttons';
+import { Button, useCopy } from './buttons';
 import { cx } from './cx';
 
 /* Every field's `className` goes on its outer box: the wrapper for
@@ -65,8 +65,6 @@ export const TextArea = React.forwardRef<HTMLTextAreaElement, TextAreaProps>(
   },
 );
 
-const COPIED_MS = 1500;
-
 function clipboardCopy(text: string): Promise<void> {
   if (!navigator.clipboard)
     return Promise.reject(new Error('clipboard unavailable'));
@@ -80,24 +78,7 @@ export function CopyField(props: {
   copy?: (text: string) => Promise<void>;
 }): React.ReactElement {
   const { value, copy = clipboardCopy } = props;
-  const [copied, setCopied] = useState(false);
-  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  useEffect(
-    () => () => {
-      if (timer.current) clearTimeout(timer.current);
-    },
-    [],
-  );
-  const onCopy = async (): Promise<void> => {
-    try {
-      await copy(value);
-    } catch {
-      return; // clipboard refused — the button stays "Copy"
-    }
-    setCopied(true);
-    if (timer.current) clearTimeout(timer.current);
-    timer.current = setTimeout(() => setCopied(false), COPIED_MS);
-  };
+  const { copied, copy: doCopy } = useCopy(copy);
   return (
     <div className="ui-copy">
       <span className="ui-copy-v" title={value}>
@@ -108,7 +89,7 @@ export function CopyField(props: {
         size="sm"
         icon={copied ? 'check' : 'copy'}
         aria-label={`Copy ${props['aria-label']}`}
-        onClick={() => void onCopy()}
+        onClick={() => void doCopy(value)}
       >
         {copied ? 'Copied' : 'Copy'}
       </Button>
