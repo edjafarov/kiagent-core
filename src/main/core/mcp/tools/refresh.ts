@@ -88,6 +88,8 @@ const realClock: RefreshClock = {
   started: processStarted,
 };
 
+export const FRESH_REASON = 'refreshed less than a minute ago';
+
 export function makeRefreshTool(
   sync: McpSyncApi,
   clock: RefreshClock = realClock,
@@ -101,6 +103,11 @@ export function makeRefreshTool(
     // source to refresh.
     const all = (await sync.accounts()).filter((a) => a.source !== 'worker');
     const targets = source ? all.filter((a) => a.source === source) : all;
+    // A guessed name ('outlook', 'email') must not look like "nothing new".
+    if (source && targets.length === 0)
+      throw new Error(
+        `unknown source '${source}'; known: ${[...new Set(all.map((a) => a.source))].join(', ') || 'none'}`,
+      );
 
     const out = new Map<string, RefreshAccount>();
     const triggered = new Map<string, number>(); // account id -> trigger time
@@ -128,12 +135,12 @@ export function makeRefreshTool(
       else if (!sync.runsHere(a.id))
         skip(a, `synced on ${sync.syncedOn(a.id)}`);
       else if (!sync.hasJob(jobId)) skip(a, 'no sync job');
+      else if (sync.isRunning(a.id)) out.set(a.id, row(a, 'already_running'));
       else if (
         clock.now() - (clock.started.get(a.id) ?? -Infinity) <
         COOLDOWN_MS
       )
-        skip(a, 'fresh');
-      else if (sync.isRunning(a.id)) out.set(a.id, row(a, 'already_running'));
+        skip(a, FRESH_REASON);
       else {
         const at = clock.now();
         // Marked before the await so a concurrent call sees the cooldown.

@@ -146,12 +146,31 @@ describe('refresh tool', () => {
     const s = setup([acc({ id: 'a1' })]);
     await s.refresh({});
     const r = await s.refresh({});
-    expect(r.accounts[0]).toMatchObject({ status: 'skipped', reason: 'fresh' });
+    expect(r.accounts[0]).toMatchObject({
+      status: 'skipped',
+      reason: 'refreshed less than a minute ago',
+    });
     expect(s.triggers).toHaveLength(1);
     // After the cooldown it triggers again.
     await s.clock.sleep(COOLDOWN_MS);
     await s.refresh({});
     expect(s.triggers).toHaveLength(2);
+  });
+
+  it('a call while the triggered run is still going says already_running, not fresh', async () => {
+    const s = setup([acc({ id: 'a1' })]);
+    await s.refresh({});
+    s.running.add('a1');
+    const r = await s.refresh({});
+    expect(r.accounts[0].status).toBe('already_running');
+  });
+
+  it('an unknown source is an error naming the known sources', async () => {
+    const s = setup([acc({ id: 'a1' })]);
+    await expect(s.refresh({ source: 'outlook' })).rejects.toThrow(
+      /unknown source 'outlook'; known: /,
+    );
+    expect(s.triggers).toEqual([]);
   });
 
   it('gives still_running when the run outlives the deadline', async () => {
