@@ -353,6 +353,11 @@ button.ui-row-main:focus-visible { outline: 2px solid var(--border-focus); outli
 .ui-btn:hover:not(:disabled) { background: var(--bg-muted); }
 .ui-btn:focus-visible { outline: 2px solid var(--border-focus); outline-offset: 1px; }
 .ui-btn:disabled { opacity: 0.55; cursor: default; }
+.ui-btn { transition: background-color 80ms, transform 80ms; }
+.ui-btn:active:not(:disabled) { background: var(--border-strong); transform: translateY(1px); }
+.ui-btn.is-primary:active:not(:disabled) { background: var(--accent-solid-hover); filter: brightness(0.92); }
+.ui-btn.is-ghost:active:not(:disabled) { background: rgba(0, 0, 0, 0.09); }
+.ui-btn.is-danger:active:not(:disabled) { background: #ffe4e6; }
 .ui-btn.is-primary {
   background: var(--accent-solid);
   border-color: var(--accent-solid);
@@ -384,6 +389,9 @@ button.ui-row-main:focus-visible { outline: 2px solid var(--border-focus); outli
   cursor: pointer;
 }
 .ui-link:hover { text-decoration: underline; }
+.ui-link { transition: opacity 80ms; }
+.ui-link:active:not(:disabled) { opacity: 0.6; }
+.ui-link:disabled { opacity: 0.5; cursor: default; text-decoration: none; }
 .ui-link:focus-visible { outline: 2px solid var(--border-focus); outline-offset: 2px; }
 
 /* ── Fields ───────────────────────────────────────────────────────── */
@@ -673,6 +681,11 @@ button.ui-row-main:focus-visible { outline: 2px solid var(--border-focus); outli
 .ui-menu-i .i { color: var(--text-secondary); }
 .ui-menu-i:hover:not(:disabled), .ui-menu-i:focus { background: var(--row-sel); outline: none; }
 .ui-menu-i:disabled { opacity: 0.55; cursor: default; }
+.ui-menu-i:active:not(:disabled) { background: var(--border-strong); }
+@media (prefers-reduced-motion: reduce) {
+  .ui-btn { transition: none; }
+  .ui-btn:active:not(:disabled) { transform: none; }
+}
 .ui-menu-i.is-danger, .ui-menu-i.is-danger .i { color: var(--error-solid); }
 .ui-menu-sep { height: 1px; margin: 4px 0; background: var(--hair); }
 .ui-menu-foot { padding: 6px 12px 8px; font-size: 12px; }
