@@ -8,7 +8,9 @@ import type {
   CalendarEventMetadata,
   CreatedEvent,
   EventIntent,
+  EventPatch,
   Prefs,
+  UpdatedEvent,
   WritableCalendar,
 } from '@shared/contracts';
 
@@ -32,6 +34,7 @@ import type { CalendarListItem } from '../types';
 const CAL_SOURCES = {
   get: (id: string) => ({
     descriptor: {
+      name: id === 'microsoft-365' ? 'Microsoft 365' : 'Google Calendar',
       documentTypes:
         id === 'microsoft-365'
           ? ['email.thread', 'attachment', 'calendar.event']
@@ -96,6 +99,9 @@ describe('calendar-out service', () => {
   let calendars: WritableCalendar[];
   let prefsCalendar: Record<string, unknown> | undefined;
   let createImpl: (i: EventIntent) => Promise<CreatedEvent>;
+  let updateImpl: (p: EventPatch) => Promise<UpdatedEvent>;
+  let readOnly: boolean;
+  const patches: EventPatch[] = [];
   const keys: string[] = [];
 
   const seed = async (
@@ -143,6 +149,12 @@ describe('calendar-out service', () => {
     ];
     prefsCalendar = undefined;
     keys.length = 0;
+    patches.length = 0;
+    readOnly = false;
+    updateImpl = async (p) => {
+      patches.push(p);
+      return { eventId: p.eventId, htmlLink: null };
+    };
     createImpl = async (i) => {
       keys.push(i.idempotencyKey);
       return {
@@ -172,6 +184,7 @@ describe('calendar-out service', () => {
     writers.register('google-calendar', {
       listCalendars: async () => calendars,
       createEvent: (i) => createImpl(i),
+      updateEvent: (p) => updateImpl(p),
     });
     const ctx: OutboundContext = {
       modeFor: (a) =>
@@ -184,13 +197,18 @@ describe('calendar-out service', () => {
     svc = createCalendarOutService({
       sources: CAL_SOURCES,
       store,
-      writers,
+      // A read-only copy finds no writer (followerLookup in main).
+      writers: {
+        ...writers,
+        get: (id) => (readOnly ? undefined : writers.get(id)),
+      },
+      readOnly: () => readOnly,
       ctx: () => ctx,
       prefs: { get: () => ({ calendar: prefsCalendar }) } as unknown as Prefs,
       vaultScope: async () => scope,
       now: () => clock,
       logSink: { log: () => {} } as never,
-      onCreated: (a) => {
+      onChanged: (a) => {
         synced.push(a.id);
         if (syncThrows) throw new Error('scheduler down');
       },
@@ -375,6 +393,106 @@ describe('calendar-out service', () => {
     const d = asDraft(await draft());
     expect(await svc.confirmById(d.draftId, 1)).toMatchObject({
       kind: 'created',
+    });
+  });
+
+  describe('updateEvent', () => {
+    const patch = (over: Partial<EventPatch> = {}): EventPatch => ({
+      accountId: acc.id,
+      calendarId: 'family@group',
+      eventId: 'ev-1',
+      title: 'Moved',
+      start: '2026-11-04T10:00:00+01:00',
+      end: '2026-11-04T11:00:00+01:00',
+      timeZone: 'Europe/Berlin',
+      ...over,
+    });
+
+    it("sends the patch to the account's writer and asks the account to sync", async () => {
+      expect(await svc.updateEvent(patch({ location: null }))).toEqual({
+        ok: true,
+      });
+      expect(patches).toEqual([patch({ location: null })]);
+      expect(synced).toEqual([acc.id]);
+    });
+
+    it.each([
+      [
+        'nothing to change',
+        {
+          title: undefined,
+          start: undefined,
+          end: undefined,
+          timeZone: undefined,
+        },
+      ],
+      ['an empty title', { title: '  ' }],
+      ['an end before the start', { end: '2026-11-04T09:00:00+01:00' }],
+      ['a zero-length event', { end: '2026-11-04T10:00:00+01:00' }],
+      ['a start without an end', { end: undefined }],
+      ['times without a zone', { timeZone: undefined }],
+      ['an unparseable time', { start: 'tomorrow' }],
+    ] as [string, Partial<EventPatch>][])(
+      'refuses %s before any writer is called',
+      async (_n, over) => {
+        const r = await svc.updateEvent(patch(over));
+        expect(r).toMatchObject({ ok: false });
+        expect(patches).toEqual([]);
+        expect(synced).toEqual([]);
+      },
+    );
+
+    it('a title-only or location-only change is enough', async () => {
+      const only = {
+        start: undefined,
+        end: undefined,
+        timeZone: undefined,
+      };
+      expect(await svc.updateEvent(patch({ ...only }))).toEqual({ ok: true });
+      expect(
+        await svc.updateEvent(
+          patch({ ...only, title: undefined, location: 'Aula' }),
+        ),
+      ).toEqual({ ok: true });
+    });
+
+    it('a read-only copy has no writer: the reason says so, nothing syncs', async () => {
+      readOnly = true;
+      expect(await svc.updateEvent(patch())).toEqual({
+        ok: false,
+        reason: 'This computer is a read-only copy.',
+      });
+      expect(patches).toEqual([]);
+      expect(synced).toEqual([]);
+    });
+
+    it('a connector that predates updateEvent gets its name in the sentence', async () => {
+      updateImpl = async () => {
+        throw new Error(
+          'unsupported: calendar op updateEvent for google-calendar',
+        );
+      };
+      expect(await svc.updateEvent(patch())).toEqual({
+        ok: false,
+        reason: 'Update the Google Calendar connector to edit events.',
+      });
+      expect(synced).toEqual([]);
+    });
+
+    it('a provider error passes through as its message and does not sync', async () => {
+      updateImpl = async () => {
+        throw new Error('Google refused: you cannot edit this event');
+      };
+      expect(await svc.updateEvent(patch())).toEqual({
+        ok: false,
+        reason: 'Google refused: you cannot edit this event',
+      });
+      expect(synced).toEqual([]);
+    });
+
+    it('a throwing sync request never fails the update', async () => {
+      syncThrows = true;
+      expect(await svc.updateEvent(patch())).toEqual({ ok: true });
     });
   });
 
@@ -605,6 +723,9 @@ describe('calendar-out service', () => {
     calendars = [cal()];
     const failing = createCalendarWriterRegistry();
     failing.register('google-calendar', {
+      updateEvent: async () => {
+        throw new Error('unused');
+      },
       listCalendars: async () => {
         throw new Error('reconnect Google Calendar in Settings');
       },
@@ -694,6 +815,9 @@ describe('calendar-out service', () => {
     });
     const writers = createCalendarWriterRegistry();
     writers.register('microsoft-365', {
+      updateEvent: async () => {
+        throw new Error('unused');
+      },
       listCalendars: async () => [
         cal({ id: 'AAMk-cal', name: 'Calendar' }),
         cal({ id: 'AAMk-birthdays', name: 'Birthdays', primary: false }),
@@ -719,6 +843,9 @@ describe('calendar-out service', () => {
     clock = new Date(T0);
     const writers = createCalendarWriterRegistry();
     writers.register('google-calendar', {
+      updateEvent: async () => {
+        throw new Error('unused');
+      },
       listCalendars: async () => [cal()],
       createEvent: (i) => createImpl(i),
     });

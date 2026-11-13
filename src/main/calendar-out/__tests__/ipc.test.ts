@@ -64,6 +64,7 @@ describe('calendar-out IPC', () => {
   let svc: CalendarOutService;
   let acc: Account;
   let created: string[];
+  let updated: string[];
   let hang: boolean;
   let skewMs: number;
   let refuse: boolean;
@@ -83,6 +84,7 @@ describe('calendar-out IPC', () => {
 
   beforeEach(async () => {
     created = [];
+    updated = [];
     hang = false;
     skewMs = 0;
     refuse = false;
@@ -101,6 +103,10 @@ describe('calendar-out IPC', () => {
     await store.commit({ account: acc.id, documents: [], cursor: 0 });
     const writers = createCalendarWriterRegistry();
     writers.register('google-calendar', {
+      updateEvent: async (p) => {
+        updated.push(p.eventId);
+        return { eventId: p.eventId, htmlLink: null };
+      },
       listCalendars: () =>
         hang ? new Promise<never>(() => {}) : Promise.resolve([cal]),
       createEvent: async (i: EventIntent): Promise<CreatedEvent> => {
@@ -191,6 +197,23 @@ describe('calendar-out IPC', () => {
     });
     expect(out).toEqual({ created: 1, failed: 0, changed: 1 });
     expect(created).toEqual([b.draftId]);
+  });
+
+  it('update-event delegates to the service and answers with its outcome', async () => {
+    const patch = {
+      accountId: acc.id,
+      calendarId: 'family@group',
+      eventId: 'ev-9',
+      title: 'Moved',
+    };
+    expect(await handlers['calendar-out:update-event'](patch)).toEqual({
+      ok: true,
+    });
+    expect(updated).toEqual(['ev-9']);
+    expect(
+      await handlers['calendar-out:update-event']({ ...patch, title: '' }),
+    ).toMatchObject({ ok: false });
+    expect(updated).toEqual(['ev-9']);
   });
 
   it('pending count includes event drafts', async () => {

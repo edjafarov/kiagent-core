@@ -1211,8 +1211,9 @@ app
       prefs: p.prefs,
       vaultScope: async (id) => (await p.store.vault.load(id))?.scope,
       logSink: p.logSink,
+      readOnly: p.readOnly,
       // Same job the tray's Sync now triggers; it skips a run in progress.
-      onCreated: (a) =>
+      onChanged: (a) =>
         void p.scheduler.trigger(`source:${a.source}:${a.id}`).catch(() => {}),
     });
     // Owner-only route for the assistant's email channel: no Outbox, the

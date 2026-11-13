@@ -28,6 +28,8 @@ export const SENDER_VALIDATED_CHANNELS = new Set([
   'calendar-out:retry',
   'calendar-out:discard',
   'calendar-out:restore',
+  // A change to an event with guests makes the provider email them.
+  'calendar-out:update-event',
 ]);
 
 export function guardIpcHandler<Req, Res>(
