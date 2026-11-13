@@ -1,7 +1,7 @@
 /** @jest-environment node */
+import type { Query } from '@shared/contracts';
 import { KIA_INSTRUCTIONS } from '../../instructions';
 import { buildBuiltinTools } from '../index';
-import type { Query } from '@shared/contracts';
 import {
   COOLDOWN_MS,
   WAIT_MS,
@@ -57,7 +57,7 @@ function setup(accounts: Acc[], over: Partial<McpSyncApi> = {}) {
   };
   const pending: Array<() => void> = [];
   // Sleeping lets the fake run progress: the first sleep completes the runs.
-  const sleep = clock.sleep;
+  const { sleep } = clock;
   clock.sleep = async (ms) => {
     await sleep(ms);
     while (pending.length) pending.shift()!();

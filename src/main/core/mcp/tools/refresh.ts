@@ -111,9 +111,13 @@ export function makeRefreshTool(
       if (a.status === 'paused') skip(a, 'paused');
       else if (a.status === 'needsReauth') skip(a, 'needs reconnect');
       else if (a.status === 'needs-connector') skip(a, 'needs its connector');
-      else if (!sync.runsHere(a.id)) skip(a, `synced on ${sync.syncedOn(a.id)}`);
+      else if (!sync.runsHere(a.id))
+        skip(a, `synced on ${sync.syncedOn(a.id)}`);
       else if (!sync.hasJob(jobId)) skip(a, 'no sync job');
-      else if (clock.now() - (clock.started.get(a.id) ?? -Infinity) < COOLDOWN_MS)
+      else if (
+        clock.now() - (clock.started.get(a.id) ?? -Infinity) <
+        COOLDOWN_MS
+      )
         skip(a, 'fresh');
       else if (sync.isRunning(a.id)) out.set(a.id, row(a, 'already_running'));
       else {
@@ -137,8 +141,7 @@ export function makeRefreshTool(
       const deadline = clock.now() + WAIT_MS;
       const anyRunning = (): boolean =>
         [...triggered.keys()].some((id) => sync.isRunning(id));
-      while (anyRunning() && clock.now() < deadline)
-        await clock.sleep(POLL_MS);
+      while (anyRunning() && clock.now() < deadline) await clock.sleep(POLL_MS);
 
       const fresh = new Map((await sync.accounts()).map((a) => [a.id, a]));
       for (const [id, at] of triggered) {
@@ -147,7 +150,11 @@ export function makeRefreshTool(
         else if (a.status === 'error' || a.status === 'needsReauth')
           out.set(
             id,
-            row(a, 'failed', a.lastError ?? `account is in status '${a.status}'`),
+            row(
+              a,
+              'failed',
+              a.lastError ?? `account is in status '${a.status}'`,
+            ),
           );
         else if (a.lastSyncAt && Date.parse(a.lastSyncAt) > at)
           out.set(id, row(a, 'synced'));
