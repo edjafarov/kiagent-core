@@ -1,5 +1,23 @@
 # Changelog
 
+## [0.125.0](https://github.com/edjafarov/kiagent-core/compare/v0.124.0...v0.125.0) (2026-11-13)
+
+### Features
+
+* **mcp:** a tool can opt out of the foreground slot ([3e1b5ed1](https://github.com/edjafarov/kiagent-core/commit/3e1b5ed11ca7606a3e5ec0a04ae8007d5f0a2a8f))
+* **mcp:** refresh tool: sync a source now, on request ([5903e6f3](https://github.com/edjafarov/kiagent-core/commit/5903e6f3e27f5d6bb13a353d093e97d8fefdb654))
+* **mcp:** instructions say when to call refresh ([cf9eeaf6](https://github.com/edjafarov/kiagent-core/commit/cf9eeaf6e721b2537bfdac3b2faa67aee9bbdf0a))
+* **platform:** CalendarWriter.updateEvent contract; PLATFORM_API 2.21.0, SDK 1.14.0 ([fee069f7](https://github.com/edjafarov/kiagent-core/commit/fee069f7526e09d230373bb6e52ef32353e90f24))
+* **platform:** the host bridge carries updateEvent; a connector without it answers unsupported ([b16e193b](https://github.com/edjafarov/kiagent-core/commit/b16e193b0eb1c4eb80a4a58e2125282c091953e2))
+* **calendar-out:** update an existing event from the app ([46152580](https://github.com/edjafarov/kiagent-core/commit/4615258081e11dae1500611d5c052d93868ad263))
+* **web-ui:** pressed state for buttons, links and menu items ([03344020](https://github.com/edjafarov/kiagent-core/commit/0334402022ffbe2dea0c2ccd191119c46159e0ec))
+* **web-ui:** onAction, busy and done on buttons; useCopy ([10c54a8e](https://github.com/edjafarov/kiagent-core/commit/10c54a8e0c266786645e011300b8059f701ad3d4))
+* **renderer:** source fixes, Logs copy/export and local model downloads show that they were clicked ([4ea2515d](https://github.com/edjafarov/kiagent-core/commit/4ea2515d9be6325d357b092fe832096dd8d0d7ec))
+
+### Bug Fixes
+
+* **web-ui:** pressed colours win over hover per variant; a failed source fix says so ([cbf0a93b](https://github.com/edjafarov/kiagent-core/commit/cbf0a93ba80a407db20f7e6dcb2f9efbf502ee6c))
+
 ## [0.124.0](https://github.com/edjafarov/kiagent-core/compare/v0.123.2...v0.124.0) (2026-11-11)
 
 ### Features
