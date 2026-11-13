@@ -140,6 +140,11 @@ const netResult: PluginNetResult = {
 };
 const host: HostFor<'db' | 'files' | 'net'> = {
   self: { id: 'publisher.connector', dataDir: '/approved' }, log: () => {},
+  role: {
+    get: async () => ({
+      leader: true, follower: false, multiDevice: false, epoch: 0, priorRenewedAt: null, reason: 'follower-copy',
+    }),
+  },
   db, files, net,
 };
 
