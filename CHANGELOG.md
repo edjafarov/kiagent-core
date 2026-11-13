@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.125.1](https://github.com/edjafarov/kiagent-core/compare/v0.125.0...v0.125.1) (2026-11-13)
+
+### Bug Fixes
+
+* **mcp:** refresh names an unknown source and reports a running sync as already_running ([d40526d3](https://github.com/edjafarov/kiagent-core/commit/d40526d383bff4fdf1651d00c2f7b483c1f8b410))
+
 ## [0.125.0](https://github.com/edjafarov/kiagent-core/compare/v0.124.0...v0.125.0) (2026-11-13)
 
 ### Features
