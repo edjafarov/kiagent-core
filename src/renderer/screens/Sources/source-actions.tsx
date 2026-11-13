@@ -95,10 +95,13 @@ export function FixButtons(props: {
             fix === main && props.tone === 'err' ? 'primary' : 'secondary'
           }
           onAction={() =>
-            runFix(props.entry, fix, props.onReconnect).then(() => {
-              if (fix !== 'reconnect')
-                flash(fix === 'resume' ? 'Resumed' : 'Sync started');
-            })
+            runFix(props.entry, fix, props.onReconnect).then(
+              () => {
+                if (fix !== 'reconnect')
+                  flash(fix === 'resume' ? 'Resumed' : 'Sync started');
+              },
+              () => flash("Couldn't start"),
+            )
           }
         >
           {FIX_WORDS[fix]}

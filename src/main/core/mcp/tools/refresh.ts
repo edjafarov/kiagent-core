@@ -8,6 +8,10 @@
  * ingest, which is the very work this tool waits for.
  */
 
+import type { SyncStatus } from '@shared/contracts';
+
+import { isResting } from '../../engine/resting';
+
 export const refreshDescription = `Sync a source now, then return. \`source\` is a source id (e.g. 'gmail', 'slack'); omit it to refresh every account. Waits up to 15 s and reports per account: synced, still_running, already_running, failed (with the reason) or skipped (with the reason — paused, needs reconnect, synced on another device, refreshed less than a minute ago). Call it before \`search\` when the user asks what is new right now; not for historical questions.`;
 
 export const refreshInputSchema = {
@@ -41,6 +45,15 @@ export interface McpSyncApi {
   trigger(jobId: string): Promise<void>;
   isRunning(accountId: string): boolean;
 }
+
+/** Why a resting account was left alone, in the user's words. */
+const RESTING_REASON: Record<string, string> = {
+  paused: 'paused',
+  needsReauth: 'needs reconnect',
+  'needs-connector': 'needs its connector',
+};
+/** A triggered run that ended in one of these did not sync. */
+const STOPPED_ON_ERROR = new Set(['error', 'needsReauth']);
 
 export const WAIT_MS = 15_000;
 export const POLL_MS = 500;
@@ -108,9 +121,10 @@ export function makeRefreshTool(
 
     for (const a of targets) {
       const jobId = `source:${a.source}:${a.id}`;
-      if (a.status === 'paused') skip(a, 'paused');
-      else if (a.status === 'needsReauth') skip(a, 'needs reconnect');
-      else if (a.status === 'needs-connector') skip(a, 'needs its connector');
+      // A resting account never starts by itself (engine/resting.ts):
+      // refresh is not the user's Retry, so it leaves it resting too.
+      if (isResting(a.status as SyncStatus))
+        skip(a, RESTING_REASON[a.status] ?? a.status);
       else if (!sync.runsHere(a.id))
         skip(a, `synced on ${sync.syncedOn(a.id)}`);
       else if (!sync.hasJob(jobId)) skip(a, 'no sync job');
@@ -147,7 +161,7 @@ export function makeRefreshTool(
       for (const [id, at] of triggered) {
         const a = fresh.get(id) ?? targets.find((t) => t.id === id)!;
         if (sync.isRunning(id)) out.set(id, row(a, 'still_running'));
-        else if (a.status === 'error' || a.status === 'needsReauth')
+        else if (STOPPED_ON_ERROR.has(a.status))
           out.set(
             id,
             row(

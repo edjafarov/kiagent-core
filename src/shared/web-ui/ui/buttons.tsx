@@ -12,8 +12,9 @@ const COPIED_MS = 1500;
 interface ActionProps {
   /** Click handler that returns its promise. The button is disabled with
    *  aria-busy while it runs (spinner after 200 ms); clicks meanwhile are
-   *  ignored. Wins over `onClick` when both are given. A rejection is not
-   *  swallowed or turned into UI; callers handle their own errors. */
+   *  ignored. Wins over `onClick` when both are given. A rejection only ends
+   *  the pending state: the button shows no error, so an action that can
+   *  fail catches and shows its own. */
   onAction?: () => Promise<unknown>;
   /** Pending driven from outside (a status push); renders like onAction. */
   busy?: boolean;
