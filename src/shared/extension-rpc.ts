@@ -10,7 +10,8 @@
  * 'draft' | 'ui'). 'draft' (2.15.0): `method` is the source id, args[0] the
  * DraftMirror op, the rest its arguments with the SenderContext last.
  * 'calendar' (2.16.0) has the same shape for a CalendarWriter: `method` is
- * the source id, args[0] the op ('listCalendars' | 'createEvent'), the rest
+ * the source id, args[0] the op ('listCalendars' | 'createEvent' |
+ * 'updateEvent' (2.21.0)), the rest
  * its arguments with the SenderContext last.
  * Replies mirror the call's id. Everything else is a one-way notification.
  *
@@ -31,7 +32,7 @@ import type {
 import type { FileChange } from './plugin-files';
 import type { SourceErrorCode, WireErrorCode } from './source-errors';
 
-export const PLATFORM_API_VERSION = '2.20.0';
+export const PLATFORM_API_VERSION = '2.21.0';
 
 /** A Batch after the child mapped items through the source's toDocument —
  *  the generic Item type never crosses the wire. */
