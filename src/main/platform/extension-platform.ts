@@ -32,6 +32,7 @@ import type {
   Query,
   SendResult,
   Source,
+  UpdatedEvent,
   WritableCalendar,
 } from '@shared/contracts';
 import { LONE_ROLE } from '@shared/contracts';
@@ -1014,6 +1015,10 @@ export function createExtensionPlatform(
           call('createEvent', intent.accountId, [
             intent,
           ]) as Promise<CreatedEvent>,
+        updateEvent: (patch) =>
+          call('updateEvent', patch.accountId, [
+            patch,
+          ]) as Promise<UpdatedEvent>,
       });
       registeredWriters.push(id);
     }

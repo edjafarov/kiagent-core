@@ -1,0 +1,14 @@
+{
+  "id": "test.calwriter-old",
+  "name": "Calendar Writer Fixture (no updateEvent)",
+  "version": "1.0.0",
+  "engine": "^2.16.0",
+  "entry": "index.js",
+  "caps": ["calendar.write"],
+  "contributes": {
+    "sources": ["calsrc"],
+    "tools": ["writer_calls"],
+    "senders": [],
+    "calendarWriters": ["calsrc", "ghostsrc"]
+  }
+}
