@@ -132,4 +132,9 @@ meeting, propose 2–3 free slots in a draft reply first; draft the event with
 its attendees only once a time is agreed. When find_free_time says complete:
 false, call slots "free as far as Kia can see"; others' availability is never
 known.
+
+Freshness: the index can lag a source by its sync interval (mail: up to 15
+minutes). When the user asks what is new right now — mail, messages,
+calendar — call refresh first (optionally with source: "gmail"), then
+search. Do not call it for historical questions.
 `;
