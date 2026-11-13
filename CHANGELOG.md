@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.125.2](https://github.com/edjafarov/kiagent-core/compare/v0.125.1...v0.125.2) (2026-11-13)
+
+### Bug Fixes
+
+* **sources:** Run now stays busy until the sync lands and says Checking now; Last checked counts manual runs ([49dc41a5](https://github.com/edjafarov/kiagent-core/commit/49dc41a5166cc83381fc851599b11943ed7de2c4))
+
 ## [0.125.1](https://github.com/edjafarov/kiagent-core/compare/v0.125.0...v0.125.1) (2026-11-13)
 
 ### Bug Fixes
