@@ -189,12 +189,11 @@ export function LocalProcessing(): React.ReactElement {
       })
       .catch(() => {});
   };
-  const install = (providerId: string) => {
-    void window.kiagent
+  const install = (providerId: string) =>
+    window.kiagent
       .invoke('inference:install', { providerId })
       .then(loadProviders)
       .catch(() => setProvidersError(true));
-  };
   // A model that will download when needed can be fetched now (e.g. before
   // going offline); one with automatic download off is an attention row.
   const optional = (providers ?? []).filter(
@@ -315,7 +314,7 @@ export function LocalProcessing(): React.ReactElement {
             title={PROVIDER_NAMES[p.id] ?? p.id}
             description="Downloads automatically when needed."
             control={
-              <Button size="sm" onClick={() => install(p.id)}>
+              <Button size="sm" onAction={() => install(p.id)}>
                 Download now
               </Button>
             }
@@ -372,9 +371,8 @@ function ProviderAttention(props: {
   const { provider, refresh, onError } = props;
   const { kind, detail, percent } = describeStatus(provider.status);
   const name = PROVIDER_NAMES[provider.id] ?? provider.id;
-  const run = (act: Promise<unknown>) => {
-    void act.then(refresh).catch(onError);
-  };
+  const run = (act: Promise<unknown>): Promise<void> =>
+    act.then(refresh).catch(onError);
   const install = () =>
     run(
       window.kiagent.invoke('inference:install', { providerId: provider.id }),
@@ -396,7 +394,7 @@ function ProviderAttention(props: {
         }
         action={
           provider.installable ? (
-            <Button size="sm" onClick={cancel}>
+            <Button size="sm" onAction={cancel}>
               Cancel
             </Button>
           ) : undefined
@@ -412,7 +410,7 @@ function ProviderAttention(props: {
         sub={detail}
         action={
           provider.installable ? (
-            <Button size="sm" onClick={install}>
+            <Button size="sm" onAction={install}>
               Retry
             </Button>
           ) : undefined
@@ -426,7 +424,7 @@ function ProviderAttention(props: {
       title={name}
       sub="Automatic download is off."
       action={
-        <Button size="sm" onClick={install}>
+        <Button size="sm" onAction={install}>
           Download now
         </Button>
       }
