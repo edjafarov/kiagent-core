@@ -25,12 +25,12 @@ import {
   validateManifestDir,
 } from '@main/platform/manifest';
 import { provenanceOf, STORE_OWNER } from '@shared/install-link';
-import { parseGitHubRef } from './github-ref';
 import {
   readInstalled,
   writeInstalled,
   type InstalledRecord,
 } from '@main/platform/extensions';
+import { parseGitHubRef } from './github-ref';
 
 const MAX_PENDING = 8;
 

@@ -22,19 +22,35 @@ describe('needsInstall', () => {
     expect(needsInstall(undefined, {})).toBe(false);
   });
   it('reinstalls a marketplace extension only when the pinned ref differs', () => {
-    const mp = (r?: string): LocalExtension => ({ id: 'x', origin: 'marketplace', enabled: true, ref: r });
+    const mp = (r?: string): LocalExtension => ({
+      id: 'x',
+      origin: 'marketplace',
+      enabled: true,
+      ref: r,
+    });
     expect(needsInstall(mp('github:kia-plugins/x@1'), { ref })).toBe(true);
     expect(needsInstall(mp(ref), { ref })).toBe(false);
     expect(needsInstall(mp('github:kia-plugins/x@1'), {})).toBe(false);
   });
   it('does not reinstall the same ref for an integrity difference (the local pin would refuse it)', () => {
-    const have: LocalExtension = { id: 'x', origin: 'marketplace', enabled: true, ref, integrity: 'sha512-A' };
-    const want: { ref: string; integrity: string } = { ref, integrity: 'sha512-B' };
+    const have: LocalExtension = {
+      id: 'x',
+      origin: 'marketplace',
+      enabled: true,
+      ref,
+      integrity: 'sha512-A',
+    };
+    const want: { ref: string; integrity: string } = {
+      ref,
+      integrity: 'sha512-B',
+    };
     expect(needsInstall(have, want)).toBe(false);
   });
   it('never reinstalls a bundled or dev extension', () => {
     for (const origin of ['bundled', 'dev'] as const)
-      expect(needsInstall({ id: 'x', origin, enabled: true, ref: 'a' }, { ref })).toBe(false);
+      expect(
+        needsInstall({ id: 'x', origin, enabled: true, ref: 'a' }, { ref }),
+      ).toBe(false);
   });
 });
 
@@ -42,29 +58,60 @@ describe('reconcile', () => {
   it('installs a connector the set disables, then disables it', async () => {
     const ops = fakeOps([]);
     const sync = mk(fakeStore(), ops);
-    await sync.reconcile({ 'kia.slack': { enabled: false, ref: 'github:kia-plugins/slack@v2' } });
-    expect(ops.calls).toEqual(['install:github:kia-plugins/slack@v2:true', 'enable:kia.slack:false']);
+    await sync.reconcile({
+      'kia.slack': { enabled: false, ref: 'github:kia-plugins/slack@v2' },
+    });
+    expect(ops.calls).toEqual([
+      'install:github:kia-plugins/slack@v2:true',
+      'enable:kia.slack:false',
+    ]);
   });
 
   it('never uninstalls a marketplace connector for being absent from the set', async () => {
-    const ops = fakeOps([{ id: 'kia.old', origin: 'marketplace', enabled: true, ref: 'github:x/old@1' }]);
+    const ops = fakeOps([
+      {
+        id: 'kia.old',
+        origin: 'marketplace',
+        enabled: true,
+        ref: 'github:x/old@1',
+      },
+    ]);
     await mk(fakeStore(), ops).reconcile({});
     expect(ops.calls).toEqual([]);
   });
 
   it('reinstalls a marketplace connector whose local ref differs from the pinned one, then applies enabled', async () => {
-    const ops = fakeOps([{ id: 'kia.slack', origin: 'marketplace', enabled: true, ref: 'github:kia-plugins/slack@v1' }]);
+    const ops = fakeOps([
+      {
+        id: 'kia.slack',
+        origin: 'marketplace',
+        enabled: true,
+        ref: 'github:kia-plugins/slack@v1',
+      },
+    ]);
     const r = await mk(fakeStore(), ops).reconcile({
       'kia.slack': { enabled: false, ref: 'github:kia-plugins/slack@v2' },
     });
-    expect(ops.calls).toEqual(['install:github:kia-plugins/slack@v2:true', 'enable:kia.slack:false']);
+    expect(ops.calls).toEqual([
+      'install:github:kia-plugins/slack@v2:true',
+      'enable:kia.slack:false',
+    ]);
     expect(r.installed).toEqual(['kia.slack']);
     expect(ops.local.get('kia.slack')?.ref).toBe('github:kia-plugins/slack@v2');
   });
 
   it('does not reinstall when the refs match', async () => {
-    const ops = fakeOps([{ id: 'kia.slack', origin: 'marketplace', enabled: true, ref: 'github:kia-plugins/slack@v2' }]);
-    await mk(fakeStore(), ops).reconcile({ 'kia.slack': { enabled: true, ref: 'github:kia-plugins/slack@v2' } });
+    const ops = fakeOps([
+      {
+        id: 'kia.slack',
+        origin: 'marketplace',
+        enabled: true,
+        ref: 'github:kia-plugins/slack@v2',
+      },
+    ]);
+    await mk(fakeStore(), ops).reconcile({
+      'kia.slack': { enabled: true, ref: 'github:kia-plugins/slack@v2' },
+    });
     expect(ops.calls).toEqual([]);
   });
 
@@ -79,7 +126,9 @@ describe('reconcile', () => {
 
   it('does not install an entry without a ref', async () => {
     const ops = fakeOps([]);
-    const r = await mk(fakeStore(), ops).reconcile({ 'kiagent.gone': { enabled: true } });
+    const r = await mk(fakeStore(), ops).reconcile({
+      'kiagent.gone': { enabled: true },
+    });
     expect(ops.calls).toEqual([]);
     expect(r).toEqual({ installed: [], failed: [] });
   });
@@ -88,7 +137,9 @@ describe('reconcile', () => {
     const ops = fakeOps([]);
     ops.failInstall.add('kia.slack');
     const sync = mk(fakeStore(), ops);
-    const set = { 'kia.slack': { enabled: true, ref: 'github:kia-plugins/slack@v2' } };
+    const set = {
+      'kia.slack': { enabled: true, ref: 'github:kia-plugins/slack@v2' },
+    };
     const r1 = await sync.reconcile(set);
     expect(r1.failed).toEqual([{ id: 'kia.slack', error: 'offline' }]);
     expect(sync.failed()).toEqual([{ id: 'kia.slack', error: 'offline' }]);
@@ -99,7 +150,9 @@ describe('reconcile', () => {
   });
 
   it('does nothing the second time', async () => {
-    const ops = fakeOps([{ id: 'kiagent.people', origin: 'bundled', enabled: true }]);
+    const ops = fakeOps([
+      { id: 'kiagent.people', origin: 'bundled', enabled: true },
+    ]);
     const sync = mk(fakeStore(), ops);
     const set = {
       'kiagent.people': { enabled: false },
@@ -113,13 +166,17 @@ describe('reconcile', () => {
   });
 
   it('does not touch the set while reconciling', async () => {
-    const store = fakeStore({ 'kia.slack': { enabled: true, ref: 'github:kia-plugins/slack@v2' } });
+    const store = fakeStore({
+      'kia.slack': { enabled: true, ref: 'github:kia-plugins/slack@v2' },
+    });
     await mk(store, fakeOps([])).reconcile(store.get()!);
     expect(store.writes).toBe(0);
   });
 
   it('runFromStore does nothing before a set exists', async () => {
-    const ops = fakeOps([{ id: 'kia.old', origin: 'marketplace', enabled: true, ref: 'r' }]);
+    const ops = fakeOps([
+      { id: 'kia.old', origin: 'marketplace', enabled: true, ref: 'r' },
+    ]);
     const r = await mk(fakeStore(), ops).runFromStore();
     expect(ops.calls).toEqual([]);
     expect(r).toEqual({ installed: [], failed: [] });
@@ -128,7 +185,9 @@ describe('reconcile', () => {
   it('runs one reconcile at a time', async () => {
     const ops = fakeOps([]);
     const sync = mk(fakeStore(), ops);
-    const set = { 'kia.slack': { enabled: true, ref: 'github:kia-plugins/slack@v2' } };
+    const set = {
+      'kia.slack': { enabled: true, ref: 'github:kia-plugins/slack@v2' },
+    };
     await Promise.all([sync.reconcile(set), sync.reconcile(set)]);
     expect(ops.calls.filter((c) => c.startsWith('install'))).toHaveLength(1);
   });
@@ -137,7 +196,9 @@ describe('reconcile', () => {
 describe('one queue and recorded actions', () => {
   it('a reconcile started during a user action reads the set after the action recorded it', async () => {
     const store = fakeStore({ 'kiagent.people': { enabled: true } });
-    const ops = fakeOps([{ id: 'kiagent.people', origin: 'bundled', enabled: true }]);
+    const ops = fakeOps([
+      { id: 'kiagent.people', origin: 'bundled', enabled: true },
+    ]);
     const sync = mk(store, ops);
     let release!: () => void;
     const gate = new Promise<void>((r) => (release = r));
@@ -159,7 +220,9 @@ describe('one queue and recorded actions', () => {
 
   it('a failed set write rejects the action, keeps a pending record, and the next reconcile retries it', async () => {
     const store = fakeStore({ 'kiagent.people': { enabled: true } });
-    const ops = fakeOps([{ id: 'kiagent.people', origin: 'bundled', enabled: true }]);
+    const ops = fakeOps([
+      { id: 'kiagent.people', origin: 'bundled', enabled: true },
+    ]);
     const sync = mk(store, ops);
     store.failNext = true;
     await expect(
@@ -182,7 +245,10 @@ describe('one queue and recorded actions', () => {
   it('does not record when the local op failed', async () => {
     const store = fakeStore({});
     const sync = mk(store, fakeOps([]));
-    const r = await sync.act(async () => ({ ok: false }), () => ({ kind: 'uninstalled', id: 'x', origin: 'marketplace' }));
+    const r = await sync.act(
+      async () => ({ ok: false }),
+      () => ({ kind: 'uninstalled', id: 'x', origin: 'marketplace' }),
+    );
     expect(r.ok).toBe(false);
     expect(store.writes).toBe(0);
   });
@@ -191,7 +257,9 @@ describe('one queue and recorded actions', () => {
 describe('leader writes the set', () => {
   it('enable and disable rewrite the entry', async () => {
     const store = fakeStore({ 'kiagent.people': { enabled: true } });
-    const ops = fakeOps([{ id: 'kiagent.people', origin: 'bundled', enabled: false }]);
+    const ops = fakeOps([
+      { id: 'kiagent.people', origin: 'bundled', enabled: false },
+    ]);
     await mk(store, ops).recordEnabled('kiagent.people', false);
     expect(store.get()).toEqual({ 'kiagent.people': { enabled: false } });
   });
@@ -200,16 +268,30 @@ describe('leader writes the set', () => {
     const store = fakeStore({});
     const sync = mk(store, fakeOps([]));
     await sync.recordInstalled('kia.slack', 'github:kia-plugins/slack@v2');
-    expect(store.get()).toEqual({ 'kia.slack': { enabled: true, ref: 'github:kia-plugins/slack@v2' } });
+    expect(store.get()).toEqual({
+      'kia.slack': { enabled: true, ref: 'github:kia-plugins/slack@v2' },
+    });
     await sync.recordUninstalled('kia.slack', 'marketplace');
-    expect(store.get()).toEqual({ 'kia.slack': { enabled: false, removed: true } });
+    expect(store.get()).toEqual({
+      'kia.slack': { enabled: false, removed: true },
+    });
   });
 
   it('first write on a device that never seeded builds the set from local state', async () => {
     const store = fakeStore();
     const ops = fakeOps([
-      { id: 'kia.slack', origin: 'marketplace', enabled: true, ref: 'github:kia-plugins/slack@v2' },
-      { id: 'kiagent.people', origin: 'bundled', enabled: false, explicit: true },
+      {
+        id: 'kia.slack',
+        origin: 'marketplace',
+        enabled: true,
+        ref: 'github:kia-plugins/slack@v2',
+      },
+      {
+        id: 'kiagent.people',
+        origin: 'bundled',
+        enabled: false,
+        explicit: true,
+      },
     ]);
     await mk(store, ops).recordEnabled('kia.slack', false);
     ops.local.get('kia.slack')!.enabled = false;
@@ -233,18 +315,30 @@ describe('leader writes the set', () => {
 describe('uninstall follows the user as a tombstone', () => {
   const REF = 'github:kia-plugins/slack@v2';
   const slack = (over: Partial<LocalExtension> = {}): LocalExtension => ({
-    id: 'kia.slack', origin: 'marketplace', enabled: true, ref: REF, ...over,
+    id: 'kia.slack',
+    origin: 'marketplace',
+    enabled: true,
+    ref: REF,
+    ...over,
   });
 
   it('M7: an uninstall on the leader writes a tombstone and every other device uninstalls', async () => {
     const leaderStore = fakeStore({ 'kia.slack': { enabled: true, ref: REF } });
     const leaderOps = fakeOps([slack()]);
     const leader = mk(leaderStore, leaderOps);
-    await leader.act(() => leaderOps.uninstall('kia.slack'), () => ({ kind: 'uninstalled', id: 'kia.slack', origin: 'marketplace' }));
-    expect(leaderStore.get()).toEqual({ 'kia.slack': { enabled: false, removed: true } });
+    await leader.act(
+      () => leaderOps.uninstall('kia.slack'),
+      () => ({ kind: 'uninstalled', id: 'kia.slack', origin: 'marketplace' }),
+    );
+    expect(leaderStore.get()).toEqual({
+      'kia.slack': { enabled: false, removed: true },
+    });
     const followerOps = fakeOps([slack()]);
     const follower = mk(fakeStore(leaderStore.get(), false), followerOps);
-    expect(await follower.runFromStore()).toEqual({ installed: [], failed: [] });
+    expect(await follower.runFromStore()).toEqual({
+      installed: [],
+      failed: [],
+    });
     expect(followerOps.calls).toEqual(['uninstall:kia.slack']);
     expect(followerOps.local.has('kia.slack')).toBe(false);
   });
@@ -255,9 +349,16 @@ describe('uninstall follows the user as a tombstone', () => {
       ops.calls.push(`uninstall:${id}`);
       return { ok: false, error: 'accounts' };
     };
-    const r = await mk(fakeStore(), ops).reconcile({ 'kia.slack': { enabled: false, removed: true } });
-    expect(ops.calls).toEqual(['uninstall:kia.slack', 'enable:kia.slack:false']);
-    expect(r.failed).toEqual([{ id: 'kia.slack', error: 'kept: this device has its accounts' }]);
+    const r = await mk(fakeStore(), ops).reconcile({
+      'kia.slack': { enabled: false, removed: true },
+    });
+    expect(ops.calls).toEqual([
+      'uninstall:kia.slack',
+      'enable:kia.slack:false',
+    ]);
+    expect(r.failed).toEqual([
+      { id: 'kia.slack', error: 'kept: this device has its accounts' },
+    ]);
     expect(ops.local.get('kia.slack')!.enabled).toBe(false);
   });
 
@@ -268,11 +369,17 @@ describe('uninstall follows the user as a tombstone', () => {
       ops.calls.push(`uninstall:${id}`);
       return { ok: false, error: 'accounts' };
     };
-    const sync = createExtensionSync({ store: fakeStore(), ops, log: (m) => logs.push(m) });
+    const sync = createExtensionSync({
+      store: fakeStore(),
+      ops,
+      log: (m) => logs.push(m),
+    });
     const set = { 'kia.slack': { enabled: false, removed: true as const } };
     await sync.reconcile(set);
     await sync.reconcile(set);
-    expect(ops.calls.filter((c) => c.startsWith('enable:'))).toEqual(['enable:kia.slack:false']);
+    expect(ops.calls.filter((c) => c.startsWith('enable:'))).toEqual([
+      'enable:kia.slack:false',
+    ]);
     expect(logs.filter((m) => m.includes('kept'))).toHaveLength(1);
   });
 
@@ -286,8 +393,12 @@ describe('uninstall follows the user as a tombstone', () => {
     const store = fakeStore({ 'kia.slack': { enabled: false, removed: true } });
     const sync = mk(store, fakeOps([slack({ enabled: false })]));
     expect(sync.offer()).toEqual({});
-    expect(await sync.union({ 'kia.slack': { enabled: true, ref: REF } })).toEqual([]);
-    expect(store.get()).toEqual({ 'kia.slack': { enabled: false, removed: true } });
+    expect(
+      await sync.union({ 'kia.slack': { enabled: true, ref: REF } }),
+    ).toEqual([]);
+    expect(store.get()).toEqual({
+      'kia.slack': { enabled: false, removed: true },
+    });
   });
 
   it('a pending enable meeting a tombstone is discarded and the removal applies', async () => {
@@ -299,7 +410,10 @@ describe('uninstall follows the user as a tombstone', () => {
     const ops = fakeOps([slack()]);
     const sync = createExtensionSync({ store, ops, log: (m) => logs.push(m) });
     await sync
-      .act(() => ops.setEnabled('kia.slack', true), () => ({ kind: 'enabled', id: 'kia.slack', enabled: true }))
+      .act(
+        () => ops.setEnabled('kia.slack', true),
+        () => ({ kind: 'enabled', id: 'kia.slack', enabled: true }),
+      )
       .catch(() => undefined);
     expect(sync.hasPending()).toBe(true);
     ops.calls.length = 0;
@@ -317,7 +431,10 @@ describe('uninstall follows the user as a tombstone', () => {
     const ops = fakeOps([slack()]);
     const sync = mk(store, ops);
     await sync
-      .act(() => Promise.resolve({ ok: true }), () => ({ kind: 'installed', id: 'kia.slack', ref: REF }))
+      .act(
+        () => Promise.resolve({ ok: true }),
+        () => ({ kind: 'installed', id: 'kia.slack', ref: REF }),
+      )
       .catch(() => undefined);
     expect(sync.hasPending()).toBe(true);
     await sync.reconcile({ 'kia.slack': { enabled: false, removed: true } });
@@ -359,7 +476,9 @@ describe('uninstall follows the user as a tombstone', () => {
 
   it('a tombstone that carries a ref still installs nothing on a device without it', async () => {
     const ops = fakeOps([]);
-    const r = await mk(fakeStore(), ops).reconcile({ 'kia.slack': { enabled: false, ref: REF, removed: true } });
+    const r = await mk(fakeStore(), ops).reconcile({
+      'kia.slack': { enabled: false, ref: REF, removed: true },
+    });
     expect(ops.calls).toEqual([]);
     expect(r).toEqual({ installed: [], failed: [] });
   });
@@ -367,8 +486,18 @@ describe('uninstall follows the user as a tombstone', () => {
 
 describe('seeding', () => {
   const local: LocalExtension[] = [
-    { id: 'kia.slack', origin: 'marketplace', enabled: true, ref: 'github:kia-plugins/slack@v2' },
-    { id: 'kia.notion', origin: 'marketplace', enabled: false, ref: 'github:kia-plugins/notion@v3' },
+    {
+      id: 'kia.slack',
+      origin: 'marketplace',
+      enabled: true,
+      ref: 'github:kia-plugins/slack@v2',
+    },
+    {
+      id: 'kia.notion',
+      origin: 'marketplace',
+      enabled: false,
+      ref: 'github:kia-plugins/notion@v3',
+    },
     { id: 'kiagent.people', origin: 'bundled', enabled: false, explicit: true },
     { id: 'kiagent.mail', origin: 'bundled', enabled: true },
     { id: 'dev.x', origin: 'dev', enabled: true },
@@ -412,15 +541,25 @@ describe('integrity travels with the set (spec §5)', () => {
   const REF = 'github:kia-plugins/slack@v1';
   const SRI = 'sha512-abc';
   const local: LocalExtension[] = [
-    { id: 'kia.slack', origin: 'marketplace', enabled: true, ref: REF, integrity: SRI },
+    {
+      id: 'kia.slack',
+      origin: 'marketplace',
+      enabled: true,
+      ref: REF,
+      integrity: SRI,
+    },
   ];
 
   it('seed and offer carry the installed integrity', async () => {
     const store = fakeStore();
     const sync = mk(store, fakeOps(local));
     await sync.seed();
-    expect(store.get()).toEqual({ 'kia.slack': { enabled: true, ref: REF, integrity: SRI } });
-    expect(sync.offer()).toEqual({ 'kia.slack': { enabled: true, ref: REF, integrity: SRI } });
+    expect(store.get()).toEqual({
+      'kia.slack': { enabled: true, ref: REF, integrity: SRI },
+    });
+    expect(sync.offer()).toEqual({
+      'kia.slack': { enabled: true, ref: REF, integrity: SRI },
+    });
   });
 
   it('union keeps an offered integrity and drops a malformed one', async () => {
@@ -430,22 +569,34 @@ describe('integrity travels with the set (spec §5)', () => {
     expect(
       await sync.union({
         'kia.slack': { enabled: true, ref: REF, integrity: SRI },
-        'kia.bad': { enabled: true, ref: 'github:kia-plugins/bad@v1', integrity: 5 as never },
+        'kia.bad': {
+          enabled: true,
+          ref: 'github:kia-plugins/bad@v1',
+          integrity: 5 as never,
+        },
       }),
     ).toEqual(['kia.slack']);
-    expect(store.get()).toEqual({ 'kia.slack': { enabled: true, ref: REF, integrity: SRI } });
+    expect(store.get()).toEqual({
+      'kia.slack': { enabled: true, ref: REF, integrity: SRI },
+    });
   });
 
   it('reconcile hands the set entry integrity to the install, as a reconcile', async () => {
     const ops = fakeOps([]);
-    await mk(fakeStore(), ops).reconcile({ 'kia.slack': { enabled: true, ref: REF, integrity: SRI } });
-    expect(ops.installOpts).toEqual([{ grantConsent: true, integrity: SRI, context: 'reconcile' }]);
+    await mk(fakeStore(), ops).reconcile({
+      'kia.slack': { enabled: true, ref: REF, integrity: SRI },
+    });
+    expect(ops.installOpts).toEqual([
+      { grantConsent: true, integrity: SRI, context: 'reconcile' },
+    ]);
   });
 
   it('recordInstalled writes the integrity', async () => {
     const store = fakeStore();
     store.set({});
     await mk(store, fakeOps([])).recordInstalled('kia.slack', REF, SRI);
-    expect(store.get()).toEqual({ 'kia.slack': { enabled: true, ref: REF, integrity: SRI } });
+    expect(store.get()).toEqual({
+      'kia.slack': { enabled: true, ref: REF, integrity: SRI },
+    });
   });
 });

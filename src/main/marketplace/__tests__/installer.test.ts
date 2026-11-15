@@ -5,13 +5,13 @@ import path from 'path';
 
 import * as tar from 'tar';
 
+import { writeInstalled } from '@main/platform/extensions';
 import {
   createInstaller,
   HAS_LINKS,
   STORE_ONLY_OAUTH,
   TOO_LARGE,
 } from '../installer';
-import { writeInstalled } from '@main/platform/extensions';
 
 const MANIFEST = {
   id: 'test.basic',
@@ -221,7 +221,8 @@ describe('createInstaller (local refs)', () => {
       const bytes = await tgzBytesOf('1.0.0');
       const download = jest.fn(async () => ({
         bytes,
-        pinnedRef: 'github:o/r@v1.0.0', repoId: 1,
+        pinnedRef: 'github:o/r@v1.0.0',
+        repoId: 1,
       }));
       const inst = createInstaller({
         extDir,
@@ -248,7 +249,8 @@ describe('createInstaller (local refs)', () => {
         sourceIdOwners: () => owners,
         download: async () => ({
           bytes: v1Bytes,
-          pinnedRef: 'github:o/r@v1.0.0', repoId: 1,
+          pinnedRef: 'github:o/r@v1.0.0',
+          repoId: 1,
         }),
       });
       const p1 = await inst1.preview('github:o/r');
@@ -264,7 +266,8 @@ describe('createInstaller (local refs)', () => {
         sourceIdOwners: () => owners,
         download: async () => ({
           bytes: v1BytesDiff,
-          pinnedRef: 'github:o/r@v1.0.0', repoId: 1,
+          pinnedRef: 'github:o/r@v1.0.0',
+          repoId: 1,
         }),
       });
       await expect(instDiff.preview('github:o/r')).rejects.toThrow(
@@ -277,7 +280,8 @@ describe('createInstaller (local refs)', () => {
         sourceIdOwners: () => owners,
         download: async () => ({
           bytes: v1Bytes,
-          pinnedRef: 'github:o/r@v1.0.0', repoId: 1,
+          pinnedRef: 'github:o/r@v1.0.0',
+          repoId: 1,
         }),
       });
       const pSame = await instSame.preview('github:o/r');
@@ -291,7 +295,8 @@ describe('createInstaller (local refs)', () => {
         sourceIdOwners: () => owners,
         download: async () => ({
           bytes: v2Bytes,
-          pinnedRef: 'github:o/r@v2.0.0', repoId: 1,
+          pinnedRef: 'github:o/r@v2.0.0',
+          repoId: 1,
         }),
       });
       const pV2 = await instV2.preview('github:o/r');
@@ -328,7 +333,11 @@ describe('createInstaller (local refs)', () => {
       const inst = createInstaller({
         extDir,
         sourceIdOwners: () => owners,
-        download: async () => ({ bytes, pinnedRef: 'github:o/r@v1.0.0', repoId: 1 }),
+        download: async () => ({
+          bytes,
+          pinnedRef: 'github:o/r@v1.0.0',
+          repoId: 1,
+        }),
       });
       const mkdtempSpy = jest.spyOn(fs, 'mkdtempSync');
       const originalWriteFileSync = fs.writeFileSync;
@@ -412,12 +421,21 @@ describe('createInstaller (local refs)', () => {
     });
 
     it('refuses a platform OAuth binding from outside the store, allows it from the store', async () => {
-      const m = { contributes: { sources: [{ id: 'basicsrc', oauth: 'google' }], senders: [] } };
+      const m = {
+        contributes: {
+          sources: [{ id: 'basicsrc', oauth: 'google' }],
+          senders: [],
+        },
+      };
       await expect(
-        inst(await pkgBytes(m), 'github:someone/r@v1', 1).preview('github:someone/r'),
+        inst(await pkgBytes(m), 'github:someone/r@v1', 1).preview(
+          'github:someone/r',
+        ),
       ).rejects.toThrow(STORE_ONLY_OAUTH);
       await expect(
-        inst(await pkgBytes(m), 'github:kia-plugins/r@v1', 1).preview('github:kia-plugins/r'),
+        inst(await pkgBytes(m), 'github:kia-plugins/r@v1', 1).preview(
+          'github:kia-plugins/r',
+        ),
       ).resolves.toBeDefined();
     });
 
@@ -425,12 +443,16 @@ describe('createInstaller (local refs)', () => {
       fs.mkdirSync(extDir, { recursive: true });
       record('github:alice/conn@v0.9.0', 5);
       await expect(
-        inst(await pkgBytes({}), 'github:mallory/conn@v1', 6).preview('github:mallory/conn'),
+        inst(await pkgBytes({}), 'github:mallory/conn@v1', 6).preview(
+          'github:mallory/conn',
+        ),
       ).rejects.toThrow(
         'Basic is already installed from alice/conn. This one is from mallory/conn, a different publisher, so KIAgent won’t replace it. To switch, remove Basic in Settings › Extensions first.',
       );
       await expect(
-        inst(await pkgBytes({}), 'github:alice/renamed@v1', 5).preview('github:alice/renamed'),
+        inst(await pkgBytes({}), 'github:alice/renamed@v1', 5).preview(
+          'github:alice/renamed',
+        ),
       ).resolves.toBeDefined();
     });
 
@@ -447,7 +469,9 @@ describe('createInstaller (local refs)', () => {
       fs.mkdirSync(extDir, { recursive: true });
       record('github:alice/conn@v0.9.0');
       await expect(
-        inst(await pkgBytes({}), 'github:alice/conn@v1', 5).preview('github:alice/conn'),
+        inst(await pkgBytes({}), 'github:alice/conn@v1', 5).preview(
+          'github:alice/conn',
+        ),
       ).rejects.toThrow(/a different publisher/);
     });
 
@@ -455,7 +479,9 @@ describe('createInstaller (local refs)', () => {
       fs.mkdirSync(extDir, { recursive: true });
       record('file:/somewhere/pkg');
       await expect(
-        inst(await pkgBytes({}), 'github:alice/conn@v1', 5).preview('github:alice/conn'),
+        inst(await pkgBytes({}), 'github:alice/conn@v1', 5).preview(
+          'github:alice/conn',
+        ),
       ).resolves.toBeDefined();
     });
 
@@ -481,7 +507,9 @@ describe('createInstaller (local refs)', () => {
         }).preview('github:o/r'),
       ).rejects.toThrow(TOO_LARGE);
       await expect(
-        inst(await pkgBytes({}, { symlink: true }), 'github:o/r@v1', 1).preview('github:o/r'),
+        inst(await pkgBytes({}, { symlink: true }), 'github:o/r@v1', 1).preview(
+          'github:o/r',
+        ),
       ).rejects.toThrow(HAS_LINKS);
     });
   });

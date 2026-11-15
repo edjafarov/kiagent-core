@@ -73,8 +73,17 @@ export interface InstallFromRefOpts {
 
 export type PendingRecord =
   | { kind: 'enabled'; id: string; enabled: boolean }
-  | { kind: 'installed'; id: string; ref: string | undefined; integrity?: string }
-  | { kind: 'uninstalled'; id: string; origin: 'marketplace' | 'dev' | 'bundled' };
+  | {
+      kind: 'installed';
+      id: string;
+      ref: string | undefined;
+      integrity?: string;
+    }
+  | {
+      kind: 'uninstalled';
+      id: string;
+      origin: 'marketplace' | 'dev' | 'bundled';
+    };
 
 export interface ReconcileResult {
   installed: string[];
@@ -116,14 +125,23 @@ function offerable(
   if (typeof enabled !== 'boolean') return false;
   if (integrity !== undefined && typeof integrity !== 'string') return false;
   if (ref === undefined) return true;
-  return typeof ref === 'string' && ref.length > 0 && !/^([./\\~]|[A-Za-z]:|file:)/.test(ref);
+  return (
+    typeof ref === 'string' &&
+    ref.length > 0 &&
+    !/^([./\\~]|[A-Za-z]:|file:)/.test(ref)
+  );
 }
 
 /** Does `want` call for an install on this device? A missing connector installs
  *  from its ref (none: a bundled one this build doesn't ship); a marketplace one
  *  reinstalls when the pinned ref differs from the local one. */
-export function needsInstall(have: LocalExtension | undefined, want: { ref?: string }): boolean {
-  return !have ? !!want.ref : have.origin === 'marketplace' && !!want.ref && have.ref !== want.ref;
+export function needsInstall(
+  have: LocalExtension | undefined,
+  want: { ref?: string },
+): boolean {
+  return !have
+    ? !!want.ref
+    : have.origin === 'marketplace' && !!want.ref && have.ref !== want.ref;
 }
 
 export function createExtensionSync(d: {
@@ -165,7 +183,9 @@ export function createExtensionSync(d: {
       if (held && held.kind === 'enabled' && want.removed) {
         // The removal came first; this enable can no longer apply.
         pending.delete(id);
-        d.log(`extension ${id} was removed on another device; its pending enable is discarded`);
+        d.log(
+          `extension ${id} was removed on another device; its pending enable is discarded`,
+        );
       } else if (held) continue;
       const have = local.get(id);
       // Before needsInstall: a tombstone never installs, whatever it carries.
@@ -209,51 +229,52 @@ export function createExtensionSync(d: {
     cur ?? setFromLocal(ops.list());
 
   const recordEnabled = async (id: string, enabled: boolean): Promise<void> => {
-      if (!store.canWrite()) return;
-      await store.update((cur) => {
-        const next = { ...base(cur) };
-        const have = next[id];
-        if (have?.removed) return cur;
-        const entry = ops.list().find((e) => e.id === id);
-        if (!have && entry?.origin === 'dev') return cur;
-        next[id] = {
-          ...(have ??
-            (entry?.ref
-              ? {
-                  ref: entry.ref,
-                  ...(entry.integrity ? { integrity: entry.integrity } : {}),
-                }
-              : {})),
-          enabled,
-        };
-        return next;
-      });
+    if (!store.canWrite()) return;
+    await store.update((cur) => {
+      const next = { ...base(cur) };
+      const have = next[id];
+      if (have?.removed) return cur;
+      const entry = ops.list().find((e) => e.id === id);
+      if (!have && entry?.origin === 'dev') return cur;
+      next[id] = {
+        ...(have ??
+          (entry?.ref
+            ? {
+                ref: entry.ref,
+                ...(entry.integrity ? { integrity: entry.integrity } : {}),
+              }
+            : {})),
+        enabled,
+      };
+      return next;
+    });
   };
   const recordInstalled = async (
-      id: string,
-      ref: string | undefined,
-      integrity?: string,
+    id: string,
+    ref: string | undefined,
+    integrity?: string,
   ): Promise<void> => {
-      if (!ref || !store.canWrite()) return;
-      await store.update((cur) => ({
-        ...base(cur),
-        [id]: { enabled: true, ref, ...(integrity ? { integrity } : {}) },
-      }));
+    if (!ref || !store.canWrite()) return;
+    await store.update((cur) => ({
+      ...base(cur),
+      [id]: { enabled: true, ref, ...(integrity ? { integrity } : {}) },
+    }));
   };
   const recordUninstalled = async (
-      id: string,
-      origin: 'marketplace' | 'dev' | 'bundled',
+    id: string,
+    origin: 'marketplace' | 'dev' | 'bundled',
   ): Promise<void> => {
-      if (!store.canWrite()) return;
-      await store.update((cur) => {
-        if (origin !== 'marketplace') return cur;
-        return { ...base(cur), [id]: { enabled: false, removed: true } };
-      });
+    if (!store.canWrite()) return;
+    await store.update((cur) => {
+      if (origin !== 'marketplace') return cur;
+      return { ...base(cur), [id]: { enabled: false, removed: true } };
+    });
   };
 
   const applyRecord = async (p: PendingRecord): Promise<void> => {
     if (p.kind === 'enabled') return recordEnabled(p.id, p.enabled);
-    if (p.kind === 'installed') return recordInstalled(p.id, p.ref, p.integrity);
+    if (p.kind === 'installed')
+      return recordInstalled(p.id, p.ref, p.integrity);
     return recordUninstalled(p.id, p.origin);
   };
   const flushPending = async (): Promise<void> => {
@@ -262,7 +283,9 @@ export function createExtensionSync(d: {
         await applyRecord(p);
         pending.delete(id);
       } catch (e) {
-        d.log(`extension ${id} still could not be recorded in the set: ${String(e)}`);
+        d.log(
+          `extension ${id} still could not be recorded in the set: ${String(e)}`,
+        );
       }
     }
   };
@@ -291,7 +314,9 @@ export function createExtensionSync(d: {
     seed: (): Promise<void> =>
       serial(async () => {
         if (!store.canWrite()) return;
-        await store.update((cur) => (cur ? undefined : setFromLocal(ops.list())));
+        await store.update((cur) =>
+          cur ? undefined : setFromLocal(ops.list()),
+        );
       }),
     /** A user action and its recording into the set, on the same queue as
      *  reconcile. The local op runs first; when it succeeded and the set could
@@ -322,7 +347,9 @@ export function createExtensionSync(d: {
     offer: (): ExtensionsSet => {
       const have = store.get();
       return Object.fromEntries(
-        Object.entries(setFromLocal(ops.list())).filter(([id]) => !have?.[id]?.removed),
+        Object.entries(setFromLocal(ops.list())).filter(
+          ([id]) => !have?.[id]?.removed,
+        ),
       );
     },
     /** The master's half of a join: adds every offered entry the set lacks. An

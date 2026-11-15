@@ -271,13 +271,22 @@ describe('github-cache', () => {
       let t = 0;
       const fetchImpl = jest
         .fn()
-        .mockResolvedValueOnce(new Response(JSON.stringify({ engine: '>=9.0.0' }), { status: 200 }))
+        .mockResolvedValueOnce(
+          new Response(JSON.stringify({ engine: '>=9.0.0' }), { status: 200 }),
+        )
         .mockResolvedValue(new Response('nope', { status: 404 }));
-      const cache = createGitHubCache({ cacheFile, fetchImpl, now: () => t, ttlMs: 10 });
+      const cache = createGitHubCache({
+        cacheFile,
+        fetchImpl,
+        now: () => t,
+        ttlMs: 10,
+      });
       expect(await cache.getJSON(url)).toEqual({ engine: '>=9.0.0' });
       t = 100;
       expect(await cache.getJSON(url)).toEqual({ engine: '>=9.0.0' });
-      await expect(cache.getJSON(`${url}?other`)).rejects.toBeInstanceOf(GitHubNotFoundError);
+      await expect(cache.getJSON(`${url}?other`)).rejects.toBeInstanceOf(
+        GitHubNotFoundError,
+      );
     });
 
     it('fetch rejection returns stale body when cached', async () => {

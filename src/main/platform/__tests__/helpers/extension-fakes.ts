@@ -10,7 +10,12 @@ import type {
 
 export function fakeStore(initial?: ExtensionsSet, writable = true) {
   let value: ExtensionsSet | undefined = initial;
-  const store: ExtensionSetStore & { writes: number; writable: boolean; failNext: boolean; set(v: ExtensionsSet | undefined): void } = {
+  const store: ExtensionSetStore & {
+    writes: number;
+    writable: boolean;
+    failNext: boolean;
+    set(v: ExtensionsSet | undefined): void;
+  } = {
     writable,
     failNext: false,
     set(v) {
@@ -28,7 +33,10 @@ export function fakeStore(initial?: ExtensionsSet, writable = true) {
         throw new Error('disk full');
       }
       const next = fn(value);
-      if (next !== undefined && JSON.stringify(next) !== JSON.stringify(value)) {
+      if (
+        next !== undefined &&
+        JSON.stringify(next) !== JSON.stringify(value)
+      ) {
         value = next;
         this.writes += 1;
       }
@@ -38,7 +46,10 @@ export function fakeStore(initial?: ExtensionsSet, writable = true) {
 }
 
 /** `failAll`: every install fails 'offline' (a device that cannot download). */
-export function fakeOps(initial: LocalExtension[], opts: { failAll?: boolean } = {}) {
+export function fakeOps(
+  initial: LocalExtension[],
+  opts: { failAll?: boolean } = {},
+) {
   const local = new Map(initial.map((e) => [e.id, { ...e }]));
   const calls: string[] = [];
   const failInstall = new Set<string>();
@@ -65,8 +76,11 @@ export function fakeOps(initial: LocalExtension[], opts: { failAll?: boolean } =
     async installFromRef(ref, o) {
       calls.push(`install:${ref}:${o.grantConsent}`);
       installOpts.push(o);
-      const id = ref.replace(/^github:kia-plugins\//, 'kia.').replace(/@.*$/, '');
-      if (opts.failAll || failInstall.has(id)) return { ok: false, error: 'offline' };
+      const id = ref
+        .replace(/^github:kia-plugins\//, 'kia.')
+        .replace(/@.*$/, '');
+      if (opts.failAll || failInstall.has(id))
+        return { ok: false, error: 'offline' };
       local.set(id, { id, origin: 'marketplace', enabled: true, ref });
       return { ok: true, id };
     },

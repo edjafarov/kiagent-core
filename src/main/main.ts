@@ -85,12 +85,8 @@ import { createBusyRegistry } from './core/busy';
 import { wireOutboxPush } from './outbox-push';
 import { wireSyncAppliedPush } from './sync-applied-push';
 import { guardDraftTools } from './outbound/follower-tools';
-import {
-  SYNC_REFUSED_PUSH,
-} from './core/sync/forward-core';
-import {
-  installSettingsSync,
-} from './core/sync/settings-sync';
+import { SYNC_REFUSED_PUSH } from './core/sync/forward-core';
+import { installSettingsSync } from './core/sync/settings-sync';
 import { runCommitBatch, type CommitInput } from './core/sync/owned';
 import { followerLookup } from './core/sync/role';
 import { wireAttentionPush } from './attention/push';
@@ -1739,30 +1735,33 @@ app
       () => processingStatus.refreshWaiting(),
     );
     bootTimer.mark('ipc');
-    appProjection = p.engine.project(projection, (state: AppState, seq: Seq) => {
-      rev += 1;
-      // Onboarding step 1: any account that has ever reached 'live'. Also
-      // covers startup — the projection's init() snapshot flows through here.
-      if (state.accounts.some((a) => a.account.status === 'live'))
-        markOnboardingOnce(p.prefs, 'sourceBackfilledAt').catch(() => {});
-      // Take ONLY the feed-derived slice from the projection. Its internal
-      // state still carries init()-time snapshots of the other slices; using
-      // them here would clobber later patches (a signed-in identity would
-      // revert to null on the first sync batch — the sign-in bounce bug).
-      lastPush = {
-        state: {
-          ...state,
-          identity: lastPush.state.identity,
-          prefs: lastPush.state.prefs,
-          processing: lastPush.state.processing,
-          mcp: lastPush.state.mcp,
-          extensions: lastPush.state.extensions,
-        },
-        seq,
-        rev,
-      };
-      scheduleAppStatePush();
-    });
+    appProjection = p.engine.project(
+      projection,
+      (state: AppState, seq: Seq) => {
+        rev += 1;
+        // Onboarding step 1: any account that has ever reached 'live'. Also
+        // covers startup — the projection's init() snapshot flows through here.
+        if (state.accounts.some((a) => a.account.status === 'live'))
+          markOnboardingOnce(p.prefs, 'sourceBackfilledAt').catch(() => {});
+        // Take ONLY the feed-derived slice from the projection. Its internal
+        // state still carries init()-time snapshots of the other slices; using
+        // them here would clobber later patches (a signed-in identity would
+        // revert to null on the first sync batch — the sign-in bounce bug).
+        lastPush = {
+          state: {
+            ...state,
+            identity: lastPush.state.identity,
+            prefs: lastPush.state.prefs,
+            processing: lastPush.state.processing,
+            mcp: lastPush.state.mcp,
+            extensions: lastPush.state.extensions,
+          },
+          seq,
+          rev,
+        };
+        scheduleAppStatePush();
+      },
+    );
 
     // Non-feed slices (prefs, processing counters) refresh on their own clock.
     p.prefs.onChange((prefs) => {

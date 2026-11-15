@@ -345,7 +345,10 @@ export function createGitHubSource(deps: {
     try {
       return await resolveOnce(ref);
     } catch (e) {
-      if (e instanceof InstallSourceError || /^not a github ref/.test((e as Error)?.message ?? ''))
+      if (
+        e instanceof InstallSourceError ||
+        /^not a github ref/.test((e as Error)?.message ?? '')
+      )
         throw e;
       throw new InstallSourceError('unreachable', e);
     }

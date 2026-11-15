@@ -61,14 +61,6 @@ import {
   type InstallerDeps,
 } from '@main/marketplace/installer';
 import { provenanceOf } from '@shared/install-link';
-
-/** A recorded GitHub package from outside the store, or a bare-URL one. No
- *  record (a discovered dev folder) is not outside the store. */
-function isOutsideStore(ref: string | undefined): boolean {
-  if (ref === undefined) return false;
-  const kind = provenanceOf(ref).kind;
-  return kind === 'github' || kind === 'url';
-}
 import type { SyncService } from '../core/sync/service';
 import {
   createExtensionSync,
@@ -128,6 +120,14 @@ import { createInMemoryHostPair, type HostTransport } from './transport';
 import { runExtensionHost } from './extension-host-entry';
 import { createUiRegistry, type UiBroadcastEvent } from './ui-registry';
 import { withAccountTypes } from './account-types';
+
+/** A recorded GitHub package from outside the store, or a bare-URL one. No
+ *  record (a discovered dev folder) is not outside the store. */
+function isOutsideStore(ref: string | undefined): boolean {
+  if (ref === undefined) return false;
+  const { kind } = provenanceOf(ref);
+  return kind === 'github' || kind === 'url';
+}
 
 // Loads a privileged (in-process) extension entry via Node's real internal
 // module loader, Module._load — the primitive require() itself delegates to.
@@ -2240,7 +2240,8 @@ export function createExtensionPlatform(
     if (enabled && deps.extensionSet?.get()?.[id]?.removed)
       return Promise.resolve({
         ok: false,
-        error: 'This connector was removed on another device. Reinstall it first.',
+        error:
+          'This connector was removed on another device. Reinstall it first.',
       });
     return setSync.act(
       () => rawSetEnabled(id, enabled),

@@ -94,6 +94,10 @@ describe('github-ref', () => {
     expect(parseGitHubRef('github:../..')).toBeNull();
     expect(parseGitHubRef('github:o/..')).toBeNull();
     expect(parseGitHubRef('github:o/r@a/b')).toBeNull();
-    expect(parseGitHubRef('github:o/r@v1')).toEqual({ owner: 'o', repo: 'r', tag: 'v1' });
+    expect(parseGitHubRef('github:o/r@v1')).toEqual({
+      owner: 'o',
+      repo: 'r',
+      tag: 'v1',
+    });
   });
 });

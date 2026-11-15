@@ -61,7 +61,10 @@ function parseGithubUrl(text: string): RepoRef | { error: string } {
     return { error: BAD_INPUT };
   }
   const host = u.hostname.toLowerCase();
-  if (u.protocol !== 'https:' || (host !== 'github.com' && host !== 'www.github.com'))
+  if (
+    u.protocol !== 'https:' ||
+    (host !== 'github.com' && host !== 'www.github.com')
+  )
     return { error: NOT_GITHUB };
   // `new URL` drops a default port (`:443`), so the authority is checked
   // as typed: no userinfo, no port.
@@ -89,7 +92,8 @@ export function parseRepoInput(text: string): RepoRef | { error: string } {
   if (/[\u0000-\u001f\u007f]/.test(t)) return { error: BAD_INPUT };
   if (/^[a-z][a-z0-9+.-]*:\/\//i.test(t)) return parseGithubUrl(t);
   // The address as people copy it from the address bar, without https://.
-  if (/^(?:www\.)?github\.com\//i.test(t)) return parseGithubUrl(`https://${t}`);
+  if (/^(?:www\.)?github\.com\//i.test(t))
+    return parseGithubUrl(`https://${t}`);
   const body = t.startsWith('github:') ? t.slice('github:'.length) : t;
   const at = body.indexOf('@');
   const path = at === -1 ? body : body.slice(0, at);

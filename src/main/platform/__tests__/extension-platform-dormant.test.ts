@@ -85,10 +85,20 @@ describe('dormant utility hosts (#137)', () => {
     platform = h.make({
       dormantExtensions: ['test.basic'],
       dormantAfterMs: 40,
-      download: async () => ({ bytes, pinnedRef: 'github:someone/basic@v1', repoId: 3 }),
+      download: async () => ({
+        bytes,
+        pinnedRef: 'github:someone/basic@v1',
+        repoId: 3,
+      }),
     });
     await platform.start();
-    expect((await platform.installFromRef('github:someone/basic', { grantConsent: true })).ok).toBe(true);
+    expect(
+      (
+        await platform.installFromRef('github:someone/basic', {
+          grantConsent: true,
+        })
+      ).ok,
+    ).toBe(true);
     await sleepMs(200);
     expect(snap('test.basic')?.status).toBe('activated');
     expect(snap('test.basic')?.dormant).toBeUndefined();

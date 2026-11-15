@@ -440,7 +440,10 @@ describe('github-source', () => {
 
   describe('resolveGitHubRef', () => {
     const API = 'https://api.github.com';
-    const rel = (tag: string, opts: { prerelease?: boolean; tgz?: boolean } = {}) => ({
+    const rel = (
+      tag: string,
+      opts: { prerelease?: boolean; tgz?: boolean } = {},
+    ) => ({
       tag_name: tag,
       name: tag,
       published_at: '2024-01-01T00:00:00Z',
@@ -448,8 +451,18 @@ describe('github-source', () => {
       prerelease: opts.prerelease ?? false,
       assets:
         opts.tgz === false
-          ? [{ name: 'source.zip', browser_download_url: `https://example.com/${tag}.zip` }]
-          : [{ name: 'plugin.tgz', browser_download_url: `https://example.com/${tag}.tgz` }],
+          ? [
+              {
+                name: 'source.zip',
+                browser_download_url: `https://example.com/${tag}.zip`,
+              },
+            ]
+          : [
+              {
+                name: 'plugin.tgz',
+                browser_download_url: `https://example.com/${tag}.tgz`,
+              },
+            ],
     });
     const repoMeta = (owner: string, name: string, id = 1) => ({
       id,
@@ -484,7 +497,9 @@ describe('github-source', () => {
     it('looks an explicit tag up directly, encoded', async () => {
       route({
         [`${API}/repos/o/r`]: repoMeta('o', 'r'),
-        [`${API}/repos/o/r/releases/tags/v%2B1`]: rel('v+1', { prerelease: true }),
+        [`${API}/repos/o/r/releases/tags/v%2B1`]: rel('v+1', {
+          prerelease: true,
+        }),
       });
       const source = createGitHubSource({ cache: mockCache as any });
       const r = await source.resolveGitHubRef('github:o/r@v+1');
@@ -523,7 +538,9 @@ describe('github-source', () => {
         'no release with a package',
         {
           [`${API}/repos/o/r`]: repoMeta('o', 'r'),
-          [`${API}/repos/o/r/releases?per_page=30`]: [rel('v1.0.0', { tgz: false })],
+          [`${API}/repos/o/r/releases?per_page=30`]: [
+            rel('v1.0.0', { tgz: false }),
+          ],
         },
         'github:o/r',
         'no-release',
@@ -541,7 +558,9 @@ describe('github-source', () => {
         'only prereleases',
         {
           [`${API}/repos/o/r`]: repoMeta('o', 'r'),
-          [`${API}/repos/o/r/releases?per_page=30`]: [rel('v1.0.0-b', { prerelease: true })],
+          [`${API}/repos/o/r/releases?per_page=30`]: [
+            rel('v1.0.0-b', { prerelease: true }),
+          ],
         },
         'github:o/r',
         'no-release',
@@ -567,16 +586,22 @@ describe('github-source', () => {
       const err = await source.resolveGitHubRef(ref).catch((e) => e);
       expect(err).toBeInstanceOf(InstallSourceError);
       expect(err.code).toBe(code);
-      expect(err.message).toBe(INSTALL_SOURCE_COPY[code as keyof typeof INSTALL_SOURCE_COPY]);
+      expect(err.message).toBe(
+        INSTALL_SOURCE_COPY[code as keyof typeof INSTALL_SOURCE_COPY],
+      );
     });
 
     it('a rate limit or network failure is unreachable, not raw text', async () => {
-      mockCache.getJSON.mockRejectedValue(new Error('GitHub rate limit: https://api.github.com/repos/o/r'));
+      mockCache.getJSON.mockRejectedValue(
+        new Error('GitHub rate limit: https://api.github.com/repos/o/r'),
+      );
       const source = createGitHubSource({ cache: mockCache as any });
-      await expect(source.resolveGitHubRef('github:o/r')).rejects.toMatchObject({
-        code: 'unreachable',
-        message: INSTALL_SOURCE_COPY.unreachable,
-      });
+      await expect(source.resolveGitHubRef('github:o/r')).rejects.toMatchObject(
+        {
+          code: 'unreachable',
+          message: INSTALL_SOURCE_COPY.unreachable,
+        },
+      );
     });
 
     it('rejects a garbage ref', async () => {
