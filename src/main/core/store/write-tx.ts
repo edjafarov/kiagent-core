@@ -1100,6 +1100,24 @@ export function createWriteTx(
       return last;
     }
 
+    if ('renameAccount' in batch) {
+      const { id, identifier } = batch.renameAccount;
+      const r = conn
+        .prepare(
+          `UPDATE accounts SET identifier = ?, owner_device_id = NULL, cursor = NULL,
+              status = CASE WHEN status = 'paused' AND last_error LIKE 'Owned by %'
+                            THEN 'connecting' ELSE status END,
+              last_error = CASE WHEN status = 'paused' AND last_error LIKE 'Owned by %'
+                                THEN NULL ELSE last_error END
+            WHERE id = ?
+              AND NOT EXISTS (SELECT 1 FROM accounts o
+                               WHERE o.source = accounts.source AND o.identifier = ? AND o.id <> accounts.id)`,
+        )
+        .run(identifier, id, identifier);
+      if (r.changes > 0) last = appendChange('account', id);
+      return last;
+    }
+
     if ('purgeArchived' in batch) {
       const rows = conn
         .prepare(

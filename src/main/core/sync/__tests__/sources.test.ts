@@ -15,7 +15,9 @@ import { gateFrom, readSyncGate } from '../role';
 import { createSyncService, type SyncService } from '../service';
 import { applyPendingSwap } from '../swap';
 import {
+  baseIdentifier,
   DEVICE_OWNED_SOURCES,
+  FORMERLY_DEVICE_OWNED,
   exportSources,
   isDeviceOwned,
   isStableIdentity,
@@ -56,8 +58,14 @@ const add = async (source: string, identifier: string, login?: unknown) => {
 describe('the two lists', () => {
   it('device-owned sources are the plan list plus the agent-session sources', () => {
     expect([...DEVICE_OWNED_SOURCES].sort()).toEqual(
-      ['assistant', 'claude-code', 'codex', 'local-folder', 'meetings', 'whatsapp'],
+      ['claude-code', 'codex', 'local-folder', 'meetings', 'whatsapp'],
     );
+    expect(isDeviceOwned('assistant')).toBe(false);
+    expect(FORMERLY_DEVICE_OWNED).toEqual(['assistant']);
+    expect(baseIdentifier('local#0533dbda')).toBe('local');
+    expect(baseIdentifier('local')).toBe('local');
+    expect(baseIdentifier('a#xyz')).toBe('a#xyz');
+    expect(baseIdentifier('local#0533DBDA')).toBe('local#0533DBDA');
     expect(isDeviceOwned('whatsapp')).toBe(true);
     expect(isDeviceOwned('gmail')).toBe(false);
   });

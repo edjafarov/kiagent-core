@@ -238,9 +238,10 @@ describe('connecting a device-owned account after the device id is known', () =>
       expect(a.identifier).toMatch(new RegExp(`#${SUFFIX}$`));
       expect(a.ownerDeviceId).toBe(DEVICE);
     }
+    // Account-level since 2026-11-15: one bare row, no owner.
     const g = await d.store.getOrCreateAccount('assistant', 'local');
-    expect(g.identifier).toBe(`local#${SUFFIX}`);
-    expect(g.ownerDeviceId).toBe(DEVICE);
+    expect(g.identifier).toBe('local');
+    expect(g.ownerDeviceId ?? null).toBeNull();
   });
 
   it('connecting again upserts the one suffixed row', async () => {
@@ -573,5 +574,43 @@ describe('device names and accounts held elsewhere (final review)', () => {
     await d.svc.loadOwned();
     await d.svc.setDeviceNames([{ deviceId: OTHER, label: 'Work Mac' }]);
     expect(d.svc.masterName()).toBe('Work Mac');
+  });
+});
+
+describe('renameAccount', () => {
+  const row = (d: Dev, id: string) =>
+    d.conn().prepare(`SELECT identifier, owner_device_id, cursor, status, last_error FROM accounts WHERE id = ?`).get(id);
+  const changes = (d: Dev) => (d.conn().prepare(`SELECT count(*) n FROM changes`).get() as { n: number }).n;
+
+  it('renames, clears the owner and the cursor, appends one account change', async () => {
+    const d = await device();
+    addAccount(d, 'k', 'assistant', 'local#0533dbda', '0533dbda-x');
+    d.conn().prepare(`UPDATE accounts SET cursor = '775' WHERE id = 'k'`).run();
+    const before = changes(d);
+    await d.store.commit({ renameAccount: { id: 'k' as never, identifier: 'local' } });
+    expect(row(d, 'k')).toEqual({ identifier: 'local', owner_device_id: null, cursor: null, status: 'idle', last_error: null });
+    expect(changes(d)).toBe(before + 1);
+  });
+
+  it('lifts an Owned-by pause, keeps a plain one', async () => {
+    const d = await device();
+    addAccount(d, 'o', 'assistant', 'local#aaaaaaaa', 'aaaaaaaa-x');
+    d.conn().prepare(`UPDATE accounts SET status = 'paused', last_error = 'Owned by aaaaaaaa' WHERE id = 'o'`).run();
+    addAccount(d, 'p', 'assistant', 'other#bbbbbbbb', 'bbbbbbbb-x');
+    d.conn().prepare(`UPDATE accounts SET status = 'paused', last_error = NULL WHERE id = 'p'`).run();
+    await d.store.commit({ renameAccount: { id: 'o' as never, identifier: 'local' } });
+    await d.store.commit({ renameAccount: { id: 'p' as never, identifier: 'other' } });
+    expect(row(d, 'o')).toMatchObject({ status: 'connecting', last_error: null });
+    expect(row(d, 'p')).toMatchObject({ identifier: 'other', status: 'paused' });
+  });
+
+  it('changes nothing while another row holds the identifier', async () => {
+    const d = await device();
+    addAccount(d, 'a', 'assistant', 'local');
+    addAccount(d, 'b', 'assistant', 'local#cccccccc', 'cccccccc-x');
+    const before = changes(d);
+    await d.store.commit({ renameAccount: { id: 'b' as never, identifier: 'local' } });
+    expect(row(d, 'b')).toMatchObject({ identifier: 'local#cccccccc', owner_device_id: 'cccccccc-x' });
+    expect(changes(d)).toBe(before);
   });
 });

@@ -11,19 +11,29 @@ import type {
 import type { CoreStore } from '../store/store';
 
 /** Run on their owner and no other device (spec section 11): they read this
- *  machine's folders, capture its audio or hold a session that can't move.
- *  The offer sends their account rows, never a login. Audited 2026-11-02:
- *  `local-folder` and `meetings` are core, `assistant` is the chat assistant,
- *  `claude-code` and `codex` are the agent-sessions connector (r16 ruling 5),
- *  `whatsapp` keeps keys that change with every message. */
+ *  machine's folders, capture its audio or keep keys that can't move. The
+ *  offer sends their account rows, never a login. Audited 2026-11-02:
+ *  `local-folder` and `meetings` are core, `claude-code` and `codex` are the
+ *  agent-sessions connector (r16 ruling 5), `whatsapp` keeps keys that change
+ *  with every message. */
 export const DEVICE_OWNED_SOURCES: readonly string[] = [
   'local-folder',
   'meetings',
-  'assistant',
   'whatsapp',
   'claude-code',
   'codex',
 ];
+
+/** Once device-owned, now one account per KIAgent account that runs on the
+ *  leader. 2026-11-15: `assistant` indexes chat sessions, which are synced
+ *  tables written on the leader, so a per-device copy only left one empty
+ *  `local#<device8>` row per device that ever led. `collapse.ts` folds those
+ *  rows back into one. */
+export const FORMERLY_DEVICE_OWNED: readonly string[] = ['assistant'];
+
+/** The identifier without a device suffix (`#` and 8 hex characters). */
+export const baseIdentifier = (identifier: string): string =>
+  identifier.replace(/#[0-9a-f]{8}$/, '');
 
 /** The identifier names the provider's own account (an address, a numeric id,
  *  a login), so two devices that connected the same account hold the same
