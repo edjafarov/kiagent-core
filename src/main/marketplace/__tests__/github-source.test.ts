@@ -1,8 +1,11 @@
 /** @jest-environment node */
 
+import { GitHubNotFoundError } from '../github-cache';
 import {
   createGitHubSource,
   humanizeRepoName,
+  INSTALL_SOURCE_COPY,
+  InstallSourceError,
   MARKETPLACE_ORG,
   PLUGIN_TOPIC,
 } from '../github-source';
@@ -246,7 +249,7 @@ describe('github-source', () => {
       expect(result.latest).toBeNull();
     });
 
-    it('should return latest.tarballUrl: null when no .tgz asset', async () => {
+    it('has no latest release when no release carries a .tgz', async () => {
       const repoMeta = {
         name: 'plugin-noasset',
         owner: { login: 'owner' },
@@ -277,13 +280,7 @@ describe('github-source', () => {
       const source = createGitHubSource({ cache: mockCache as any });
       const result = await source.getDetail('owner', 'plugin-noasset');
 
-      expect(result.latest).toEqual({
-        tag: 'v1.0.0',
-        version: '1.0.0',
-        publishedAt: '2024-01-01T00:00:00Z',
-        tarballUrl: null,
-        prerelease: false,
-      });
+      expect(result.latest).toBeNull();
     });
 
     it('should return empty README when fetch fails', async () => {
@@ -442,219 +439,142 @@ describe('github-source', () => {
   });
 
   describe('resolveGitHubRef', () => {
-    it('should pick pinned tag when @tag is specified', async () => {
-      const releases = [
-        {
-          tag_name: 'v2.0.0',
-          name: 'v2.0.0',
-          published_at: '2024-02-01T00:00:00Z',
-          body: null,
-          prerelease: false,
-          assets: [
-            {
-              name: 'plugin.tgz',
-              browser_download_url: 'https://example.com/v2.0.0.tgz',
-            },
-          ],
-        },
-        {
-          tag_name: 'v1.0.0',
-          name: 'v1.0.0',
-          published_at: '2024-01-01T00:00:00Z',
-          body: null,
-          prerelease: false,
-          assets: [
-            {
-              name: 'plugin.tgz',
-              browser_download_url: 'https://example.com/v1.0.0.tgz',
-            },
-          ],
-        },
-      ];
+    const API = 'https://api.github.com';
+    const rel = (tag: string, opts: { prerelease?: boolean; tgz?: boolean } = {}) => ({
+      tag_name: tag,
+      name: tag,
+      published_at: '2024-01-01T00:00:00Z',
+      body: null,
+      prerelease: opts.prerelease ?? false,
+      assets:
+        opts.tgz === false
+          ? [{ name: 'source.zip', browser_download_url: `https://example.com/${tag}.zip` }]
+          : [{ name: 'plugin.tgz', browser_download_url: `https://example.com/${tag}.tgz` }],
+    });
+    const repoMeta = (owner: string, name: string, id = 1) => ({
+      id,
+      name,
+      owner: { login: owner },
+      full_name: `${owner}/${name}`,
+      description: null,
+    });
+    /** Routes API urls; anything unrouted is a GitHub 404. */
+    const route = (table: Record<string, unknown>) =>
+      mockCache.getJSON.mockImplementation(async (url: string) => {
+        if (url in table) return table[url];
+        throw new GitHubNotFoundError(`GitHub 404 ${url}`);
+      });
 
-      mockCache.getJSON.mockResolvedValueOnce(releases);
-
+    it('pins the canonical repository after a rename', async () => {
+      route({
+        [`${API}/repos/old/x`]: repoMeta('new', 'X', 7),
+        [`${API}/repos/new/X/releases?per_page=30`]: [rel('v1.0.0')],
+      });
       const source = createGitHubSource({ cache: mockCache as any });
-      const result = await source.resolveGitHubRef('github:owner/repo@v1.0.0');
-
-      expect(result).toEqual({
-        tarballUrl: 'https://example.com/v1.0.0.tgz',
-        version: '1.0.0',
+      expect(await source.resolveGitHubRef('github:old/x')).toEqual({
+        owner: 'new',
+        repo: 'X',
+        repoId: 7,
         tag: 'v1.0.0',
+        version: '1.0.0',
+        tarballUrl: 'https://example.com/v1.0.0.tgz',
       });
     });
 
-    it('should resolve pinned prerelease tag even though unpinned would skip it', async () => {
-      const releases = [
-        {
-          tag_name: 'v3.0.0-beta',
-          name: 'v3.0.0-beta',
-          published_at: '2024-03-01T00:00:00Z',
-          body: null,
-          prerelease: true,
-          assets: [
-            {
-              name: 'plugin.tgz',
-              browser_download_url: 'https://example.com/v3.0.0-beta.tgz',
-            },
-          ],
-        },
-        {
-          tag_name: 'v2.0.0',
-          name: 'v2.0.0',
-          published_at: '2024-02-01T00:00:00Z',
-          body: null,
-          prerelease: false,
-          assets: [
-            {
-              name: 'plugin.tgz',
-              browser_download_url: 'https://example.com/v2.0.0.tgz',
-            },
-          ],
-        },
-      ];
+    it('looks an explicit tag up directly, encoded', async () => {
+      route({
+        [`${API}/repos/o/r`]: repoMeta('o', 'r'),
+        [`${API}/repos/o/r/releases/tags/v%2B1`]: rel('v+1', { prerelease: true }),
+      });
+      const source = createGitHubSource({ cache: mockCache as any });
+      const r = await source.resolveGitHubRef('github:o/r@v+1');
+      expect(r.tag).toBe('v+1');
+      expect(r.tarballUrl).toBe('https://example.com/v+1.tgz');
+    });
 
-      // Pinned to prerelease should resolve it
-      mockCache.getJSON.mockResolvedValueOnce(releases);
+    it('skips a newer source-only release', async () => {
+      route({
+        [`${API}/repos/o/r`]: repoMeta('o', 'r'),
+        [`${API}/repos/o/r/releases?per_page=30`]: [
+          rel('v2.0.0', { tgz: false }),
+          rel('v1.0.0'),
+        ],
+      });
+      const source = createGitHubSource({ cache: mockCache as any });
+      expect((await source.resolveGitHubRef('github:o/r')).tag).toBe('v1.0.0');
+    });
 
-      let source = createGitHubSource({ cache: mockCache as any });
-      let result = await source.resolveGitHubRef(
-        'github:owner/repo@v3.0.0-beta',
+    it('picks the newest stable release when unpinned', async () => {
+      route({
+        [`${API}/repos/o/r`]: repoMeta('o', 'r'),
+        [`${API}/repos/o/r/releases?per_page=30`]: [
+          rel('v3.0.0-beta', { prerelease: true }),
+          rel('v2.0.0'),
+          rel('v1.0.0'),
+        ],
+      });
+      const source = createGitHubSource({ cache: mockCache as any });
+      expect((await source.resolveGitHubRef('github:o/r')).tag).toBe('v2.0.0');
+    });
+
+    it.each([
+      ['a missing repository', {}, 'github:o/r', 'not-found'],
+      [
+        'no release with a package',
+        {
+          [`${API}/repos/o/r`]: repoMeta('o', 'r'),
+          [`${API}/repos/o/r/releases?per_page=30`]: [rel('v1.0.0', { tgz: false })],
+        },
+        'github:o/r',
+        'no-release',
+      ],
+      [
+        'no releases at all',
+        {
+          [`${API}/repos/o/r`]: repoMeta('o', 'r'),
+          [`${API}/repos/o/r/releases?per_page=30`]: [],
+        },
+        'github:o/r',
+        'no-release',
+      ],
+      [
+        'only prereleases',
+        {
+          [`${API}/repos/o/r`]: repoMeta('o', 'r'),
+          [`${API}/repos/o/r/releases?per_page=30`]: [rel('v1.0.0-b', { prerelease: true })],
+        },
+        'github:o/r',
+        'no-release',
+      ],
+      [
+        'a missing tag',
+        { [`${API}/repos/o/r`]: repoMeta('o', 'r') },
+        'github:o/r@v9',
+        'no-release',
+      ],
+      [
+        'a tag without a package',
+        {
+          [`${API}/repos/o/r`]: repoMeta('o', 'r'),
+          [`${API}/repos/o/r/releases/tags/v1`]: rel('v1', { tgz: false }),
+        },
+        'github:o/r@v1',
+        'no-release',
+      ],
+    ])('%s → %s', async (_name, table, ref, code) => {
+      route(table as Record<string, unknown>);
+      const source = createGitHubSource({ cache: mockCache as any });
+      const err = await source.resolveGitHubRef(ref).catch((e) => e);
+      expect(err).toBeInstanceOf(InstallSourceError);
+      expect(err.code).toBe(code);
+      expect(err.message).toBe(INSTALL_SOURCE_COPY[code as keyof typeof INSTALL_SOURCE_COPY]);
+    });
+
+    it('rejects a garbage ref', async () => {
+      const source = createGitHubSource({ cache: mockCache as any });
+      await expect(source.resolveGitHubRef('invalid:ref')).rejects.toThrow(
+        'not a github ref',
       );
-
-      expect(result).toEqual({
-        tarballUrl: 'https://example.com/v3.0.0-beta.tgz',
-        version: '3.0.0',
-        tag: 'v3.0.0-beta',
-      });
-
-      // Unpinned should still resolve to stable v2.0.0
-      mockCache.getJSON.mockResolvedValueOnce(releases);
-
-      source = createGitHubSource({ cache: mockCache as any });
-      result = await source.resolveGitHubRef('github:owner/repo');
-
-      expect(result).toEqual({
-        tarballUrl: 'https://example.com/v2.0.0.tgz',
-        version: '2.0.0',
-        tag: 'v2.0.0',
-      });
-    });
-
-    it('should pick latest non-prerelease when unpinned', async () => {
-      const releases = [
-        {
-          tag_name: 'v3.0.0-beta',
-          name: 'v3.0.0-beta',
-          published_at: '2024-03-01T00:00:00Z',
-          body: null,
-          prerelease: true,
-          assets: [
-            {
-              name: 'plugin.tgz',
-              browser_download_url: 'https://example.com/v3.0.0-beta.tgz',
-            },
-          ],
-        },
-        {
-          tag_name: 'v2.0.0',
-          name: 'v2.0.0',
-          published_at: '2024-02-01T00:00:00Z',
-          body: null,
-          prerelease: false,
-          assets: [
-            {
-              name: 'plugin.tgz',
-              browser_download_url: 'https://example.com/v2.0.0.tgz',
-            },
-          ],
-        },
-        {
-          tag_name: 'v1.0.0',
-          name: 'v1.0.0',
-          published_at: '2024-01-01T00:00:00Z',
-          body: null,
-          prerelease: false,
-          assets: [
-            {
-              name: 'plugin.tgz',
-              browser_download_url: 'https://example.com/v1.0.0.tgz',
-            },
-          ],
-        },
-      ];
-
-      mockCache.getJSON.mockResolvedValueOnce(releases);
-
-      const source = createGitHubSource({ cache: mockCache as any });
-      const result = await source.resolveGitHubRef('github:owner/repo');
-
-      expect(result).toEqual({
-        tarballUrl: 'https://example.com/v2.0.0.tgz',
-        version: '2.0.0',
-        tag: 'v2.0.0',
-      });
-    });
-
-    it('should return null for garbage refs', async () => {
-      const source = createGitHubSource({ cache: mockCache as any });
-      const result = await source.resolveGitHubRef('invalid:ref');
-
-      expect(result).toBeNull();
-    });
-
-    it('should return null when no installable release (only prereleases)', async () => {
-      const releases = [
-        {
-          tag_name: 'v1.0.0-beta',
-          name: 'v1.0.0-beta',
-          published_at: '2024-01-01T00:00:00Z',
-          body: null,
-          prerelease: true,
-          assets: [
-            {
-              name: 'plugin.tgz',
-              browser_download_url: 'https://example.com/v1.0.0-beta.tgz',
-            },
-          ],
-        },
-      ];
-
-      mockCache.getJSON.mockResolvedValueOnce(releases);
-
-      const source = createGitHubSource({ cache: mockCache as any });
-      const result = await source.resolveGitHubRef('github:owner/repo');
-
-      expect(result).toBeNull();
-    });
-
-    it('should return null when no tarballUrl', async () => {
-      const releases = [
-        {
-          tag_name: 'v1.0.0',
-          name: 'v1.0.0',
-          published_at: '2024-01-01T00:00:00Z',
-          body: null,
-          prerelease: false,
-          assets: [],
-        },
-      ];
-
-      mockCache.getJSON.mockResolvedValueOnce(releases);
-
-      const source = createGitHubSource({ cache: mockCache as any });
-      const result = await source.resolveGitHubRef('github:owner/repo@v1.0.0');
-
-      expect(result).toBeNull();
-    });
-
-    it('should return null when unpinned and no releases', async () => {
-      mockCache.getJSON.mockResolvedValueOnce([]);
-
-      const source = createGitHubSource({ cache: mockCache as any });
-      const result = await source.resolveGitHubRef('github:owner/repo');
-
-      expect(result).toBeNull();
     });
   });
 
@@ -678,7 +598,14 @@ describe('github-source', () => {
      *  (a missing entry = no readable manifest). */
     const serve = (releases: unknown[], engines: Record<string, string>) =>
       mockCache.getJSON.mockImplementation(async (url: string) => {
+        if (url === 'https://api.github.com/repos/owner/repo')
+          return { id: 3, name: 'repo', owner: { login: 'owner' } };
         if (url.endsWith('/releases?per_page=30')) return releases;
+        const tagged = /\/releases\/tags\/(.+)$/.exec(url);
+        if (tagged)
+          return (releases as Array<{ tag_name: string }>).find(
+            (r) => r.tag_name === decodeURIComponent(tagged[1]),
+          );
         const tag = Object.keys(engines).find((t) => url === manifestUrl(t));
         if (tag) return { id: 'kia.x', engine: engines[tag] };
         throw new Error(`GitHub 404 ${url}`);
@@ -695,9 +622,35 @@ describe('github-source', () => {
       });
 
       expect(await source.resolveGitHubRef('github:owner/repo')).toEqual({
+        owner: 'owner',
+        repo: 'repo',
+        repoId: 3,
         tarballUrl: 'https://example.com/v2.2.1.tgz',
         version: '2.2.1',
         tag: 'v2.2.1',
+      });
+    });
+
+    it('needs-newer-app when every packaged release needs a newer platform', async () => {
+      serve([rel('v3.0.0')], { 'v3.0.0': '^2.6.0' });
+      const source = createGitHubSource({
+        cache: mockCache as any,
+        platformApi: '2.5.0',
+      });
+      await expect(
+        source.resolveGitHubRef('github:owner/repo'),
+      ).rejects.toMatchObject({ code: 'needs-newer-app' });
+    });
+
+    it('latestReleases ignores releases without a package', async () => {
+      const noPkg = { ...rel('v4.0.0'), assets: [] };
+      serve([noPkg, rel('v2.2.1')], { 'v2.2.1': '^2.1.0' });
+      const source = createGitHubSource({
+        cache: mockCache as any,
+        platformApi: '2.5.0',
+      });
+      expect(await source.latestReleases('github:owner/repo')).toEqual({
+        version: '2.2.1',
       });
     });
 

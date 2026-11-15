@@ -3,7 +3,7 @@ import { MAX_ICON_BYTES } from '@main/platform/manifest';
 import { PLATFORM_API_VERSION } from '@shared/extension-rpc';
 import type { MarketplaceListItem, PluginDetail } from '@shared/ipc';
 import { parseGitHubRef } from './github-ref';
-import type { createGitHubCache } from './github-cache';
+import { GitHubNotFoundError, type createGitHubCache } from './github-cache';
 
 export const MARKETPLACE_ORG = 'kia-plugins';
 export const PLUGIN_TOPIC = 'kia-plugin';
@@ -21,11 +21,45 @@ interface GhRelease {
 }
 
 interface GhRepo {
+  id: number;
   name: string;
   owner: { login: string };
   full_name: string;
   description: string | null;
 }
+
+export type InstallSourceErrorCode =
+  | 'not-found'
+  | 'no-release'
+  | 'needs-newer-app';
+
+export const INSTALL_SOURCE_COPY: Record<InstallSourceErrorCode, string> = {
+  'not-found':
+    'Couldn’t find that repository. It may be private — only public repositories can be added.',
+  'no-release': 'This repository has no release to install yet.',
+  'needs-newer-app': 'This connector needs a newer version of KIAgent.',
+};
+
+/** Why a repository can't be installed, with the copy to show for it. */
+export class InstallSourceError extends Error {
+  constructor(public readonly code: InstallSourceErrorCode) {
+    super(INSTALL_SOURCE_COPY[code]);
+  }
+}
+
+/** What an install resolves to: the repository as GitHub names it now
+ *  (renames and transfers followed), its stable numeric id, and the
+ *  release to download. */
+export interface ResolvedRelease {
+  owner: string;
+  repo: string;
+  repoId: number;
+  tag: string;
+  version: string;
+  tarballUrl: string;
+}
+
+const enc = encodeURIComponent;
 
 function toVersion(tag: string): string {
   return semver.valid(semver.coerce(tag)) ?? '0.0.0';
@@ -168,7 +202,7 @@ export function createGitHubSource(deps: {
   ): Promise<string | undefined> {
     return deps.cache
       .getDataUrl(
-        `https://raw.githubusercontent.com/${owner}/${repo}/HEAD/icon.png`,
+        `https://raw.githubusercontent.com/${enc(owner)}/${enc(repo)}/HEAD/icon.png`,
         'image/png',
         MAX_ICON_BYTES,
       )
@@ -187,7 +221,7 @@ export function createGitHubSource(deps: {
     try {
       name = manifestName(
         await deps.cache.getJSON<unknown>(
-          `https://raw.githubusercontent.com/${owner}/${repo}/HEAD/manifest.json`,
+          `https://raw.githubusercontent.com/${enc(owner)}/${enc(repo)}/HEAD/manifest.json`,
         ),
       );
     } catch {
@@ -223,7 +257,7 @@ export function createGitHubSource(deps: {
     repo: string,
   ): Promise<ReleaseInfo[]> {
     const rels = await deps.cache.getJSON<GhRelease[]>(
-      `${API}/repos/${owner}/${repo}/releases?per_page=30`,
+      `${API}/repos/${enc(owner)}/${enc(repo)}/releases?per_page=30`,
     );
     return rels.map(toReleaseInfo);
   }
@@ -241,7 +275,7 @@ export function createGitHubSource(deps: {
     try {
       engine = (
         await deps.cache.getJSON<{ engine?: unknown } | null>(
-          `https://raw.githubusercontent.com/${owner}/${repo}/${encodeURIComponent(r.tag)}/manifest.json`,
+          `https://raw.githubusercontent.com/${enc(owner)}/${enc(repo)}/${enc(r.tag)}/manifest.json`,
         )
       )?.engine;
     } catch {
@@ -261,7 +295,9 @@ export function createGitHubSource(deps: {
     repo: string,
     releases: ReleaseInfo[],
   ): Promise<{ runnable: ReleaseInfo | null; newer: ReleaseInfo | null }> {
-    const stable = releases.filter((r) => !r.prerelease);
+    // Only releases that carry a package can be installed: a newer
+    // source-only release must not hide an older installable one.
+    const stable = releases.filter((r) => !r.prerelease && r.tarballUrl);
     for (const r of stable) {
       // eslint-disable-next-line no-await-in-loop
       if (await runsHere(owner, repo, r))
@@ -273,11 +309,11 @@ export function createGitHubSource(deps: {
   async function getDetail(owner: string, repo: string): Promise<PluginDetail> {
     const [repoMeta, releases, readmeMarkdown, iconDataUrl, displayName] =
       await Promise.all([
-        deps.cache.getJSON<GhRepo>(`${API}/repos/${owner}/${repo}`),
+        deps.cache.getJSON<GhRepo>(`${API}/repos/${enc(owner)}/${enc(repo)}`),
         listReleases(owner, repo),
         deps.cache
           .getText(
-            `https://raw.githubusercontent.com/${owner}/${repo}/HEAD/README.md`,
+            `https://raw.githubusercontent.com/${enc(owner)}/${enc(repo)}/HEAD/README.md`,
           )
           .catch(() => ''),
         fetchIconDataUrl(owner, repo),
@@ -297,20 +333,52 @@ export function createGitHubSource(deps: {
     };
   }
 
-  async function resolveGitHubRef(
-    ref: string,
-  ): Promise<{ tarballUrl: string; version: string; tag: string } | null> {
+  async function resolveGitHubRef(ref: string): Promise<ResolvedRelease> {
     const parsed = parseGitHubRef(ref);
-    if (!parsed) return null;
-    const releases = await listReleases(parsed.owner, parsed.repo);
-    const pick = parsed.tag
-      ? releases.find((r) => r.tag === parsed.tag)
-      : (await pickRelease(parsed.owner, parsed.repo, releases)).runnable;
-    if (!pick || !pick.tarballUrl) return null;
+    if (!parsed) throw new Error(`not a github ref: ${ref}`);
+    let meta: GhRepo;
+    try {
+      meta = await deps.cache.getJSON<GhRepo>(
+        `${API}/repos/${enc(parsed.owner)}/${enc(parsed.repo)}`,
+      );
+    } catch (e) {
+      if (e instanceof GitHubNotFoundError)
+        throw new InstallSourceError('not-found');
+      throw e;
+    }
+    const owner = meta.owner.login;
+    const repo = meta.name;
+    let pick: ReleaseInfo | null;
+    if (parsed.tag) {
+      try {
+        pick = toReleaseInfo(
+          await deps.cache.getJSON<GhRelease>(
+            `${API}/repos/${enc(owner)}/${enc(repo)}/releases/tags/${enc(parsed.tag)}`,
+          ),
+        );
+      } catch (e) {
+        if (e instanceof GitHubNotFoundError)
+          throw new InstallSourceError('no-release');
+        throw e;
+      }
+      if (!pick.tarballUrl) throw new InstallSourceError('no-release');
+    } else {
+      const { runnable, newer } = await pickRelease(
+        owner,
+        repo,
+        await listReleases(owner, repo),
+      );
+      if (!runnable)
+        throw new InstallSourceError(newer ? 'needs-newer-app' : 'no-release');
+      pick = runnable;
+    }
     return {
-      tarballUrl: pick.tarballUrl,
-      version: pick.version,
+      owner,
+      repo,
+      repoId: meta.id,
       tag: pick.tag,
+      version: pick.version,
+      tarballUrl: pick.tarballUrl as string,
     };
   }
 

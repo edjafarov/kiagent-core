@@ -72,7 +72,7 @@ import {
 import { maybeOfferMoveToApplications } from './move-to-applications';
 import { createGitHubCache } from './marketplace/github-cache';
 import { createGitHubSource } from './marketplace/github-source';
-import { parseGitHubRef, formatGitHubRef } from './marketplace/github-ref';
+import { formatGitHubRef } from './marketplace/github-ref';
 import { createMarketplaceCatalog } from './marketplace/catalog';
 import type { MarketplaceCatalog } from './marketplace/catalog';
 import { buildMainApi } from './main-api';
@@ -1662,13 +1662,13 @@ app
       },
       download: async (ref) => {
         if (ref.startsWith('github:')) {
-          const parsed = parseGitHubRef(ref);
-          const resolved = parsed && (await ghSource.resolveGitHubRef(ref));
-          if (!parsed || !resolved)
-            throw new Error(`no installable release for ${ref}`);
+          // Pinned to the repository as GitHub names it NOW (renames and
+          // transfers followed), plus its numeric id for the publisher guard.
+          const resolved = await ghSource.resolveGitHubRef(ref);
           return {
             bytes: await ghSource.downloadAsset(resolved.tarballUrl),
-            pinnedRef: `${formatGitHubRef(parsed.owner, parsed.repo)}@${resolved.tag}`,
+            pinnedRef: `${formatGitHubRef(resolved.owner, resolved.repo)}@${resolved.tag}`,
+            repoId: resolved.repoId,
           };
         }
         return { bytes: await ghSource.downloadAsset(ref), pinnedRef: ref };

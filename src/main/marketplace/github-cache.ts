@@ -3,6 +3,10 @@ import path from 'path';
 
 export class GitHubRateLimitError extends Error {}
 
+/** A 404 from the API — a repo, release or tag that doesn't exist (or is
+ *  private, which GitHub reports the same way). */
+export class GitHubNotFoundError extends Error {}
+
 interface Entry {
   etag?: string;
   fetchedAt: number;
@@ -61,6 +65,7 @@ export function createGitHubCache(deps: GitHubCacheDeps) {
       }
     }
     if (!r.ok) {
+      if (r.status === 404) throw new GitHubNotFoundError(`GitHub 404 ${url}`);
       if (hit) return hit.body as T;
       throw new Error(`GitHub ${r.status} ${url}`);
     }

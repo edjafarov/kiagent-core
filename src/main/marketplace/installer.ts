@@ -47,7 +47,9 @@ export interface InstallerDeps {
   /** Resolves a marketplace ref (github:owner/repo[@tag] or http(s) URL) to
    *  tarball bytes + the PINNED ref to record. Absent → marketplace refs are
    *  rejected exactly as in Plan A. */
-  download?: (ref: string) => Promise<{ bytes: Buffer; pinnedRef: string }>;
+  download?: (
+    ref: string,
+  ) => Promise<{ bytes: Buffer; pinnedRef: string; repoId?: number }>;
 }
 
 function duSync(dir: string): number {
