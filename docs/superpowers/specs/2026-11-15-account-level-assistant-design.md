@@ -259,3 +259,11 @@ nothing, and the collapse renames the keeper. A fresh install seeds a bare
   resets the keeper's cursor, and only the new extension sweeps.
 - alpha-cent then merges the extension change and the `core.lock` bump in
   one merge, so the product never runs the collapse without the sweep.
+- Mixed builds:
+  - A desktop still on the old build that takes the lead does not index
+    assistant sessions while it leads:
+    - promoted, the old core skips the account (no owner);
+    - restarted, the old extension can't read the object cursor and retries.
+  - It recovers when an updated device leads, because the foreign cursor
+    forces a sweep.
+  - Update every desktop of an account before relying on it.
