@@ -210,6 +210,17 @@ describe('collapseFormerlyOwned on a store', () => {
       expect(count(`SELECT count(*) n FROM accounts`)).toBe(1);
     });
 
+    it("refreshes the gate's owner cache after a change", async () => {
+      add('keep', 'assistant', 'local#0533dbda', '0533dbda-x');
+      const p = platform(false, []);
+      const loadOwned = jest.fn(async () => undefined);
+      (p as unknown as { sync: unknown }).sync = { loadOwned };
+      await resumeAccounts(p);
+      expect(loadOwned).toHaveBeenCalledTimes(1);
+      await resumeAccounts(p);
+      expect(loadOwned).toHaveBeenCalledTimes(1);
+    });
+
     it('never collapses on a read-only device', async () => {
       add('keep', 'assistant', 'local#0533dbda', '0533dbda-x');
       add('two', 'assistant', 'local#aaaaaaaa', 'aaaaaaaa-x');

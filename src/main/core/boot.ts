@@ -687,6 +687,9 @@ export async function resumeAccounts(
         store: platform.store,
         remove: (id) => removeAccountFully(platform, id),
       });
+      // The gate caches which accounts another device owns: the keeper's
+      // owner is gone now.
+      if (r.removed || r.renamed) await platform.sync?.loadOwned?.();
       if (r.removed || r.renamed)
         platform.logSink.log(
           'engine',

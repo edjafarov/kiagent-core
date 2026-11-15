@@ -1102,13 +1102,17 @@ export function createWriteTx(
 
     if ('renameAccount' in batch) {
       const { id, identifier } = batch.renameAccount;
+      // A pause that only meant "another device runs this": an offer's import
+      // (`Owned by …`) or an owner's forwarded batch (owned.ts: paused, no
+      // error, owned by someone else). The SET reads pre-update values.
+      const OWNER_PAUSE = `status = 'paused' AND (last_error LIKE 'Owned by %'
+          OR (last_error IS NULL AND owner_device_id IS NOT NULL
+              AND owner_device_id IS NOT (SELECT device_id FROM sync_state)))`;
       const r = conn
         .prepare(
           `UPDATE accounts SET identifier = ?, owner_device_id = NULL, cursor = NULL,
-              status = CASE WHEN status = 'paused' AND last_error LIKE 'Owned by %'
-                            THEN 'connecting' ELSE status END,
-              last_error = CASE WHEN status = 'paused' AND last_error LIKE 'Owned by %'
-                                THEN NULL ELSE last_error END
+              status = CASE WHEN ${OWNER_PAUSE} THEN 'connecting' ELSE status END,
+              last_error = CASE WHEN ${OWNER_PAUSE} THEN NULL ELSE last_error END
             WHERE id = ?
               AND NOT EXISTS (SELECT 1 FROM accounts o
                                WHERE o.source = accounts.source AND o.identifier = ? AND o.id <> accounts.id)`,

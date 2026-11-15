@@ -5,6 +5,7 @@ import type { CommitBatch } from '@shared/contracts';
 import type { AppDb } from '../../db/app-db';
 import type { CoreStore } from '../store/store';
 import type { FolderScopeInput } from '../store/write-tx';
+import { isDeviceOwned } from './sources';
 
 /** The account an owner's batch belongs to. The leader may never have heard of
  *  it, so the row travels with every batch. */
@@ -91,6 +92,10 @@ export async function runCommitBatch(
     return;
   }
   const a = input.account;
+  // A source that is no longer device-owned (the assistant, 2026-11-15) runs
+  // on the leader itself. A late batch from an owner on an older build or
+  // from its outbound queue would otherwise bring back a collapsed row.
+  if (!isDeviceOwned(a.source)) return;
   const found = (await deps.db.all(`SELECT id FROM accounts WHERE source = ? AND identifier = ?`, [
     a.source,
     a.identifier,

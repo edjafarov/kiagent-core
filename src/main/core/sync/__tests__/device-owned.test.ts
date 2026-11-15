@@ -295,6 +295,17 @@ describe('delivery to the leader', () => {
     expect(c.prepare(`SELECT count(*) n FROM documents_fts WHERE documents_fts MATCH 'body'`).get()).toEqual({ n: 2 });
   });
 
+  it('a late batch for the account-level assistant is dropped: no row comes back', async () => {
+    const leader = await device();
+    const input = {
+      account: { id: 'old', source: 'assistant', identifier: `local#${SUFFIX}`, config: {}, cadence: null, ownerDeviceId: DEVICE },
+      batch: { account: 'old', documents: [doc('a')], cursor: { n: 1 } } as unknown as CommitBatch,
+    };
+    await runCommitBatch(leader, input as never);
+    expect(leader.conn().prepare(`SELECT count(*) n FROM accounts`).get()).toEqual({ n: 0 });
+    expect(leader.conn().prepare(`SELECT count(*) n FROM documents`).get()).toEqual({ n: 0 });
+  });
+
   it('an account the leader already holds under another id is used, not duplicated', async () => {
     const leader = await device();
     addAccount(leader, 'leader-id', 'local-folder', `this-machine#${SUFFIX}`, DEVICE);
@@ -596,12 +607,24 @@ describe('renameAccount', () => {
     const d = await device();
     addAccount(d, 'o', 'assistant', 'local#aaaaaaaa', 'aaaaaaaa-x');
     d.conn().prepare(`UPDATE accounts SET status = 'paused', last_error = 'Owned by aaaaaaaa' WHERE id = 'o'`).run();
-    addAccount(d, 'p', 'assistant', 'other#bbbbbbbb', 'bbbbbbbb-x');
+    addAccount(d, 'p', 'assistant', 'other#bbbbbbbb');
     d.conn().prepare(`UPDATE accounts SET status = 'paused', last_error = NULL WHERE id = 'p'`).run();
     await d.store.commit({ renameAccount: { id: 'o' as never, identifier: 'local' } });
     await d.store.commit({ renameAccount: { id: 'p' as never, identifier: 'other' } });
     expect(row(d, 'o')).toMatchObject({ status: 'connecting', last_error: null });
     expect(row(d, 'p')).toMatchObject({ identifier: 'other', status: 'paused' });
+  });
+
+  it("lifts an owner batch's pause (paused, no error, another owner), not my own", async () => {
+    const d = await device();
+    await d.svc.setDeviceId(DEVICE);
+    addAccount(d, 'f', 'assistant', 'local#ffffffff', 'ffffffff-x');
+    addAccount(d, 'm', 'assistant', `mine#${SUFFIX}`, DEVICE);
+    d.conn().prepare(`UPDATE accounts SET status = 'paused', last_error = NULL`).run();
+    await d.store.commit({ renameAccount: { id: 'f' as never, identifier: 'local' } });
+    await d.store.commit({ renameAccount: { id: 'm' as never, identifier: 'mine' } });
+    expect(row(d, 'f')).toMatchObject({ status: 'connecting', owner_device_id: null });
+    expect(row(d, 'm')).toMatchObject({ status: 'paused', owner_device_id: null });
   });
 
   it('changes nothing while another row holds the identifier', async () => {
