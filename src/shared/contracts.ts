@@ -296,6 +296,11 @@ export type CommitBatch =
   /** ONE cascade: purge documents (tombstones into the feed), delete cursor,
    *  config, credentials. */
   | { removeAccount: AccountId }
+  /** A formerly device-owned account becomes the one account-level row:
+   *  `identifier` is set, the owner and the cursor are cleared, and a pause
+   *  an import made for another device's owner (`Owned by …`) is lifted.
+   *  Refused (no-op) while another row holds `(source, identifier)`. */
+  | { renameAccount: { id: AccountId; identifier: string } }
   /** Engine maintenance: archived-long-enough tombstones become gone —
    *  document rows AND their `documents_fts` / `documents_tri` entries, one
    *  `'purge'` change each. Driven by `registerArchiveSweep` (boot.ts) on a

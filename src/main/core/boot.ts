@@ -58,6 +58,7 @@ import { createScheduler } from './scheduler';
 import type { CoreScheduler } from './scheduler';
 import { bootPhase, canWrite, gateEngine, readSyncGate } from './sync/role';
 import { notMineToRun } from './sync/sources';
+import { collapseFormerlyOwned, uncleanFormerlyOwned } from './sync/collapse';
 import { createSyncService, type SyncService } from './sync/service';
 import { applyPendingSwap } from './sync/swap';
 import { isResting } from './engine/resting';
@@ -675,11 +676,42 @@ export async function resumeAccounts(
   } = {},
 ): Promise<Map<string, Handle>> {
   const handles = new Map<string, Handle>();
+  // Before anything starts, on the writer only: a follower gets the result
+  // by sync (spec 2026-11-15 §3.2).
+  // (A partial test platform without a db or a role skips it.)
+  let collapseFailed = false;
+  if (platform.db && platform.readOnly && !platform.readOnly()) {
+    try {
+      const r = await collapseFormerlyOwned({
+        db: platform.db,
+        store: platform.store,
+        remove: (id) => removeAccountFully(platform, id),
+      });
+      // The gate caches which accounts another device owns: the keeper's
+      // owner is gone now.
+      if (r.removed || r.renamed) await platform.sync?.loadOwned?.();
+      if (r.removed || r.renamed)
+        platform.logSink.log(
+          'engine',
+          'info',
+          `collapsed formerly device-owned accounts: ${r.removed} removed, ${r.renamed} renamed`,
+        );
+    } catch (e) {
+      collapseFailed = true;
+      platform.logSink.log(
+        'engine',
+        'warn',
+        `collapse of formerly device-owned accounts failed: ${(e as Error).name}`,
+      );
+    }
+  }
   const accounts = await platform.store.read.accounts();
   for (const account of accounts) {
     if (opts.signal?.aborted) break;
     if (account.source === 'worker') continue; // synthetic accounts don't sync
     if (opts.skip?.(account)) continue;
+    // A failed collapse leaves leftovers that would each sweep: not now.
+    if (collapseFailed && uncleanFormerlyOwned(account)) continue;
     // Same resting-state rule as the cadence tick: a needsReauth account
     // must not resume hammering a revoked credential at every boot. A
     // needs-connector account starts once its connector is registered
@@ -704,6 +736,19 @@ export async function resumeAccounts(
     handles.set(account.id, runAccount(platform, account));
   }
   return handles;
+}
+
+/** The user's Remove: stop the loop, drop the account and its documents,
+ *  then its scheduler jobs. */
+export async function removeAccountFully(
+  platform: Pick<CorePlatform, 'engine' | 'scheduler'>,
+  accountId: AccountId,
+): Promise<void> {
+  await platform.engine.remove(accountId);
+  for (const job of await platform.scheduler.jobs()) {
+    if (job.id.endsWith(`:${accountId}`))
+      await platform.scheduler.unregister(job.id);
+  }
 }
 
 /** What a new leader starts, after the role flipped (spec 7.8): accounts from
