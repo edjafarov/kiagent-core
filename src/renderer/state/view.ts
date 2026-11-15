@@ -119,6 +119,11 @@ export interface ViewParams {
   add?: string;
   /** Sources: the catalog with this store item's (`owner/repo`) install sheet. */
   install?: string;
+  /** Sources: the catalog with the Add from GitHub sheet prefilled with this
+   *  `owner/repo[@tag]` (a `kiagent://install` link). */
+  link?: string;
+  /** Sources: the link's sequence number — a new one reopens the sheet. */
+  linkSeq?: string;
   /** Outbox: open this draft's review. */
   draft?: string;
 }

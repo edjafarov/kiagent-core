@@ -76,6 +76,7 @@ import {
   InstallSourceError,
 } from './marketplace/github-source';
 import { formatGitHubRef } from './marketplace/github-ref';
+import { createInstallLinks } from './install-links';
 import { createMarketplaceCatalog } from './marketplace/catalog';
 import type { MarketplaceCatalog } from './marketplace/catalog';
 import { buildMainApi } from './main-api';
@@ -278,14 +279,36 @@ function applyLoginItemSettings(launchAtLogin: boolean): void {
     app.setLoginItemSettings({ openAtLogin: launchAtLogin });
 }
 
+// `kiagent://install` links (spec §8), product-gated. Created before the
+// single-instance lock so a link on the very first launch is kept.
+const installLinks = createInstallLinks({
+  scheme: product.urlScheme,
+  show: () => showMainWindow(),
+  nudge: () => broadcast('push:install-link', undefined),
+  log: (m) => log.info(m),
+});
+if (product.urlScheme && app.isPackaged)
+  app.setAsDefaultProtocolClient(product.urlScheme);
+// macOS delivers links here, possibly before `ready`: registered at load.
+app.on('open-url', (event, url) => {
+  event.preventDefault();
+  installLinks.offer(url);
+});
+// Windows/Linux: a link that launched the app is an argument.
+installLinks.offerArgv(process.argv);
+
 const gotLock = app.requestSingleInstanceLock();
 if (!gotLock) {
   app.quit();
 } else {
   // Launching the app again is how a user asks for the window back once it is
   // hidden in the tray (close-to-tray, Windows/Linux) — without this the
-  // second launch would just exit and nothing would appear.
-  app.on('second-instance', () => showMainWindow());
+  // second launch would just exit and nothing would appear. On
+  // Windows/Linux a clicked link arrives this way too.
+  app.on('second-instance', (_e, argv) => {
+    installLinks.offerArgv(argv);
+    showMainWindow();
+  });
 }
 
 function broadcast<C extends PushChannel>(
@@ -887,6 +910,7 @@ function registerIpc(
 
     'extension:install-preview': ({ ref }) => extensions.installPreview(ref),
     'extension:install-commit': ({ token }) => extensions.installCommit(token),
+    'extension:install-link-take': () => installLinks.take(),
     'extension:install': ({ ref, integrity }) =>
       extensions.installFromRef(ref, {
         grantConsent: true,
@@ -1882,7 +1906,10 @@ app
           showMainWindow();
         });
       },
-      createWindow,
+      createWindow: async () => {
+        await createWindow();
+        installLinks.markReady();
+      },
       startBackground: () =>
         startBackground({
           resumeReady: async (signal) => {

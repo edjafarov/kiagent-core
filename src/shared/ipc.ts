@@ -807,6 +807,11 @@ export interface Invokes {
   /** Installs a connector from its pinned ref with its consent recorded and no
    *  prompt. A follower's commit forwards this to the leader (sync spec 7.9);
    *  it is not shown to users as a separate step. */
+  /** The pending `kiagent://install` link, once (null when none). */
+  'extension:install-link-take': {
+    req: Record<string, never>;
+    res: { seq: number; owner: string; repo: string; tag?: string } | null;
+  };
   'extension:install': {
     /** `integrity`: the SRI the user approved on the forwarding device. */
     req: { ref: string; integrity?: string | null };
@@ -864,6 +869,9 @@ export interface Pushes {
    *  broadcast per 50 ms; no payload — re-read `calendar-out:list` and
    *  `outbox:pending-count`. */
   'push:calendar-out-changed': void;
+  /** A `kiagent://install` link is waiting: take it with
+   *  `extension:install-link-take`. No payload. */
+  'push:install-link': void;
   /** B1: an extension's `host.ui.broadcast(name, payload)`, fanned out to
    *  every renderer window verbatim. */
   'ext:push': ExtPushEvent;
@@ -983,6 +991,7 @@ const INVOKE_CHANNEL_MAP = {
   'marketplace:check-updates': 0,
   'extension:install-preview': 0,
   'extension:install-commit': 0,
+  'extension:install-link-take': 0,
   'extension:install': 0,
   'extension:uninstall': 0,
   'extension:set-enabled': 0,
@@ -1005,6 +1014,7 @@ const PUSH_CHANNEL_MAP = {
   'push:outbox-changed': 0,
   'push:attention-changed': 0,
   'push:calendar-out-changed': 0,
+  'push:install-link': 0,
   'ext:push': 0,
 } as const satisfies Record<PushChannel, 0>;
 

@@ -22,6 +22,7 @@ import {
   createScreenRegistry,
   getDefaultScreens,
 } from '@renderer/screen-registry';
+import { useInstallLink } from './extensions/use-install-link';
 
 const screenRegistry = createScreenRegistry(getDefaultScreens());
 
@@ -63,6 +64,12 @@ function selectShellGate(s: AppState | null) {
   };
 }
 
+/** Takes `kiagent://install` links once signed in (spec §8). */
+function InstallLinks(): null {
+  useInstallLink();
+  return null;
+}
+
 export default function App(): React.ReactElement {
   const gate = useAppGate(selectShellGate);
 
@@ -100,6 +107,7 @@ export default function App(): React.ReactElement {
 
   return (
     <ViewContext.Provider value={nav}>
+      <InstallLinks />
       <IconSprite />
       <SourceDescriptorsProvider>
         <AppShell sidebar={<Sidebar />}>

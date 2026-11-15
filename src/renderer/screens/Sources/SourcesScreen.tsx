@@ -17,7 +17,11 @@ import './Sources.css';
 export type LocalView =
   | { view: 'list' }
   | { view: 'detail'; accountId: AccountId; reconnect?: boolean }
-  | { view: 'catalog'; install?: string }
+  | {
+      view: 'catalog';
+      install?: string;
+      link?: { text: string; seq: number };
+    }
   | { view: 'connect'; sourceId: string };
 
 /** The route params another screen may link with; each is used once. */
@@ -25,7 +29,7 @@ function viewFromParams(
   params: ViewParams,
   entries: ReturnType<typeof useVisibleAccounts>,
 ): LocalView | null {
-  const { reconnect, accountId, add, install } = params;
+  const { reconnect, accountId, add, install, link, linkSeq } = params;
   const target = reconnect ?? accountId;
   if (target !== undefined) {
     const known = entries.find((e) => e.account.id === target);
@@ -38,6 +42,8 @@ function viewFromParams(
       : { view: 'list' };
   }
   if (install !== undefined) return { view: 'catalog', install };
+  if (link !== undefined)
+    return { view: 'catalog', link: { text: link, seq: Number(linkSeq) || 0 } };
   if (add !== undefined)
     return add ? { view: 'connect', sourceId: add } : { view: 'catalog' };
   return null;
@@ -68,7 +74,8 @@ function ConnectPage(props: {
  * wizard, as screen-local views (the shared `View` union has no sub-routes).
  * Links arrive as route params — `accountId=<id>` (that source's page),
  * `reconnect=<accountId>` (the same, signing in again), `add=<sourceId>`, `add=` (the catalog),
- * `install=<owner>/<repo>` — read once and cleared. The list's selection
+ * `install=<owner>/<repo>`, `link=<owner>/<repo>[@tag]` + `linkSeq` (a
+ * `kiagent://install` link) — read once and cleared. The list's selection
  * and filter live here so they survive a trip to a source's page. The
  * product's policy (hidden sources, get-started) comes from the app-root
  * `SourceDescriptorsProvider`.
@@ -93,6 +100,8 @@ export function SourcesScreen(props: {
       accountId: _id,
       add: _a,
       install: _i,
+      link: _l,
+      linkSeq: _ls,
       ...rest
     } = params;
     replaceParams(rest);
@@ -121,6 +130,7 @@ export function SourcesScreen(props: {
       body = (
         <SourceCatalog
           install={local.install}
+          link={local.link}
           onBack={toList}
           onPick={(sourceId) => setLocal({ view: 'connect', sourceId })}
         />

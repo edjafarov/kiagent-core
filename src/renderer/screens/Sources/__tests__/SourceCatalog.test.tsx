@@ -390,4 +390,17 @@ describe('Sources: links', () => {
     });
     expect(screen.getByRole('dialog')).toBeInTheDocument();
   });
+
+  test('link=<owner/repo@tag> opens the catalog with the Add sheet prefilled, fetching nothing', async () => {
+    at({ add: '', link: 'o/r@v1', linkSeq: '4' });
+    await act(async () => {});
+    expect(
+      screen.getByRole('dialog', { name: 'Add from GitHub' }),
+    ).toBeInTheDocument();
+    expect(screen.getByLabelText('Repository')).toHaveValue('o/r@v1');
+    expect(invoke).not.toHaveBeenCalledWith(
+      'extension:install-preview',
+      expect.anything(),
+    );
+  });
 });
