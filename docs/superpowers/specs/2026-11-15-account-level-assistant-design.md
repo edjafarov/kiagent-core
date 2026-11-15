@@ -165,11 +165,17 @@ New cursor, JSON: `{ "log": "<uuid>", "seq": <n>, "sweep"?: true }`.
 - No migration and no new table. `change_log` is a local table and the join
   swap keeps it (`swap.ts`), so the marker stays with this device's log.
 
-**Rotation on following.** When the role gate reports this device is a
-follower (at activation, or on a role change), the extension calls
-`rotateLog()`. Any cursor written before that no longer matches. So a device
-that leads again after someone else led always sweeps (A→B→A). The sweep is
-needed because what B wrote is in the synced rows but not in A's log.
+**Rotation on regaining the lead.**
+- When this process has seen itself as a follower (`roleGate.isFollower()`
+  was true) and then gets the leader open edge (`roleGate.onOpen`), the
+  extension calls `rotateLog()` before the seed gate and before the source's
+  next pull. It runs on the leader, so no follower write guard is involved.
+- A cursor written before that no longer matches. So A→B→A always sweeps,
+  which it must: what B wrote is in the synced rows but not in A's log.
+- A device that boots straight into the lead after following while it was
+  off sees a cursor B claimed (§ claim below), so it also sweeps.
+- A plain restart of a stable leader never saw itself follow, so it neither
+  rotates nor sweeps.
 
 **Same log, not sweeping** (`cursor.log === logId()` and no `sweep`): page
 from `cursor.seq`, as today.
@@ -193,11 +199,13 @@ from `cursor.seq`, as today.
    and paging goes on from there. A write during the sweep has a seq above
    `head` and is emitted again; upserts by `externalId` make that harmless.
 
-**Accepted window.** B could accept a forwarded turn after it starts leading
-but before its pull commits the claim. If B then stops leading, A resumes
-from its own cursor. But A rotated when it became a follower, so it still
-sweeps. The window closes as long as rotation happens before A leads again.
-That holds: A is told it follows when B takes over.
+**Accepted window.** B can accept a forwarded turn after it starts leading
+but before its pull commits the claim. If A then takes the lead back in the
+same process, A rotates and sweeps, so nothing is lost. A gap remains only if
+A was shut down during B's whole lead, B wrote but never committed a claim,
+and A then boots as leader. B's claim is the opening batch of its pull,
+committed within seconds of the start, so the gap is that small. It is
+accepted.
 
 **Cost.** A sweep renders about one document per session, today 173. It runs
 after a leader change or a collapse. A restart on the same leader does no
@@ -228,7 +236,7 @@ nothing, and the collapse renames the keeper. A fresh install seeds a bare
   - a sweep aborted midway leaves the claim cursor, never a clean one.
 - seed gate: with `exists` given, `local#0533dbda` counts as existing; the
   meetings default is unchanged.
-- index: a follower role report calls `rotateLog()` once per transition.
+- index: follower then leader-open calls `rotateLog()` once; a leader that never followed does not rotate.
 
 ## 5. Out of scope
 
