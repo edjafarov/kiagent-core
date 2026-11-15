@@ -71,7 +71,10 @@ import {
 } from './core/processing-status';
 import { maybeOfferMoveToApplications } from './move-to-applications';
 import { createGitHubCache } from './marketplace/github-cache';
-import { createGitHubSource } from './marketplace/github-source';
+import {
+  createGitHubSource,
+  InstallSourceError,
+} from './marketplace/github-source';
 import { formatGitHubRef } from './marketplace/github-ref';
 import { createMarketplaceCatalog } from './marketplace/catalog';
 import type { MarketplaceCatalog } from './marketplace/catalog';
@@ -1664,12 +1667,25 @@ app
         if (ref.startsWith('github:')) {
           // Pinned to the repository as GitHub names it NOW (renames and
           // transfers followed), plus its numeric id for the publisher guard.
-          const resolved = await ghSource.resolveGitHubRef(ref);
-          return {
-            bytes: await ghSource.downloadAsset(resolved.tarballUrl),
-            pinnedRef: `${formatGitHubRef(resolved.owner, resolved.repo)}@${resolved.tag}`,
-            repoId: resolved.repoId,
-          };
+          try {
+            const resolved = await ghSource.resolveGitHubRef(ref);
+            const bytes = await ghSource
+              .downloadAsset(resolved.tarballUrl)
+              .catch((e) => {
+                throw new InstallSourceError('unreachable', e);
+              });
+            return {
+              bytes,
+              pinnedRef: `${formatGitHubRef(resolved.owner, resolved.repo)}@${resolved.tag}`,
+              repoId: resolved.repoId,
+            };
+          } catch (e) {
+            if (e instanceof InstallSourceError && e.detail !== undefined)
+              log.warn(
+                `install source unreachable: ${e.detail instanceof Error ? e.detail.message : String(e.detail)}`,
+              );
+            throw e;
+          }
         }
         return { bytes: await ghSource.downloadAsset(ref), pinnedRef: ref };
       },

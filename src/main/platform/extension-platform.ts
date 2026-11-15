@@ -56,6 +56,7 @@ import { freshCredentials } from '@main/core/engine/fresh-credentials';
 import type { OAuthProfile } from '@main/auth/oauth-window';
 
 import {
+  bundledRefusal,
   createInstaller,
   type InstallerDeps,
 } from '@main/marketplace/installer';
@@ -686,6 +687,12 @@ export function createExtensionPlatform(
   const installer = createInstaller({
     extDir: deps.extDir,
     download: deps.download,
+    bundledIds: () =>
+      new Set(
+        [...entries.values()]
+          .filter((e) => e.origin === 'bundled')
+          .map((e) => e.manifest.id),
+      ),
     sourceIdOwners: () => {
       const owners: Record<string, string> = {};
       for (const d of deps.sources.list()) owners[d.id] = 'builtin';
@@ -1814,10 +1821,18 @@ export function createExtensionPlatform(
           installer.peek(token);
           const existing = entries.get(id);
           if (existing?.origin === 'bundled')
+            return { ok: false, error: bundledRefusal(id) };
+          // The guards run BEFORE the running extension is stopped, so a
+          // refused install leaves it running (spec §3).
+          try {
+            installer.check(token);
+          } catch (e) {
+            installer.discard(token);
             return {
               ok: false,
-              error: `'${id}' is bundled with the app and cannot be replaced from the marketplace`,
+              error: e instanceof Error ? e.message : String(e),
             };
+          }
           if (existing) await deactivate(existing);
           const { manifest, dir } = await installer.commit(token);
           const consent: ConsentRecord = {

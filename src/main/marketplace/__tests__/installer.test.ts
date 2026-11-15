@@ -5,7 +5,13 @@ import path from 'path';
 
 import * as tar from 'tar';
 
-import { createInstaller } from '../installer';
+import {
+  createInstaller,
+  HAS_LINKS,
+  STORE_ONLY_OAUTH,
+  TOO_LARGE,
+} from '../installer';
+import { writeInstalled } from '@main/platform/extensions';
 
 const MANIFEST = {
   id: 'test.basic',
@@ -215,7 +221,7 @@ describe('createInstaller (local refs)', () => {
       const bytes = await tgzBytesOf('1.0.0');
       const download = jest.fn(async () => ({
         bytes,
-        pinnedRef: 'github:o/r@v1.0.0',
+        pinnedRef: 'github:o/r@v1.0.0', repoId: 1,
       }));
       const inst = createInstaller({
         extDir,
@@ -242,7 +248,7 @@ describe('createInstaller (local refs)', () => {
         sourceIdOwners: () => owners,
         download: async () => ({
           bytes: v1Bytes,
-          pinnedRef: 'github:o/r@v1.0.0',
+          pinnedRef: 'github:o/r@v1.0.0', repoId: 1,
         }),
       });
       const p1 = await inst1.preview('github:o/r');
@@ -258,7 +264,7 @@ describe('createInstaller (local refs)', () => {
         sourceIdOwners: () => owners,
         download: async () => ({
           bytes: v1BytesDiff,
-          pinnedRef: 'github:o/r@v1.0.0',
+          pinnedRef: 'github:o/r@v1.0.0', repoId: 1,
         }),
       });
       await expect(instDiff.preview('github:o/r')).rejects.toThrow(
@@ -271,7 +277,7 @@ describe('createInstaller (local refs)', () => {
         sourceIdOwners: () => owners,
         download: async () => ({
           bytes: v1Bytes,
-          pinnedRef: 'github:o/r@v1.0.0',
+          pinnedRef: 'github:o/r@v1.0.0', repoId: 1,
         }),
       });
       const pSame = await instSame.preview('github:o/r');
@@ -285,7 +291,7 @@ describe('createInstaller (local refs)', () => {
         sourceIdOwners: () => owners,
         download: async () => ({
           bytes: v2Bytes,
-          pinnedRef: 'github:o/r@v2.0.0',
+          pinnedRef: 'github:o/r@v2.0.0', repoId: 1,
         }),
       });
       const pV2 = await instV2.preview('github:o/r');
@@ -322,7 +328,7 @@ describe('createInstaller (local refs)', () => {
       const inst = createInstaller({
         extDir,
         sourceIdOwners: () => owners,
-        download: async () => ({ bytes, pinnedRef: 'github:o/r@v1.0.0' }),
+        download: async () => ({ bytes, pinnedRef: 'github:o/r@v1.0.0', repoId: 1 }),
       });
       const mkdtempSpy = jest.spyOn(fs, 'mkdtempSync');
       const originalWriteFileSync = fs.writeFileSync;
@@ -351,6 +357,132 @@ describe('createInstaller (local refs)', () => {
 
       writeSpy.mockRestore();
       mkdtempSpy.mockRestore();
+    });
+  });
+
+  describe('install guards (spec §3, §4)', () => {
+    async function pkgBytes(
+      manifest: Record<string, unknown>,
+      opts: { symlink?: boolean; files?: number } = {},
+    ): Promise<Buffer> {
+      const root = fs.mkdtempSync(path.join(os.tmpdir(), 'kia-guard-src-'));
+      const pkg = makeExtDirFixture(root, { ...MANIFEST, ...manifest });
+      if (opts.symlink) fs.symlinkSync('/etc/hosts', path.join(pkg, 'link'));
+      for (let i = 0; i < (opts.files ?? 0); i += 1)
+        fs.writeFileSync(path.join(pkg, `f${i}.txt`), 'x'.repeat(100));
+      const tgz = path.join(root, 'pkg.tgz');
+      await tar.c({ gzip: true, file: tgz, cwd: root }, ['pkg']);
+      const bytes = fs.readFileSync(tgz);
+      fs.rmSync(root, { recursive: true, force: true });
+      return bytes;
+    }
+    function inst(
+      bytes: Buffer,
+      pinnedRef: string,
+      repoId?: number,
+      extra: Partial<Parameters<typeof createInstaller>[0]> = {},
+    ) {
+      return createInstaller({
+        extDir,
+        sourceIdOwners: () => owners,
+        download: async () => ({ bytes, pinnedRef, repoId }),
+        ...extra,
+      });
+    }
+    const record = (ref: string, repoId?: number) =>
+      writeInstalled(extDir, [
+        {
+          id: 'test.basic',
+          version: '0.9.0',
+          ref,
+          integrity: null,
+          installedAt: '2026-01-01T00:00:00Z',
+          origin: ref.startsWith('file:') ? 'dev' : 'marketplace',
+          ...(repoId != null ? { repoId } : {}),
+        },
+      ]);
+
+    it('refuses a bundled id in preview', async () => {
+      const i = inst(await pkgBytes({}), 'github:o/r@v1', 1, {
+        bundledIds: () => new Set(['test.basic']),
+      });
+      await expect(i.preview('github:o/r')).rejects.toThrow(
+        /is bundled with the app/,
+      );
+    });
+
+    it('refuses a platform OAuth binding from outside the store, allows it from the store', async () => {
+      const m = { contributes: { sources: [{ id: 'basicsrc', oauth: 'google' }], senders: [] } };
+      await expect(
+        inst(await pkgBytes(m), 'github:someone/r@v1', 1).preview('github:someone/r'),
+      ).rejects.toThrow(STORE_ONLY_OAUTH);
+      await expect(
+        inst(await pkgBytes(m), 'github:kia-plugins/r@v1', 1).preview('github:kia-plugins/r'),
+      ).resolves.toBeDefined();
+    });
+
+    it('refuses a different publisher, allows the same repo id after a rename', async () => {
+      fs.mkdirSync(extDir, { recursive: true });
+      record('github:alice/conn@v0.9.0', 5);
+      await expect(
+        inst(await pkgBytes({}), 'github:mallory/conn@v1', 6).preview('github:mallory/conn'),
+      ).rejects.toThrow(
+        'Basic is already installed from alice/conn. This one is from mallory/conn, a different publisher, so KIAgent won’t replace it. To switch, remove Basic in Settings › Extensions first.',
+      );
+      await expect(
+        inst(await pkgBytes({}), 'github:alice/renamed@v1', 5).preview('github:alice/renamed'),
+      ).resolves.toBeDefined();
+    });
+
+    it('legacy store record updates and gains a repo id', async () => {
+      fs.mkdirSync(extDir, { recursive: true });
+      record('github:kia-plugins/slack@v0.9.0');
+      const i = inst(await pkgBytes({}), 'github:kia-plugins/Slack@v1', 9);
+      const p = await i.preview('github:kia-plugins/slack');
+      const { record: r } = await i.commit(p.token);
+      expect(r.repoId).toBe(9);
+    });
+
+    it('refuses a legacy record from outside the store', async () => {
+      fs.mkdirSync(extDir, { recursive: true });
+      record('github:alice/conn@v0.9.0');
+      await expect(
+        inst(await pkgBytes({}), 'github:alice/conn@v1', 5).preview('github:alice/conn'),
+      ).rejects.toThrow(/a different publisher/);
+    });
+
+    it('a local dev record can be replaced', async () => {
+      fs.mkdirSync(extDir, { recursive: true });
+      record('file:/somewhere/pkg');
+      await expect(
+        inst(await pkgBytes({}), 'github:alice/conn@v1', 5).preview('github:alice/conn'),
+      ).resolves.toBeDefined();
+    });
+
+    it('two previews: the second commit is refused once the first is installed', async () => {
+      const a = inst(await pkgBytes({}), 'github:alice/conn@v1', 5);
+      const b = inst(await pkgBytes({}), 'github:mallory/conn@v1', 6);
+      const pa = await a.preview('github:alice/conn');
+      const pb = await b.preview('github:mallory/conn');
+      await a.commit(pa.token);
+      expect(() => b.check(pb.token)).toThrow(/a different publisher/);
+      await expect(b.commit(pb.token)).rejects.toThrow(/a different publisher/);
+    });
+
+    it('caps unpacked entries and bytes, and refuses links', async () => {
+      await expect(
+        inst(await pkgBytes({}, { files: 5 }), 'github:o/r@v1', 1, {
+          limits: { entries: 4, bytes: 1e9 },
+        }).preview('github:o/r'),
+      ).rejects.toThrow(TOO_LARGE);
+      await expect(
+        inst(await pkgBytes({}, { files: 5 }), 'github:o/r@v1', 1, {
+          limits: { entries: 1000, bytes: 300 },
+        }).preview('github:o/r'),
+      ).rejects.toThrow(TOO_LARGE);
+      await expect(
+        inst(await pkgBytes({}, { symlink: true }), 'github:o/r@v1', 1).preview('github:o/r'),
+      ).rejects.toThrow(HAS_LINKS);
     });
   });
 });

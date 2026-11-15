@@ -44,7 +44,11 @@ export const INSTALL_SOURCE_COPY: Record<InstallSourceErrorCode, string> = {
 
 /** Why a repository can't be installed, with the copy to show for it. */
 export class InstallSourceError extends Error {
-  constructor(public readonly code: InstallSourceErrorCode) {
+  constructor(
+    public readonly code: InstallSourceErrorCode,
+    /** The underlying failure, kept for the log (never shown). */
+    public readonly detail?: unknown,
+  ) {
     super(INSTALL_SOURCE_COPY[code]);
   }
 }
@@ -343,7 +347,7 @@ export function createGitHubSource(deps: {
     } catch (e) {
       if (e instanceof InstallSourceError || /^not a github ref/.test((e as Error)?.message ?? ''))
         throw e;
-      throw new InstallSourceError('unreachable');
+      throw new InstallSourceError('unreachable', e);
     }
   }
 

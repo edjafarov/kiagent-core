@@ -28,6 +28,8 @@ describe('platform wiring', () => {
   let store: CoreStore;
   let platform: ExtensionPlatform;
   let setStore: ReturnType<typeof fakeStore>;
+  /** GitHub repo id the fake download reports — the publisher identity. */
+  let repoId = 1;
   // The members the platform reads, typed against the real service.
   type PlatformSync = Pick<SyncService, 'readOnly' | 'forward' | 'enqueue' | 'onApplied'>;
   const sync: { [K in keyof PlatformSync]: jest.Mock<ReturnType<PlatformSync[K]>, Parameters<PlatformSync[K]>> } = {
@@ -65,7 +67,7 @@ describe('platform wiring', () => {
       // The platform's dep is the whole service; the fake carries what it reads.
       sync: sync as unknown as SyncService,
       extensionSet: setStore,
-      download: async () => ({ bytes, pinnedRef: REF }),
+      download: async () => ({ bytes, pinnedRef: REF, repoId }),
       sources: { register: () => {}, get: () => undefined, list: () => [], unregister: () => {} },
       senders: { register: () => {}, get: () => undefined, ids: () => [], unregister: () => {} },
       scheduler: { register: jest.fn(), unregister: jest.fn(), jobs: jest.fn(async () => []), trigger: jest.fn(), env: {} } as never,
@@ -96,6 +98,7 @@ describe('platform wiring', () => {
   // Each test seeds its own set and starts as a writable leader with
   // test.fwd enabled; the platform itself is shared because it is slow to boot.
   beforeEach(async () => {
+    repoId = 1;
     sync.readOnly.mockReset().mockReturnValue(false);
     sync.forward.mockReset();
     setStore.set(undefined);
@@ -182,6 +185,20 @@ describe('platform wiring', () => {
     expect(setStore.get()).toEqual({ 'test.basic': { enabled: true, ref: REF } });
     expect((await platform.uninstall('test.basic')).ok).toBe(true);
     expect(setStore.get()).toEqual({ 'test.basic': { enabled: false, removed: true } });
+  });
+
+  it('a refused commit keeps the running extension (guards run before deactivate)', async () => {
+    setStore.set({});
+    repoId = 2; // staged while nothing is installed: passes preview
+    const other = await platform.installPreview(REF);
+    if (!('token' in other)) throw new Error('preview failed');
+    repoId = 1;
+    expect((await platform.installFromRef(REF, { grantConsent: true })).ok).toBe(true);
+    const r = await platform.installCommit(other.token);
+    expect(r.ok).toBe(false);
+    expect(r.error).toMatch(/a different publisher/);
+    expect(platform.snapshot().find((e) => e.id === 'test.basic')?.status).toBe('activated');
+    expect((await platform.uninstall('test.basic')).ok).toBe(true);
   });
 
   it('uninstalling an id the platform does not know fails and writes no tombstone', async () => {

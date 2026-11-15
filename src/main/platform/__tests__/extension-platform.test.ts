@@ -2667,18 +2667,16 @@ describe('createExtensionPlatform', () => {
       ).toBe('disabled');
     });
 
-    it('installCommit refuses to replace a live bundled extension, which keeps running', async () => {
+    it('a package claiming a live bundled id is refused at preview, before consent, and the bundled one keeps running', async () => {
       platform = makeBundledPlatform({ marker: 7 });
       await platform.start();
-      // Same preview/commit sequence the shadow test uses, targeting the
-      // SAME id ('test.bundled') as the already-active bundled entry — this
-      // exercises the installCommit-time guard (extension-platform.ts
-      // installCommit's `existing?.origin === 'bundled'` check), distinct
-      // from the boot-time shadow-wins precedence covered above.
-      const preview = await platform.installPreview(BUNDLED_SHADOW_FIXTURE);
-      if (!('token' in preview))
-        throw new Error(`preview failed: ${JSON.stringify(preview)}`);
-      await expect(platform.installCommit(preview.token)).resolves.toEqual({
+      // Targets the SAME id ('test.bundled') as the already-active bundled
+      // entry. Spec §3: refused in preview (the install guard), so the
+      // person never reads a consent sheet for it; installCommit keeps its
+      // own bundled check as a backstop.
+      await expect(
+        platform.installPreview(BUNDLED_SHADOW_FIXTURE),
+      ).resolves.toEqual({
         ok: false,
         error: expect.stringContaining('cannot be replaced'),
       });
