@@ -570,6 +570,15 @@ describe('github-source', () => {
       expect(err.message).toBe(INSTALL_SOURCE_COPY[code as keyof typeof INSTALL_SOURCE_COPY]);
     });
 
+    it('a rate limit or network failure is unreachable, not raw text', async () => {
+      mockCache.getJSON.mockRejectedValue(new Error('GitHub rate limit: https://api.github.com/repos/o/r'));
+      const source = createGitHubSource({ cache: mockCache as any });
+      await expect(source.resolveGitHubRef('github:o/r')).rejects.toMatchObject({
+        code: 'unreachable',
+        message: INSTALL_SOURCE_COPY.unreachable,
+      });
+    });
+
     it('rejects a garbage ref', async () => {
       const source = createGitHubSource({ cache: mockCache as any });
       await expect(source.resolveGitHubRef('invalid:ref')).rejects.toThrow(

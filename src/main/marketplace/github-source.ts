@@ -31,13 +31,15 @@ interface GhRepo {
 export type InstallSourceErrorCode =
   | 'not-found'
   | 'no-release'
-  | 'needs-newer-app';
+  | 'needs-newer-app'
+  | 'unreachable';
 
 export const INSTALL_SOURCE_COPY: Record<InstallSourceErrorCode, string> = {
   'not-found':
     'Couldn’t find that repository. It may be private — only public repositories can be added.',
   'no-release': 'This repository has no release to install yet.',
   'needs-newer-app': 'This connector needs a newer version of KIAgent.',
+  unreachable: 'GitHub couldn’t be reached. Try again in a few minutes.',
 };
 
 /** Why a repository can't be installed, with the copy to show for it. */
@@ -333,7 +335,19 @@ export function createGitHubSource(deps: {
     };
   }
 
+  /** Every failure that isn't already a reason (rate limit, offline, 5xx)
+   *  becomes `unreachable` — never raw fetch text under the field. */
   async function resolveGitHubRef(ref: string): Promise<ResolvedRelease> {
+    try {
+      return await resolveOnce(ref);
+    } catch (e) {
+      if (e instanceof InstallSourceError || /^not a github ref/.test((e as Error)?.message ?? ''))
+        throw e;
+      throw new InstallSourceError('unreachable');
+    }
+  }
+
+  async function resolveOnce(ref: string): Promise<ResolvedRelease> {
     const parsed = parseGitHubRef(ref);
     if (!parsed) throw new Error(`not a github ref: ${ref}`);
     let meta: GhRepo;

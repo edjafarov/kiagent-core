@@ -65,8 +65,8 @@ export function createGitHubCache(deps: GitHubCacheDeps) {
       }
     }
     if (!r.ok) {
-      if (r.status === 404) throw new GitHubNotFoundError(`GitHub 404 ${url}`);
       if (hit) return hit.body as T;
+      if (r.status === 404) throw new GitHubNotFoundError(`GitHub 404 ${url}`);
       throw new Error(`GitHub ${r.status} ${url}`);
     }
     const body = (await r.json()) as T;

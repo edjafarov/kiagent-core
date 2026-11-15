@@ -60,13 +60,16 @@ function parseGithubUrl(text: string): RepoRef | { error: string } {
   } catch {
     return { error: BAD_INPUT };
   }
-  if (u.protocol !== 'https:' || u.hostname.toLowerCase() !== 'github.com')
+  const host = u.hostname.toLowerCase();
+  if (u.protocol !== 'https:' || (host !== 'github.com' && host !== 'www.github.com'))
     return { error: NOT_GITHUB };
   // `new URL` drops a default port (`:443`), so the authority is checked
   // as typed: no userinfo, no port.
   const authority = text.replace(/^[a-z][a-z0-9+.-]*:\/\//i, '').split('/')[0];
   if (/[:@]/.test(authority) || u.search || u.hash) return { error: BAD_INPUT };
-  const raw = u.pathname.replace(/^\//, '').replace(/\/$/, '').split('/');
+  // Segments as typed: `new URL` would resolve `..` and drop newlines.
+  const typedPath = text.replace(/^[a-z][a-z0-9+.-]*:\/\/[^/]*/i, '');
+  const raw = typedPath.replace(/^\//, '').replace(/\/$/, '').split('/');
   const parts = raw.map(decodeOnce);
   if (parts.some((p) => p === null)) return { error: BAD_INPUT };
   const seg = parts as string[];
@@ -82,7 +85,11 @@ function parseGithubUrl(text: string): RepoRef | { error: string } {
 /** What a person typed or pasted, as a repository. */
 export function parseRepoInput(text: string): RepoRef | { error: string } {
   const t = text.trim();
+  // eslint-disable-next-line no-control-regex
+  if (/[\u0000-\u001f\u007f]/.test(t)) return { error: BAD_INPUT };
   if (/^[a-z][a-z0-9+.-]*:\/\//i.test(t)) return parseGithubUrl(t);
+  // The address as people copy it from the address bar, without https://.
+  if (/^(?:www\.)?github\.com\//i.test(t)) return parseGithubUrl(`https://${t}`);
   const body = t.startsWith('github:') ? t.slice('github:'.length) : t;
   const at = body.indexOf('@');
   const path = at === -1 ? body : body.slice(0, at);
@@ -94,7 +101,9 @@ export function parseRepoInput(text: string): RepoRef | { error: string } {
 
 /** `<scheme>://install?repo=<owner>/<repo>[&tag=<tag>]`, nothing else. */
 export function parseInstallLink(url: string, scheme: string): RepoRef | null {
-  if (url.length > MAX_LINK_LENGTH) return null;
+  // eslint-disable-next-line no-control-regex
+  if (url.length > MAX_LINK_LENGTH || /[\u0000-\u001f\u007f]/.test(url))
+    return null;
   let u: URL;
   try {
     u = new URL(url);

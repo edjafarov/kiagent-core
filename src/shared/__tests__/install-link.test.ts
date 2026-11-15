@@ -20,6 +20,9 @@ describe('parseRepoInput', () => {
       { owner: 'o', repo: 'r', tag: 'v1.0.0' },
     ],
     ['  o/r  ', { owner: 'o', repo: 'r' }],
+    ['github.com/o/r', { owner: 'o', repo: 'r' }],
+    ['www.GitHub.com/o/r/', { owner: 'o', repo: 'r' }],
+    ['https://www.github.com/o/r', { owner: 'o', repo: 'r' }],
     ['o/r@V1.2.0', { owner: 'o', repo: 'r', tag: 'V1.2.0' }],
     ['github:o/r@t', { owner: 'o', repo: 'r', tag: 't' }],
     ['github:o/my.repo_x-1', { owner: 'o', repo: 'my.repo_x-1' }],
@@ -30,7 +33,7 @@ describe('parseRepoInput', () => {
   it.each([
     'https://gitlab.com/a/b',
     'http://github.com/a/b',
-    'https://www.github.com/a/b',
+    'https://gist.github.com/a/b',
   ])('rejects %s as not GitHub', (input) => {
     expect(parseRepoInput(input)).toEqual({ error: NOT_GITHUB });
   });
@@ -54,6 +57,9 @@ describe('parseRepoInput', () => {
     'o/r\u0007',
     '',
     'github:../..',
+    'https://github.com/old/../other/repo',
+    'https://github.com/o/re\npo',
+    'github.com/o/./r',
   ])('rejects %j as bad input', (input) => {
     expect(parseRepoInput(input)).toEqual({ error: BAD_INPUT });
   });
