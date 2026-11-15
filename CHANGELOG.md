@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.127.0](https://github.com/edjafarov/kiagent-core/compare/v0.126.0...v0.127.0) (2026-11-15)
+
+### Features
+
+* **sync:** Assistant sessions are one account-level source that runs on the leader, not one `local#<device>` account per device ([bf4e3b9f](https://github.com/edjafarov/kiagent-core/commit/bf4e3b9f5a56a314093ffeb629a5d10090ddda45))
+* **sync:** the leader folds leftover per-device Assistant accounts into one before accounts start, keeping the one with documents ([a9bb985f](https://github.com/edjafarov/kiagent-core/commit/a9bb985fdb58497667ae4ab18787a8bf4cbe4b20))
+
+### Bug Fixes
+
+* **sync:** a collapsed keeper starts at once, an owner-made pause is lifted, and a late batch never brings a collapsed row back ([379a6f4a](https://github.com/edjafarov/kiagent-core/commit/379a6f4a583b67702a9fe5a636d26480e754081b))
+
 ## [0.126.0](https://github.com/edjafarov/kiagent-core/compare/v0.125.2...v0.126.0) (2026-11-15)
 
 ### Features
