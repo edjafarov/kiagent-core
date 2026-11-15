@@ -61,6 +61,14 @@ import {
   type InstallerDeps,
 } from '@main/marketplace/installer';
 import { provenanceOf } from '@shared/install-link';
+
+/** A recorded GitHub package from outside the store, or a bare-URL one. No
+ *  record (a discovered dev folder) is not outside the store. */
+function isOutsideStore(ref: string | undefined): boolean {
+  if (ref === undefined) return false;
+  const kind = provenanceOf(ref).kind;
+  return kind === 'github' || kind === 'url';
+}
 import type { SyncService } from '../core/sync/service';
 import {
   createExtensionSync,
@@ -1116,11 +1124,8 @@ export function createExtensionPlatform(
       // The product's allowlist is of STORE connectors: a GitHub package
       // from outside the store (or a bare URL) claiming one of those ids is
       // not on it (spec §3). A local dev install is the developer's own.
-      !['github', 'url'].includes(
-        provenanceOf(
-          readInstalled(deps.extDir).find((r) => r.id === e.manifest.id)
-            ?.ref,
-        ).kind,
+      !isOutsideStore(
+        readInstalled(deps.extDir).find((r) => r.id === e.manifest.id)?.ref,
       )
         ? { idleMs: deps.dormantAfterMs ?? DORMANT_AFTER_MS }
         : undefined;

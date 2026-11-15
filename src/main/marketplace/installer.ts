@@ -59,34 +59,53 @@ function repoOf(ref: string): string {
 }
 
 /** Unpacks a .tgz (strip:1) within EXTRACT_LIMITS, refusing links. The
- *  filter can't throw, so it flags and skips; the flag is raised after. */
-async function extractBounded(
+ *  moment a bound trips, the parse is aborted and the file stops being
+ *  read — a highly compressible archive can't keep main inflating. */
+function extractBounded(
   file: string,
   cwd: string,
   limits: { entries: number; bytes: number },
 ): Promise<void> {
-  let entries = 0;
-  let bytes = 0;
-  let overflow = false;
-  let links = false;
-  await tar.x({
-    file,
-    cwd,
-    strip: 1,
-    filter: (_p, entry) => {
-      const e = entry as { type?: string; size?: number };
-      if (e.type === 'SymbolicLink' || e.type === 'Link') {
-        links = true;
-        return false;
-      }
-      entries += 1;
-      bytes += e.size ?? 0;
-      if (entries > limits.entries || bytes > limits.bytes) overflow = true;
-      return !overflow;
-    },
+  return new Promise<void>((resolve, reject) => {
+    let entries = 0;
+    let bytes = 0;
+    let done = false;
+    const src = fs.createReadStream(file);
+    const finish = (err?: Error) => {
+      if (done) return;
+      done = true;
+      if (err) {
+        src.destroy();
+        reject(err);
+      } else resolve();
+    };
+    const unpack = tar.x({
+      cwd,
+      strip: 1,
+      filter: (_p, entry) => {
+        const e = entry as { type?: string; size?: number };
+        let refuse: string | null = null;
+        if (e.type === 'SymbolicLink' || e.type === 'Link') refuse = HAS_LINKS;
+        else {
+          entries += 1;
+          bytes += e.size ?? 0;
+          if (entries > limits.entries || bytes > limits.bytes)
+            refuse = TOO_LARGE;
+        }
+        if (refuse) {
+          const err = new Error(refuse);
+          finish(err);
+          (unpack as unknown as { abort(e: Error): void }).abort(err);
+          return false;
+        }
+        return true;
+      },
+    });
+    unpack.on('close', () => finish());
+    unpack.on('error', (e: Error) => finish(e));
+    src.on('error', (e) => finish(e));
+    src.pipe(unpack as unknown as NodeJS.WritableStream);
   });
-  if (links) throw new Error(HAS_LINKS);
-  if (overflow) throw new Error(TOO_LARGE);
 }
 
 export interface PendingInstall {
