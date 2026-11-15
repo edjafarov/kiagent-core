@@ -8,16 +8,25 @@ function sheet(
   props: Partial<React.ComponentProps<typeof AddFromGithubSheet>> = {},
 ) {
   const onContinue = jest.fn();
-  render(
+  const onClose = jest.fn();
+  const el = (
+    p: Partial<React.ComponentProps<typeof AddFromGithubSheet>>,
+  ): React.ReactElement => (
     <AddFromGithubSheet
       busy={false}
       error={null}
-      onClose={jest.fn()}
+      onClose={onClose}
       onContinue={onContinue}
       {...props}
-    />,
+      {...p}
+    />
   );
-  return { onContinue };
+  const r = render(el({}));
+  return {
+    onContinue,
+    rerender: (p: Partial<React.ComponentProps<typeof AddFromGithubSheet>>) =>
+      r.rerender(el(p)),
+  };
 }
 
 const field = () => screen.getByLabelText('Repository');
@@ -58,15 +67,18 @@ describe('AddFromGithubSheet', () => {
     expect(onContinue).not.toHaveBeenCalled();
   });
 
-  test('a preview error shows under the field; Continue is held while busy', () => {
-    sheet({
-      error: 'This repository has no release to install yet.',
-      busy: true,
-      initial: 'o/r',
-    });
-    expect(screen.getByRole('alert')).toHaveTextContent(
-      'This repository has no release to install yet.',
-    );
+  test('an error left from elsewhere is not shown before this sheet asks', () => {
+    sheet({ error: 'Some older failure', initial: 'o/r' });
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+
+  test('after Continue, the preview error shows under the field', () => {
+    const NO_RELEASE = 'This repository has no release to install yet.';
+    const { onContinue, rerender } = sheet({ initial: 'o/r' });
+    fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
+    expect(onContinue).toHaveBeenCalledWith('github:o/r');
+    rerender({ error: NO_RELEASE, busy: true });
+    expect(screen.getByRole('alert')).toHaveTextContent(NO_RELEASE);
     expect(screen.getByRole('button', { name: 'Checking…' })).toBeDisabled();
   });
 });

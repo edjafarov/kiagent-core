@@ -19,10 +19,13 @@ export function AddFromGithubSheet(props: {
   const { busy, onClose, onContinue } = props;
   const [text, setText] = useState(props.initial ?? '');
   const [parseError, setParseError] = useState<string | null>(null);
+  // The install flow's error is shared with the catalog: show it only once
+  // this sheet has asked for something, never one left from elsewhere.
+  const [submitted, setSubmitted] = useState(false);
   const field = useRef<HTMLInputElement>(null);
   const hintId = useId();
   const errId = useId();
-  const error = parseError ?? props.error;
+  const error = parseError ?? (submitted ? props.error : null);
 
   const submit = (): void => {
     const r = parseRepoInput(text);
@@ -31,6 +34,7 @@ export function AddFromGithubSheet(props: {
       return;
     }
     setParseError(null);
+    setSubmitted(true);
     onContinue(toGithubRef(r));
   };
 

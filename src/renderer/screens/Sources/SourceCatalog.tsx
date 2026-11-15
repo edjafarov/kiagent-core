@@ -295,7 +295,10 @@ export function SourceCatalog(props: {
           initial={add.initial}
           busy={flow.busy}
           error={flow.error}
-          onClose={() => setAdd(null)}
+          onClose={() => {
+            setAdd(null);
+            flow.clearError();
+          }}
           onContinue={(ref) => void flow.preview(ref, 'install')}
         />
       )}

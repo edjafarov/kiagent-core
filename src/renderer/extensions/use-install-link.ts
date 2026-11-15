@@ -37,3 +37,9 @@ export function useInstallLink(): void {
     };
   }, []);
 }
+
+/** Mount once inside the signed-in tree (core App and product shadows). */
+export function InstallLinks(): null {
+  useInstallLink();
+  return null;
+}

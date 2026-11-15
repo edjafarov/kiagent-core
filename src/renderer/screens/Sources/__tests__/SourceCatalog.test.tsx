@@ -293,6 +293,31 @@ describe('SourceCatalog', () => {
       );
     });
 
+    test('closing the sheet after a failed Continue leaves no error on the catalog', async () => {
+      invoke.mockImplementation((channel: string) => {
+        if (channel === 'sources:list') return Promise.resolve(descriptors);
+        if (channel === 'marketplace:list') return Promise.resolve(ITEMS);
+        if (channel === 'extension:install-preview')
+          return Promise.resolve({ ok: false, error: 'Nope from preview' });
+        return Promise.resolve(undefined);
+      });
+      catalog({});
+      await act(async () => {});
+      fireEvent.click(screen.getByRole('button', { name: 'Add from GitHub…' }));
+      fireEvent.change(screen.getByLabelText('Repository'), {
+        target: { value: 'o/r' },
+      });
+      await act(async () => {
+        fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
+      });
+      expect(screen.getByText('Nope from preview')).toBeInTheDocument();
+      fireEvent.click(
+        within(addSheet()!).getByRole('button', { name: 'Cancel' }),
+      );
+      expect(addSheet()).toBeNull();
+      expect(screen.queryByText('Nope from preview')).toBeNull();
+    });
+
     test('a link opens the sheet prefilled, and the same link again reopens it', async () => {
       const update = withLink({ text: 'o/r@v1', seq: 1 });
       await act(async () => {});
