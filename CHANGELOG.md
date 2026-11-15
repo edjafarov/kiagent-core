@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.126.0](https://github.com/edjafarov/kiagent-core/compare/v0.125.2...v0.126.0) (2026-11-15)
+
+### Features
+
+* **install:** Add from GitHub: install a connector from any GitHub repository, with the repository shown and a "Not reviewed by KIAgent" notice outside the store ([91b6348d](https://github.com/edjafarov/kiagent-core/commit/91b6348d7f99fcb756f6a297e2b117a9e939fd45))
+* **install:** kiagent://install links open a prefilled Add sheet (product-gated by urlScheme) ([fc51d45b](https://github.com/edjafarov/kiagent-core/commit/fc51d45bc2957454ad86e48390b796ad1a0446aa))
+* **install:** approved bytes are installed bytes on every device (integrity forwarded and checked) ([6ecdffc3](https://github.com/edjafarov/kiagent-core/commit/6ecdffc3e1c0552f813e48efc89721baf03cde71))
+* **install:** publisher, bundled and store-only OAuth guards before anything changes ([14ca81d3](https://github.com/edjafarov/kiagent-core/commit/14ca81d30dffee400b864646492af3090f4b7f3b))
+* **install:** resolve the canonical repo and pick only installable releases ([d479cb95](https://github.com/edjafarov/kiagent-core/commit/d479cb95751137ce75d16859c7b5d6738598a185))
+
+### Bug Fixes
+
+* **install:** bounded extraction aborts on a tripped cap; dormancy only excludes installed GitHub records ([ae16da9f](https://github.com/edjafarov/kiagent-core/commit/ae16da9f30c5d53be1d14f9c8d6aa12961eee043))
+* **install-links:** a link is taken on the first screen; the Add sheet shows no stale errors ([f23a2dbd](https://github.com/edjafarov/kiagent-core/commit/f23a2dbdc2bb6c0ba8be8dd85f4b0e5a9e4b2532))
+
 ## [0.125.2](https://github.com/edjafarov/kiagent-core/compare/v0.125.1...v0.125.2) (2026-11-13)
 
 ### Bug Fixes
