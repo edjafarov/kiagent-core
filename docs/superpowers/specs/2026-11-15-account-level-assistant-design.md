@@ -170,6 +170,12 @@ New cursor, JSON: `{ "log": "<uuid>", "seq": <n>, "sweep"?: true }`.
   was true) and then gets the leader open edge (`roleGate.onOpen`), the
   extension calls `rotateLog()` before the seed gate and before the source's
   next pull. It runs on the leader, so no follower write guard is involved.
+- A running pull handles a rotation too. Core may start the pull on
+  promotion before the role event reaches the extension. So `rotateLog()`
+  wakes the pull, as any change does. The pull checks `logId()` against the
+  log it is paging on each pass, and on a mismatch it sweeps in place (the
+  steps below). The order between the role event and the pull start
+  therefore does not matter.
 - A cursor written before that no longer matches. So A→B→A always sweeps,
   which it must: what B wrote is in the synced rows but not in A's log.
 - A device that boots straight into the lead after following while it was
@@ -230,6 +236,7 @@ nothing, and the collapse renames the keeper. A fresh install seeds a bare
   - its own log id: no sweep, pages from seq.
   - `sweep: true` with its own log id: sweeps.
   - after `rotateLog()`, the old cursor sweeps (A→B→A).
+  - `rotateLog()` while the pull is running: it wakes and sweeps in place.
   - the opening batch of a sweep carries the claim cursor; only the last
     sweep batch drops `sweep`.
   - an erased session in the sweep: a deletion.
