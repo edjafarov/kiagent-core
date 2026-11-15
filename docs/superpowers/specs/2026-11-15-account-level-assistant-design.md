@@ -54,10 +54,15 @@ source S in the list:
    clean when it has one row, that row's identifier equals the base, and its
    `ownerDeviceId` is null. Skip a clean group.
 2. Pick the keeper:
-   - the row whose identifier equals the base, if one exists;
-   - otherwise the row with the most docs;
+   - the row with the most docs;
+   - then the row whose identifier equals the base;
    - then the earliest `createdAt`;
    - then the smallest id.
+
+   Docs come first because a bare `local` can be brand new and empty. The
+   seed gate can insert one before the collapse runs (the extension
+   activates before `resumeAccounts`), and keeping it would throw away the
+   documents and recreate them under new ids.
 3. The output is `{ remove: id[], rename: { id, identifier }[] }`:
    - every non-keeper row goes in `remove`;
    - the keeper goes in `rename` unless it is already clean.
@@ -74,12 +79,21 @@ source S in the list:
    That shared body moves into one exported helper, `removeAccountFully`,
    that both call.
 4. Then commits the new batch `{ renameAccount: { id, identifier } }` for each
-   keeper. The batch sets `identifier` and clears `owner_device_id`, then
-   `appendChange('account', id)`. It refuses (no-op) if another row already
-   holds `(source, identifier)`.
-   - Status, config, cadence and cursor stay as they are.
-   - The keeper keeps its documents.
-   - If the keeper is running, it keeps running; its identifier is display only.
+   keeper. The batch:
+   - sets `identifier`;
+   - clears `owner_device_id`;
+   - sets `cursor = NULL`, which forces the extension's sweep (§4.1) so the
+     keeper holds every session, whoever wrote it;
+   - when `status = 'paused'` and `last_error LIKE 'Owned by %'` (an import
+     paused it because another device owned it, `write-tx.ts` importSyncSources),
+     sets `status = 'connecting'` and `last_error = NULL`; any other status,
+     including a pause the user chose, stays;
+   - then `appendChange('account', id)`.
+
+   It refuses (no-op) when another row already holds `(source, identifier)`;
+   the next resume removes that row first. Config and cadence stay. The
+   keeper keeps its documents: the sweep upserts them by `externalId`, and
+   their ids do not change.
 
 The steps are not one transaction. Each step is idempotent, and a run cut
 short is finished by the next one. A removed row that had documents held the
@@ -94,8 +108,16 @@ the start path:
 - after a held writer resumes: `resumeHeld`.
 
 A follower never runs it. The accounts table is copied, so the leader's
-deletes and rename reach it by sync. A failure is logged with counts and the
-source only, and the resume goes on; the next resume tries again.
+deletes and rename reach it by sync. Deletes are applied before upserts, so
+`UNIQUE(source, identifier)` holds on the follower.
+
+At each of these sites no loop of that source runs yet. At boot nothing has
+started. On a promotion the device was a follower. After a resume the writer
+was held.
+
+A failure is logged with counts and the source only. That resume then skips
+every account of a `FORMERLY_DEVICE_OWNED` source that is not clean, so ten
+rows don't each start a sweep. The next resume tries the collapse again.
 
 ### 3.3 Tests (core)
 
@@ -104,13 +126,18 @@ source only, and the resume goes on; the next resume tries again.
 - `planCollapse`:
   - ten `local#…` rows, one with docs: that one is renamed `local`, the other
     nine are removed.
-  - a bare `local` row plus suffixed rows: the bare one is kept.
+  - an empty bare `local` plus a `local#…` with docs: the one with docs is
+    kept, the bare one is removed.
+  - no docs anywhere, a bare `local` plus suffixed rows: the bare one is kept.
   - two rows with docs: the one with more is kept; ties go to the oldest.
   - one clean row: an empty plan.
   - `meetings` `local#…` rows and an identifier like `a#xyz` (not 8 hex) are
     untouched.
-- `renameAccount` (write-tx): renames and clears the owner; appends one
-  `account` change; a no-op when `(source, identifier)` is taken.
+- `renameAccount` (write-tx):
+  - renames, clears the owner and the cursor, and appends one `account`
+    change;
+  - an `Owned by …` pause becomes `connecting`; a plain pause stays paused;
+  - a no-op when `(source, identifier)` is taken.
 - `collapseFormerlyOwned` on a real store: the removed accounts' documents and
   FTS rows are gone, and the keeper's are untouched. A second run commits
   nothing.
@@ -127,32 +154,62 @@ Today the pull cursor is a seq in `change_log`, a per-device table (not in
 leader resumes from the old leader's seq in its own, unrelated log: it skips
 or replays the wrong range, and misses sessions the old leader wrote.
 
-New cursor, JSON: `{ "log": "<uuid>", "seq": <n> }`.
-- **Log id.** The store's `init()` makes sure `change_log` holds one marker row
-  `session_id = '__log:<uuid>'` (inserted if none exists). `logId()` returns
-  that uuid. `readChanges` skips marker rows. No migration and no new table;
-  the marker moves with the log itself, whatever a DB swap does to it.
-- **Same log** (`cursor.log === logId()`): page from `cursor.seq`, as today.
-- **Anything else** (null, a legacy number, another device's log): one sweep.
-  1. `head = max seq` in the local `change_log`, read first.
-  2. Every session id in `sessions`, in pages of 50 ordered by id: emit
-     documents for the non-erased ones that have a ready turn, and deletions
-     for erased ones (the same per-session body as the change path).
-  3. Then continue from `{ log: logId(), seq: head }`. A write during the
-     sweep has a seq above `head` and is emitted again; upserts by
-     `externalId` make that harmless.
-  Batch cursors during the sweep stay the old cursor, and only the last sweep
-  batch carries the new one. So a sweep cut short starts over rather than
-  resuming in a half-swept state.
+New cursor, JSON: `{ "log": "<uuid>", "seq": <n>, "sweep"?: true }`.
 
-The sweep is the cost of a leader change: about one document render per
-session, today 173. A plain restart on the same leader does no sweep.
+**Log id.**
+- `change_log` holds marker rows with `session_id = '__log:<uuid>'`.
+- `init()` inserts one if there is none.
+- `logId()` is the uuid of the newest marker (highest seq).
+- `rotateLog()` inserts a new marker.
+- `readChanges` skips marker rows.
+- No migration and no new table. `change_log` is a local table and the join
+  swap keeps it (`swap.ts`), so the marker stays with this device's log.
+
+**Rotation on following.** When the role gate reports this device is a
+follower (at activation, or on a role change), the extension calls
+`rotateLog()`. Any cursor written before that no longer matches. So a device
+that leads again after someone else led always sweeps (A→B→A). The sweep is
+needed because what B wrote is in the synced rows but not in A's log.
+
+**Same log, not sweeping** (`cursor.log === logId()` and no `sweep`): page
+from `cursor.seq`, as today.
+
+**Anything else** (null, a legacy number, another log, `sweep: true`): sweep.
+1. `head` = the max seq in the local `change_log`, read first.
+2. The pull's opening batch carries the claim
+   `{ log: logId(), seq: head, sweep: true }`, so the copied cursor names
+   this device at once:
+   - if this device stops leading mid-sweep, the next leader sees a foreign
+     log and sweeps;
+   - if this device restarts mid-sweep, it sees `sweep: true` and sweeps
+     again.
+3. Every session id in `sessions`, in pages of 50 ordered by id:
+   - documents for the non-erased ones that have a ready turn;
+   - deletions for erased ones;
+   - the same per-session body as the change path.
+
+   These batches carry the claim cursor.
+4. The last sweep batch carries `{ log: logId(), seq: head }` (no `sweep`),
+   and paging goes on from there. A write during the sweep has a seq above
+   `head` and is emitted again; upserts by `externalId` make that harmless.
+
+**Accepted window.** B could accept a forwarded turn after it starts leading
+but before its pull commits the claim. If B then stops leading, A resumes
+from its own cursor. But A rotated when it became a follower, so it still
+sweeps. The window closes as long as rotation happens before A leads again.
+That holds: A is told it follows when B takes over.
+
+**Cost.** A sweep renders about one document per session, today 173. It runs
+after a leader change or a collapse. A restart on the same leader does no
+sweep.
 
 ### 4.2 The seed gate
 
-No change. `createSeedGate` already seeds `(assistant, 'local')` only on the
-leader and only when no `local` account exists. After §3.2 one exists. On a
-fresh install core no longer suffixes it.
+`createSeedGate` gets an optional `exists(account)` predicate; the default
+stays exact `identifier === 'local'`, so meetings is unchanged. The assistant
+passes `local` or `local#<8 hex>`. A device with leftover rows then seeds
+nothing, and the collapse renames the keeper. A fresh install seeds a bare
+`local`, which core no longer suffixes.
 
 ### 4.3 Tests (extension)
 
@@ -163,8 +220,15 @@ fresh install core no longer suffixes it.
   - legacy numeric cursor: sweeps.
   - a foreign log id: sweeps.
   - its own log id: no sweep, pages from seq.
+  - `sweep: true` with its own log id: sweeps.
+  - after `rotateLog()`, the old cursor sweeps (A→B→A).
+  - the opening batch of a sweep carries the claim cursor; only the last
+    sweep batch drops `sweep`.
   - an erased session in the sweep: a deletion.
-  - a sweep aborted midway: no batch carried the new cursor.
+  - a sweep aborted midway leaves the claim cursor, never a clean one.
+- seed gate: with `exists` given, `local#0533dbda` counts as existing; the
+  meetings default is unchanged.
+- index: a follower role report calls `rotateLog()` once per transition.
 
 ## 5. Out of scope
 
@@ -176,12 +240,7 @@ fresh install core no longer suffixes it.
 
 ## 6. Release
 
-- Core first: the minor bump v0.127.0.
-- Then alpha-cent: extension change plus the `core.lock` bump, merged
-  together.
-- The order between them does not matter for correctness:
-  - New core with the old extension: one collapsed account whose cursor is a
-    number from the leader's log. The old extension pages from it, which is
-    right on this leader.
-  - New extension with old core: the sweep runs once per account row.
-  Both are harmless. They ship together anyway.
+- Core goes first, as v0.127.0. It is not used on its own: the collapse
+  resets the keeper's cursor, and only the new extension sweeps.
+- alpha-cent then merges the extension change and the `core.lock` bump in
+  one merge, so the product never runs the collapse without the sweep.
