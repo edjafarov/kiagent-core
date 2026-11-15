@@ -49,6 +49,7 @@ import {
   backgroundLaneState,
   bootCore,
   takeLaneWake,
+  removeAccountFully,
   resumeAccounts,
   runAccount,
   setAccountCadence,
@@ -679,10 +680,7 @@ function registerIpc(
       broker.pickerCancel(requestId);
     },
     'accounts:remove': async ({ accountId }) => {
-      await p.engine.remove(accountId);
-      for (const job of await p.scheduler.jobs()) {
-        if (job.id.endsWith(`:${accountId}`)) p.scheduler.unregister(job.id);
-      }
+      await removeAccountFully(p, accountId);
     },
     'accounts:pause': async ({ accountId }) => {
       // Delegate to engine.pause: it aborts any in-flight sync loop before
