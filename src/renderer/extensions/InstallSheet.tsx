@@ -20,6 +20,7 @@ import {
   OAUTH_PROVIDER_INFO,
   groupOAuthSources,
 } from '@renderer/components/cap-catalog';
+import { provenanceOf, type Provenance } from '@shared/install-link';
 import { extensionBrand } from './brand';
 import { parseGithubRef } from './match';
 import type { InstallMode, InstallRequest } from './use-extension-install';
@@ -47,10 +48,30 @@ function fmtSize(bytes?: number): string | null {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
-function originWords(ref?: string): string | null {
-  if (ref?.startsWith('github:')) return 'From the store';
-  if (ref?.startsWith('file:')) return 'From a file on this computer';
+/** Where the package comes from, read from the PINNED ref main resolved. */
+function originWords(p: Provenance): string | null {
+  if (p.kind === 'store') return 'From the store';
+  if (p.kind === 'github') return `github.com/${p.owner}/${p.repo}`;
+  if (p.kind === 'local') return 'From a file on this computer';
   return null;
+}
+
+/** Shown for a package from a GitHub repository outside the store. */
+export function NotReviewedNotice(props: {
+  owner: string;
+}): React.ReactElement {
+  return (
+    <div role="note" className="ext-not-reviewed">
+      <Icon name="alert-triangle" size={16} />
+      <div>
+        <p className="ext-not-reviewed-title">Not reviewed by KIAgent</p>
+        <p className="ext-not-reviewed-body">
+          Published by <b>{props.owner}</b> on GitHub. It runs with the access
+          below — install it only if you trust the publisher.
+        </p>
+      </div>
+    </div>
+  );
 }
 
 function Elevated(): React.ReactElement {
@@ -175,7 +196,8 @@ export function InstallSheet(props: {
   onConfirm: () => void;
 }): React.ReactElement {
   const { request: r, description, busy, onClose, onConfirm } = props;
-  const meta = [originWords(r.ref), `v${r.version}`]
+  const provenance = provenanceOf(r.ref);
+  const meta = [originWords(provenance), `v${r.version}`]
     .filter(Boolean)
     .join(' · ');
   const size = fmtSize(r.sizeBytes);
@@ -221,6 +243,9 @@ export function InstallSheet(props: {
         </>
       }
     >
+      {provenance.kind === 'github' && (
+        <NotReviewedNotice owner={provenance.owner} />
+      )}
       {description && <p className="ext-sheet-desc">{description}</p>}
       <h3 className="ext-sheet-label">It will be able to</h3>
       <div className="ext-access">

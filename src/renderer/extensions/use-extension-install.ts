@@ -105,7 +105,8 @@ export function useExtensionInstall(): ExtensionInstall {
           sizeBytes: p.sizeBytes,
           integrity: p.integrity,
           iconDataUrl: p.iconDataUrl,
-          ref,
+          // The pinned ref main resolved, never the typed one (spec §5).
+          ref: p.ref,
         });
       } finally {
         if (alive.current) setBusy(false);

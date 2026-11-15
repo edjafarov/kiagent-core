@@ -1,6 +1,7 @@
 import React, { useEffect, useId, useRef, useState } from 'react';
 import {
   BrandGlyph,
+  Button,
   Page,
   TextButton,
   TextField,
@@ -8,6 +9,7 @@ import {
 } from '@shared/web-ui/ui';
 import { useAppState } from '@renderer/state/app-state';
 import { InstallSheet } from '@renderer/extensions/InstallSheet';
+import { AddFromGithubSheet } from '@renderer/extensions/AddFromGithubSheet';
 import { useExtensionInstall } from '@renderer/extensions/use-extension-install';
 import { bareGithubRef } from '@renderer/extensions/match';
 import { footerWords, type CatalogTile } from './catalog';
@@ -65,6 +67,9 @@ export function SourceCatalog(props: {
   onPick: (sourceId: string) => void;
   /** `owner/repo`: open that store item's install sheet on arrival. */
   install?: string;
+  /** A `kiagent://install` link: prefill the Add from GitHub sheet. A new
+   *  `seq` reopens it, even for the same text. */
+  link?: { text: string; seq: number };
 }): React.ReactElement {
   const { onPick } = props;
   const [query, setQuery] = useState('');
@@ -78,6 +83,26 @@ export function SourceCatalog(props: {
     sourceId: string;
   } | null>(null);
   const [note, setNote] = useState<string | null>(null);
+
+  /** The Add from GitHub sheet, when open; `key` remounts it per link. */
+  const [add, setAdd] = useState<{ initial?: string; key: number } | null>(
+    null,
+  );
+  const linkSeq = props.link?.seq;
+  useEffect(() => {
+    if (linkSeq === undefined || !props.link) return;
+    // Never over a consent sheet or a running preview: the link waits for
+    // nothing and is simply not opened (spec §8).
+    if (flow.consent || flow.busy) return;
+    setNote(null);
+    setAdd({ initial: props.link.text, key: linkSeq });
+    // A new seq is a new click; the text alone may repeat.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [linkSeq]);
+  // The consent sheet takes over once the preview resolves.
+  useEffect(() => {
+    if (flow.consent) setAdd(null);
+  }, [flow.consent]);
 
   const installStarted = useRef(false);
   useEffect(() => {
@@ -168,7 +193,7 @@ export function SourceCatalog(props: {
             {note}
           </p>
         )}
-        {flow.error && (
+        {flow.error && !add && (
           <p role="alert" className="src-cat-err">
             {flow.error}
           </p>
@@ -229,7 +254,51 @@ export function SourceCatalog(props: {
             </Section>
           )
         )}
+        <div className="src-cat-gh">
+          <svg
+            width="18"
+            height="18"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="1.8"
+            strokeLinecap="round"
+            aria-hidden="true"
+          >
+            <path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1" />
+            <path d="M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1" />
+          </svg>
+          <div className="src-cat-gh-text">
+            <span className="src-cat-gh-title">
+              Have a link to a connector?
+            </span>
+            <span className="src-cat-note">
+              Install one from any public GitHub repository.
+            </span>
+          </div>
+          <Button
+            variant="secondary"
+            disabled={busy}
+            onClick={() => {
+              setNote(null);
+              setAdd({ key: Date.now() });
+            }}
+          >
+            Add from GitHub…
+          </Button>
+        </div>
       </div>
+
+      {add && !consent && (
+        <AddFromGithubSheet
+          key={add.key}
+          initial={add.initial}
+          busy={flow.busy}
+          error={flow.error}
+          onClose={() => setAdd(null)}
+          onContinue={(ref) => void flow.preview(ref, 'install')}
+        />
+      )}
 
       {consent && (
         <InstallSheet
