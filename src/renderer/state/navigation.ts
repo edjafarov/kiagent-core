@@ -121,9 +121,16 @@ export function useNavigation<V extends string, P extends NavParams>(
     [navigate],
   );
 
-  const replaceParams = useCallback((params: P) => {
-    setResolved((prev) => (prev ? { ...prev, params } : prev));
-  }, []);
+  // Before the first navigate the default view is showing (epoch 0); keep
+  // that epoch so the mounted screen stays mounted.
+  const replaceParams = useCallback(
+    (params: P) => {
+      setResolved((prev) =>
+        prev ? { ...prev, params } : { view: defaultView, params, epoch: 0 },
+      );
+    },
+    [defaultView],
+  );
 
   return useMemo(
     () => ({

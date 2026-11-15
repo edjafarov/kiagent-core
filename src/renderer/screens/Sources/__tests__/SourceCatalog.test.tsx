@@ -49,6 +49,7 @@ const PREVIEW = {
   sourceIds: ['dropbox'],
   sizeBytes: 1024,
   integrity: null,
+  ref: 'github:example-org/dropbox-kia-connector@v1.0.3',
 };
 
 let descriptors: unknown[];
@@ -224,6 +225,126 @@ describe('SourceCatalog', () => {
     expect(screen.getByRole('button', { name: /Gmail/ })).toBeEnabled();
   });
 
+  describe('Add from GitHub', () => {
+    function withLink(link?: { text: string; seq: number }) {
+      const ui = (l?: { text: string; seq: number }) => (
+        <SourceDescriptorsProvider>
+          <SourceCatalog onBack={jest.fn()} onPick={jest.fn()} link={l} />
+        </SourceDescriptorsProvider>
+      );
+      const r = render(ui(link));
+      return (l?: { text: string; seq: number }) => r.rerender(ui(l));
+    }
+    const addSheet = () =>
+      screen.queryByRole('dialog', { name: 'Add from GitHub' });
+
+    test('the row shows even when the store could not be reached', async () => {
+      invoke.mockImplementation((channel: string) =>
+        channel === 'sources:list'
+          ? Promise.resolve(descriptors)
+          : Promise.reject(new Error('offline')),
+      );
+      catalog({});
+      await act(async () => {});
+      expect(
+        screen.getByText('Have a link to a connector?'),
+      ).toBeInTheDocument();
+      fireEvent.click(screen.getByRole('button', { name: 'Add from GitHub…' }));
+      expect(addSheet()).toBeInTheDocument();
+    });
+
+    test('a preview error stays in the Add sheet; success moves to the consent sheet', async () => {
+      invoke.mockImplementation((channel: string) => {
+        if (channel === 'sources:list') return Promise.resolve(descriptors);
+        if (channel === 'marketplace:list') return Promise.resolve(ITEMS);
+        if (channel === 'extension:install-preview')
+          return Promise.resolve({
+            ok: false,
+            error: 'This repository has no release to install yet.',
+          });
+        return Promise.resolve(undefined);
+      });
+      catalog({});
+      await act(async () => {});
+      fireEvent.click(screen.getByRole('button', { name: 'Add from GitHub…' }));
+      fireEvent.change(screen.getByLabelText('Repository'), {
+        target: { value: 'o/r' },
+      });
+      await act(async () => {
+        fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
+      });
+      expect(invoke).toHaveBeenCalledWith('extension:install-preview', {
+        ref: 'github:o/r',
+      });
+      expect(within(addSheet()!).getByRole('alert')).toHaveTextContent(
+        'This repository has no release to install yet.',
+      );
+      invoke.mockImplementation((channel: string) =>
+        channel === 'extension:install-preview'
+          ? Promise.resolve({ ...PREVIEW, ref: 'github:o/r@v1' })
+          : Promise.resolve(channel === 'sources:list' ? descriptors : ITEMS),
+      );
+      await act(async () => {
+        fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
+      });
+      expect(addSheet()).toBeNull();
+      expect(screen.getByRole('note')).toHaveTextContent(
+        'Not reviewed by KIAgent',
+      );
+    });
+
+    test('closing the sheet after a failed Continue leaves no error on the catalog', async () => {
+      invoke.mockImplementation((channel: string) => {
+        if (channel === 'sources:list') return Promise.resolve(descriptors);
+        if (channel === 'marketplace:list') return Promise.resolve(ITEMS);
+        if (channel === 'extension:install-preview')
+          return Promise.resolve({ ok: false, error: 'Nope from preview' });
+        return Promise.resolve(undefined);
+      });
+      catalog({});
+      await act(async () => {});
+      fireEvent.click(screen.getByRole('button', { name: 'Add from GitHub…' }));
+      fireEvent.change(screen.getByLabelText('Repository'), {
+        target: { value: 'o/r' },
+      });
+      await act(async () => {
+        fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
+      });
+      expect(screen.getByText('Nope from preview')).toBeInTheDocument();
+      fireEvent.click(
+        within(addSheet()!).getByRole('button', { name: 'Cancel' }),
+      );
+      expect(addSheet()).toBeNull();
+      expect(screen.queryByText('Nope from preview')).toBeNull();
+    });
+
+    test('a link opens the sheet prefilled, and the same link again reopens it', async () => {
+      const update = withLink({ text: 'o/r@v1', seq: 1 });
+      await act(async () => {});
+      expect(screen.getByLabelText('Repository')).toHaveValue('o/r@v1');
+      expect(invoke).not.toHaveBeenCalledWith(
+        'extension:install-preview',
+        expect.anything(),
+      );
+      fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+      expect(addSheet()).toBeNull();
+      update({ text: 'o/r@v1', seq: 2 });
+      await act(async () => {});
+      expect(screen.getByLabelText('Repository')).toHaveValue('o/r@v1');
+    });
+
+    test('a link is ignored while a consent sheet is open', async () => {
+      const update = withLink();
+      await act(async () => {});
+      fireEvent.click(screen.getByRole('button', { name: /Dropbox/ }));
+      await act(async () => {});
+      expect(screen.getByRole('dialog')).toBeInTheDocument();
+      update({ text: 'o/r', seq: 5 });
+      await act(async () => {});
+      expect(addSheet()).toBeNull();
+    });
+  });
+
   test('an unreachable store says so and can try again', async () => {
     invoke.mockImplementation((channel: string) =>
       channel === 'sources:list'
@@ -293,5 +414,18 @@ describe('Sources: links', () => {
       ref: 'github:example-org/dropbox-kia-connector',
     });
     expect(screen.getByRole('dialog')).toBeInTheDocument();
+  });
+
+  test('link=<owner/repo@tag> opens the catalog with the Add sheet prefilled, fetching nothing', async () => {
+    at({ add: '', link: 'o/r@v1', linkSeq: '4' });
+    await act(async () => {});
+    expect(
+      screen.getByRole('dialog', { name: 'Add from GitHub' }),
+    ).toBeInTheDocument();
+    expect(screen.getByLabelText('Repository')).toHaveValue('o/r@v1');
+    expect(invoke).not.toHaveBeenCalledWith(
+      'extension:install-preview',
+      expect.anything(),
+    );
   });
 });

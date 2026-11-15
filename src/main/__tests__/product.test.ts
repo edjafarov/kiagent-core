@@ -159,4 +159,17 @@ describe('loadProductConfig', () => {
     fs.writeFileSync(path.join(tmp, 'product.json'), JSON.stringify(fixture));
     expect(loadProductConfig([tmp])).toEqual(fixture);
   });
+
+  it('accepts a urlScheme and degrades an invalid one to defaults', () => {
+    fs.writeFileSync(
+      path.join(tmp, 'product.json'),
+      JSON.stringify({ productName: 'Acme', urlScheme: 'kiagent' }),
+    );
+    expect(loadProductConfig([tmp]).urlScheme).toBe('kiagent');
+    fs.writeFileSync(
+      path.join(tmp, 'product.json'),
+      JSON.stringify({ productName: 'Acme', urlScheme: 'Bad Scheme!' }),
+    );
+    expect(loadProductConfig([tmp], () => {})).toEqual(DEFAULT_PRODUCT);
+  });
 });

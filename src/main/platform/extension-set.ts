@@ -7,7 +7,14 @@
  *  every device uninstalls it too. Optional, so an older device ignores it. */
 export type ExtensionsSet = Record<
   string,
-  { enabled: boolean; ref?: string; removed?: true }
+  {
+    enabled: boolean;
+    ref?: string;
+    /** The sha512 SRI of the bytes the user approved; another device
+     *  installs only those bytes. Optional: older entries have none. */
+    integrity?: string;
+    removed?: true;
+  }
 >;
 
 /** The `user_prefs` key that holds the set. */
@@ -19,6 +26,8 @@ export interface LocalExtension {
   enabled: boolean;
   /** The pinned marketplace ref from installed.json. */
   ref?: string;
+  /** Its installed bytes' SRI, from installed.json. */
+  integrity?: string;
   /** state.json has an entry for it (a bundled extension's default is on). */
   explicit?: boolean;
 }
@@ -44,15 +53,37 @@ export interface ExtensionOps {
    *  the user granted it on another of their devices. */
   installFromRef(
     ref: string,
-    opts: { grantConsent: true },
+    opts: InstallFromRefOpts,
   ): Promise<{ ok: boolean; id?: string; error?: string }>;
   uninstall(id: string): Promise<{ ok: boolean; error?: string }>;
 }
 
+export const RELEASE_CHANGED_FORWARD =
+  'The release changed after you approved it — try installing again.';
+export const RELEASE_CHANGED_RECONCILE =
+  'This connector’s release changed since it was installed on your other device. Update it there first.';
+
+/** How a connector is installed without a prompt. `integrity`, when given,
+ *  must match the download; `context` picks the copy for a mismatch. */
+export interface InstallFromRefOpts {
+  grantConsent: true;
+  integrity?: string | null;
+  context?: 'forward' | 'reconcile';
+}
+
 export type PendingRecord =
   | { kind: 'enabled'; id: string; enabled: boolean }
-  | { kind: 'installed'; id: string; ref: string | undefined }
-  | { kind: 'uninstalled'; id: string; origin: 'marketplace' | 'dev' | 'bundled' };
+  | {
+      kind: 'installed';
+      id: string;
+      ref: string | undefined;
+      integrity?: string;
+    }
+  | {
+      kind: 'uninstalled';
+      id: string;
+      origin: 'marketplace' | 'dev' | 'bundled';
+    };
 
 export interface ReconcileResult {
   installed: string[];
@@ -67,7 +98,11 @@ export function setFromLocal(local: LocalExtension[]): ExtensionsSet {
   for (const e of local) {
     if (e.origin === 'marketplace') {
       out[e.id] = e.ref
-        ? { enabled: e.enabled, ref: e.ref }
+        ? {
+            enabled: e.enabled,
+            ref: e.ref,
+            ...(e.integrity ? { integrity: e.integrity } : {}),
+          }
         : { enabled: e.enabled };
     } else if (e.origin === 'bundled' && e.explicit) {
       out[e.id] = { enabled: e.enabled };
@@ -78,19 +113,35 @@ export function setFromLocal(local: LocalExtension[]): ExtensionsSet {
 
 /** An entry a join may add: well formed, and a marketplace ref or none. A
  *  local path is a dev install, and those are the joiner's own. */
-function offerable(e: unknown): e is { enabled: boolean; ref?: string } {
+function offerable(
+  e: unknown,
+): e is { enabled: boolean; ref?: string; integrity?: string } {
   if (!e || typeof e !== 'object') return false;
-  const { enabled, ref } = e as { enabled?: unknown; ref?: unknown };
+  const { enabled, ref, integrity } = e as {
+    enabled?: unknown;
+    ref?: unknown;
+    integrity?: unknown;
+  };
   if (typeof enabled !== 'boolean') return false;
+  if (integrity !== undefined && typeof integrity !== 'string') return false;
   if (ref === undefined) return true;
-  return typeof ref === 'string' && ref.length > 0 && !/^([./\\~]|[A-Za-z]:|file:)/.test(ref);
+  return (
+    typeof ref === 'string' &&
+    ref.length > 0 &&
+    !/^([./\\~]|[A-Za-z]:|file:)/.test(ref)
+  );
 }
 
 /** Does `want` call for an install on this device? A missing connector installs
  *  from its ref (none: a bundled one this build doesn't ship); a marketplace one
  *  reinstalls when the pinned ref differs from the local one. */
-export function needsInstall(have: LocalExtension | undefined, want: { ref?: string }): boolean {
-  return !have ? !!want.ref : have.origin === 'marketplace' && !!want.ref && have.ref !== want.ref;
+export function needsInstall(
+  have: LocalExtension | undefined,
+  want: { ref?: string },
+): boolean {
+  return !have
+    ? !!want.ref
+    : have.origin === 'marketplace' && !!want.ref && have.ref !== want.ref;
 }
 
 export function createExtensionSync(d: {
@@ -132,7 +183,9 @@ export function createExtensionSync(d: {
       if (held && held.kind === 'enabled' && want.removed) {
         // The removal came first; this enable can no longer apply.
         pending.delete(id);
-        d.log(`extension ${id} was removed on another device; its pending enable is discarded`);
+        d.log(
+          `extension ${id} was removed on another device; its pending enable is discarded`,
+        );
       } else if (held) continue;
       const have = local.get(id);
       // Before needsInstall: a tombstone never installs, whatever it carries.
@@ -149,7 +202,11 @@ export function createExtensionSync(d: {
         continue;
       }
       if (needsInstall(have, want)) {
-        const r = await ops.installFromRef(want.ref!, { grantConsent: true });
+        const r = await ops.installFromRef(want.ref!, {
+          grantConsent: true,
+          integrity: want.integrity,
+          context: 'reconcile',
+        });
         if (!r.ok) {
           fail(id, r.error);
           continue;
@@ -172,44 +229,52 @@ export function createExtensionSync(d: {
     cur ?? setFromLocal(ops.list());
 
   const recordEnabled = async (id: string, enabled: boolean): Promise<void> => {
-      if (!store.canWrite()) return;
-      await store.update((cur) => {
-        const next = { ...base(cur) };
-        const have = next[id];
-        if (have?.removed) return cur;
-        const entry = ops.list().find((e) => e.id === id);
-        if (!have && entry?.origin === 'dev') return cur;
-        next[id] = {
-          ...(have ?? (entry?.ref ? { ref: entry.ref } : {})),
-          enabled,
-        };
-        return next;
-      });
+    if (!store.canWrite()) return;
+    await store.update((cur) => {
+      const next = { ...base(cur) };
+      const have = next[id];
+      if (have?.removed) return cur;
+      const entry = ops.list().find((e) => e.id === id);
+      if (!have && entry?.origin === 'dev') return cur;
+      next[id] = {
+        ...(have ??
+          (entry?.ref
+            ? {
+                ref: entry.ref,
+                ...(entry.integrity ? { integrity: entry.integrity } : {}),
+              }
+            : {})),
+        enabled,
+      };
+      return next;
+    });
   };
   const recordInstalled = async (
-      id: string,
-      ref: string | undefined,
+    id: string,
+    ref: string | undefined,
+    integrity?: string,
   ): Promise<void> => {
-      if (!ref || !store.canWrite()) return;
-      await store.update((cur) => ({
-        ...base(cur),
-        [id]: { enabled: true, ref },
-      }));
+    if (!ref || !store.canWrite()) return;
+    await store.update((cur) => ({
+      ...base(cur),
+      [id]: { enabled: true, ref, ...(integrity ? { integrity } : {}) },
+    }));
   };
   const recordUninstalled = async (
-      id: string,
-      origin: 'marketplace' | 'dev' | 'bundled',
+    id: string,
+    origin: 'marketplace' | 'dev' | 'bundled',
   ): Promise<void> => {
-      if (!store.canWrite()) return;
-      await store.update((cur) => {
-        if (origin !== 'marketplace') return cur;
-        return { ...base(cur), [id]: { enabled: false, removed: true } };
-      });
+    if (!store.canWrite()) return;
+    await store.update((cur) => {
+      if (origin !== 'marketplace') return cur;
+      return { ...base(cur), [id]: { enabled: false, removed: true } };
+    });
   };
 
   const applyRecord = async (p: PendingRecord): Promise<void> => {
     if (p.kind === 'enabled') return recordEnabled(p.id, p.enabled);
-    if (p.kind === 'installed') return recordInstalled(p.id, p.ref);
+    if (p.kind === 'installed')
+      return recordInstalled(p.id, p.ref, p.integrity);
     return recordUninstalled(p.id, p.origin);
   };
   const flushPending = async (): Promise<void> => {
@@ -218,7 +283,9 @@ export function createExtensionSync(d: {
         await applyRecord(p);
         pending.delete(id);
       } catch (e) {
-        d.log(`extension ${id} still could not be recorded in the set: ${String(e)}`);
+        d.log(
+          `extension ${id} still could not be recorded in the set: ${String(e)}`,
+        );
       }
     }
   };
@@ -247,7 +314,9 @@ export function createExtensionSync(d: {
     seed: (): Promise<void> =>
       serial(async () => {
         if (!store.canWrite()) return;
-        await store.update((cur) => (cur ? undefined : setFromLocal(ops.list())));
+        await store.update((cur) =>
+          cur ? undefined : setFromLocal(ops.list()),
+        );
       }),
     /** A user action and its recording into the set, on the same queue as
      *  reconcile. The local op runs first; when it succeeded and the set could
@@ -278,7 +347,9 @@ export function createExtensionSync(d: {
     offer: (): ExtensionsSet => {
       const have = store.get();
       return Object.fromEntries(
-        Object.entries(setFromLocal(ops.list())).filter(([id]) => !have?.[id]?.removed),
+        Object.entries(setFromLocal(ops.list())).filter(
+          ([id]) => !have?.[id]?.removed,
+        ),
       );
     },
     /** The master's half of a join: adds every offered entry the set lacks. An
@@ -292,7 +363,13 @@ export function createExtensionSync(d: {
           const next = { ...base(cur) };
           for (const [id, e] of Object.entries(offered ?? {})) {
             if (id in next || !offerable(e)) continue;
-            next[id] = e.ref ? { enabled: e.enabled, ref: e.ref } : { enabled: e.enabled };
+            next[id] = e.ref
+              ? {
+                  enabled: e.enabled,
+                  ref: e.ref,
+                  ...(e.integrity ? { integrity: e.integrity } : {}),
+                }
+              : { enabled: e.enabled };
             added.push(id);
           }
           return added.length > 0 ? next : undefined;

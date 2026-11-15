@@ -19,6 +19,10 @@ const schema = z
     macUpdatesEnabled: z.boolean().optional(),
     dormantExtensions: z.array(z.string().min(1)).optional(),
     testNetExtensionId: z.string().min(1).optional(),
+    urlScheme: z
+      .string()
+      .regex(/^[a-z][a-z0-9+.-]{1,31}$/)
+      .optional(),
   })
   .strict();
 
@@ -46,6 +50,13 @@ export interface ProductConfig {
    * (see `scopedTestNetFetch`). Absent: no extension gets it.
    */
   testNetExtensionId?: string;
+  /**
+   * The URL scheme this product claims for install links
+   * (`<scheme>://install?repo=…`). Absent (OSS): no links are handled and
+   * nothing is registered with the OS. The packaged app also declares it
+   * (electron-builder `protocols`), which macOS needs.
+   */
+  urlScheme?: string;
 }
 
 export const DEFAULT_PRODUCT: ProductConfig = {

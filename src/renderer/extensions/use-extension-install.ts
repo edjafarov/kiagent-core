@@ -43,6 +43,8 @@ export interface ExtensionInstall {
   /** Applies the open request and closes the sheet either way. */
   commit: () => Promise<{ ok: boolean; id?: string }>;
   cancel: () => void;
+  /** Drop `error` (a sheet that showed it closed). */
+  clearError: () => void;
   uninstall: (id: string) => Promise<void>;
   setEnabled: (id: string, on: boolean) => Promise<void>;
 }
@@ -105,7 +107,8 @@ export function useExtensionInstall(): ExtensionInstall {
           sizeBytes: p.sizeBytes,
           integrity: p.integrity,
           iconDataUrl: p.iconDataUrl,
-          ref,
+          // The pinned ref main resolved, never the typed one (spec §5).
+          ref: p.ref,
         });
       } finally {
         if (alive.current) setBusy(false);
@@ -161,6 +164,7 @@ export function useExtensionInstall(): ExtensionInstall {
   }, [consent]);
 
   const cancel = useCallback(() => setConsent(null), []);
+  const clearError = useCallback(() => setError(null), []);
 
   const uninstall = useCallback(
     async (id: string): Promise<void> => {
@@ -192,6 +196,7 @@ export function useExtensionInstall(): ExtensionInstall {
     review,
     commit,
     cancel,
+    clearError,
     uninstall,
     setEnabled,
   };

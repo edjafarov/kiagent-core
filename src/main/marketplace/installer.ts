@@ -20,16 +20,93 @@ import * as tar from 'tar';
 import type { Manifest } from '@shared/contracts';
 
 import {
+  oauthSourceBindings,
   sourceContributions,
   validateManifestDir,
 } from '@main/platform/manifest';
+import { provenanceOf, STORE_OWNER } from '@shared/install-link';
 import {
   readInstalled,
   writeInstalled,
   type InstalledRecord,
 } from '@main/platform/extensions';
+import { parseGitHubRef } from './github-ref';
 
 const MAX_PENDING = 8;
+
+/** Bounds on what one package may unpack to (spec §4). */
+export const EXTRACT_LIMITS = { entries: 20_000, bytes: 512 * 1024 * 1024 };
+export const TOO_LARGE = 'package is too large to install';
+export const HAS_LINKS = 'package contains links, which aren’t allowed';
+export const STORE_ONLY_OAUTH =
+  'This connector asks to sign in through KIAgent’s own Google or Microsoft access, which only store connectors can use.';
+
+export function differentPublisher(
+  name: string,
+  oldRepo: string,
+  newRepo: string,
+): string {
+  return `${name} is already installed from ${oldRepo}. This one is from ${newRepo}, a different publisher, so KIAgent won’t replace it. To switch, remove ${name} in Settings › Extensions first.`;
+}
+
+export function bundledRefusal(id: string): string {
+  return `'${id}' is bundled with the app and cannot be replaced from the marketplace`;
+}
+
+function repoOf(ref: string): string {
+  const g = parseGitHubRef(ref.replace(/@.*$/, ''));
+  return g ? `${g.owner}/${g.repo}` : ref;
+}
+
+/** Unpacks a .tgz (strip:1) within EXTRACT_LIMITS, refusing links. The
+ *  moment a bound trips, the parse is aborted and the file stops being
+ *  read — a highly compressible archive can't keep main inflating. */
+function extractBounded(
+  file: string,
+  cwd: string,
+  limits: { entries: number; bytes: number },
+): Promise<void> {
+  return new Promise<void>((resolve, reject) => {
+    let entries = 0;
+    let bytes = 0;
+    let done = false;
+    const src = fs.createReadStream(file);
+    const finish = (err?: Error) => {
+      if (done) return;
+      done = true;
+      if (err) {
+        src.destroy();
+        reject(err);
+      } else resolve();
+    };
+    const unpack = tar.x({
+      cwd,
+      strip: 1,
+      filter: (_p, entry) => {
+        const e = entry as { type?: string; size?: number };
+        let refuse: string | null = null;
+        if (e.type === 'SymbolicLink' || e.type === 'Link') refuse = HAS_LINKS;
+        else {
+          entries += 1;
+          bytes += e.size ?? 0;
+          if (entries > limits.entries || bytes > limits.bytes)
+            refuse = TOO_LARGE;
+        }
+        if (refuse) {
+          const err = new Error(refuse);
+          finish(err);
+          (unpack as unknown as { abort(e: Error): void }).abort(err);
+          return false;
+        }
+        return true;
+      },
+    });
+    unpack.on('close', () => finish());
+    unpack.on('error', (e: Error) => finish(e));
+    src.on('error', (e) => finish(e));
+    src.pipe(unpack as unknown as NodeJS.WritableStream);
+  });
+}
 
 export interface PendingInstall {
   token: string;
@@ -39,15 +116,23 @@ export interface PendingInstall {
   integrity: string | null;
   ref: string;
   origin: 'marketplace' | 'dev';
+  /** GitHub's numeric repository id for a `github:` install, else null. */
+  repoId: number | null;
 }
 
 export interface InstallerDeps {
   extDir: string;
   sourceIdOwners(): Record<string, string>;
+  /** Ids of the extensions bundled with the app — never replaceable. */
+  bundledIds?(): ReadonlySet<string>;
+  /** Test seam for EXTRACT_LIMITS. */
+  limits?: { entries: number; bytes: number };
   /** Resolves a marketplace ref (github:owner/repo[@tag] or http(s) URL) to
    *  tarball bytes + the PINNED ref to record. Absent → marketplace refs are
    *  rejected exactly as in Plan A. */
-  download?: (ref: string) => Promise<{ bytes: Buffer; pinnedRef: string }>;
+  download?: (
+    ref: string,
+  ) => Promise<{ bytes: Buffer; pinnedRef: string; repoId?: number }>;
 }
 
 function duSync(dir: string): number {
@@ -72,6 +157,39 @@ function moveDir(from: string, to: string): void {
 
 export function createInstaller(deps: InstallerDeps) {
   const pending = new Map<string, PendingInstall>();
+  const limits = deps.limits ?? EXTRACT_LIMITS;
+
+  /** Spec §3 — run at preview, again before the running extension is
+   *  stopped (check), and once more inside commit. Reads only local state. */
+  function guard(p: {
+    manifest: Manifest;
+    ref: string;
+    origin: 'marketplace' | 'dev';
+    repoId: number | null;
+  }): void {
+    const { manifest, ref } = p;
+    if (deps.bundledIds?.().has(manifest.id))
+      throw new Error(bundledRefusal(manifest.id));
+    if (
+      p.origin === 'marketplace' &&
+      provenanceOf(ref).kind !== 'store' &&
+      oauthSourceBindings(manifest).length > 0
+    )
+      throw new Error(STORE_ONLY_OAUTH);
+    const prior = readInstalled(deps.extDir).find((r) => r.id === manifest.id);
+    if (!prior?.ref.startsWith('github:') || ref.startsWith('file:')) return;
+    const samePublisher =
+      prior.repoId != null
+        ? prior.repoId === p.repoId
+        : ref.startsWith('github:') &&
+          (parseGitHubRef(prior.ref)?.owner.toLowerCase() ?? '') ===
+            STORE_OWNER &&
+          repoOf(prior.ref).toLowerCase() === repoOf(ref).toLowerCase();
+    if (!samePublisher)
+      throw new Error(
+        differentPublisher(manifest.name, repoOf(prior.ref), repoOf(ref)),
+      );
+  }
 
   const evict = (token: string) => {
     const p = pending.get(token);
@@ -106,8 +224,10 @@ export function createInstaller(deps: InstallerDeps) {
       try {
         let integrity: string | null = null;
         let recordRef: string;
+        let repoId: number | null = null;
         if (isMarketplace) {
-          const { bytes, pinnedRef } = await deps.download!(ref);
+          const { bytes, pinnedRef, repoId: rid } = await deps.download!(ref);
+          repoId = rid ?? null;
           integrity = `sha512-${crypto.createHash('sha512').update(bytes).digest('base64')}`;
           recordRef = pinnedRef;
           // Write + extract share one try/finally so the sibling .tgz in
@@ -117,7 +237,7 @@ export function createInstaller(deps: InstallerDeps) {
           const tgzPath = `${stagingDir}.tgz`;
           try {
             fs.writeFileSync(tgzPath, bytes);
-            await tar.x({ file: tgzPath, cwd: stagingDir, strip: 1 });
+            await extractBounded(tgzPath, stagingDir, limits);
           } finally {
             fs.rmSync(tgzPath, { force: true });
           }
@@ -132,7 +252,7 @@ export function createInstaller(deps: InstallerDeps) {
               filter: (src) => src !== path.join(abs, 'data'),
             });
           } else if (abs.endsWith('.tgz') || abs.endsWith('.tar.gz')) {
-            await tar.x({ file: abs, cwd: stagingDir, strip: 1 });
+            await extractBounded(abs, stagingDir, limits);
           } else {
             throw new Error('local ref must be a directory or a .tgz');
           }
@@ -152,6 +272,8 @@ export function createInstaller(deps: InstallerDeps) {
             );
           }
         }
+        const origin = isMarketplace ? 'marketplace' : 'dev';
+        guard({ manifest, ref: recordRef, origin, repoId });
         if (integrity) {
           const prior = readInstalled(deps.extDir).find(
             (r) => r.id === manifest.id,
@@ -174,7 +296,8 @@ export function createInstaller(deps: InstallerDeps) {
           sizeBytes: duSync(stagingDir),
           integrity,
           ref: recordRef,
-          origin: isMarketplace ? 'marketplace' : 'dev',
+          origin,
+          repoId,
         };
         pending.set(entry.token, entry);
         if (pending.size > MAX_PENDING)
@@ -199,11 +322,25 @@ export function createInstaller(deps: InstallerDeps) {
 
     /** Read-only: the ref a pending install was staged from (a follower hands
      *  it to the leader instead of committing). */
-    peekRef(token: string): { ref: string; origin: 'marketplace' | 'dev' } {
+    peekRef(token: string): {
+      ref: string;
+      origin: 'marketplace' | 'dev';
+      integrity: string | null;
+    } {
       const p = pending.get(token);
       if (!p)
         throw new Error('unknown or expired install token — run preview again');
-      return { ref: p.ref, origin: p.origin };
+      return { ref: p.ref, origin: p.origin, integrity: p.integrity };
+    },
+
+    /** The install guards for a staged package, without touching disk —
+     *  run before the running extension is stopped, so a refusal leaves
+     *  it running. Throws the refusal. */
+    check(token: string): void {
+      const p = pending.get(token);
+      if (!p)
+        throw new Error('unknown or expired install token — run preview again');
+      guard(p);
     },
 
     /** Drops one staged install without committing it. */
@@ -217,6 +354,7 @@ export function createInstaller(deps: InstallerDeps) {
       const p = pending.get(token);
       if (!p)
         throw new Error('unknown or expired install token — run preview again');
+      guard(p);
       pending.delete(token);
       fs.mkdirSync(deps.extDir, { recursive: true });
       const dir = path.join(deps.extDir, p.manifest.id);
@@ -239,6 +377,7 @@ export function createInstaller(deps: InstallerDeps) {
         integrity: p.integrity,
         installedAt: new Date().toISOString(),
         origin: p.origin,
+        ...(p.repoId != null ? { repoId: p.repoId } : {}),
       };
       const records = readInstalled(deps.extDir).filter(
         (r) => r.id !== record.id,

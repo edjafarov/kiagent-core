@@ -28,10 +28,11 @@ describe('github-ref', () => {
       });
     });
 
-    it('parses refs with numbers and underscores', () => {
-      const result = parseGitHubRef('github:org_name123/repo_name456');
+    it('parses refs with numbers and underscores (repo only — GitHub logins have none)', () => {
+      expect(parseGitHubRef('github:org_name123/repo_name456')).toBeNull();
+      const result = parseGitHubRef('github:org-name123/repo_name456');
       expect(result).toEqual({
-        owner: 'org_name123',
+        owner: 'org-name123',
         repo: 'repo_name456',
       });
     });
@@ -87,6 +88,16 @@ describe('github-ref', () => {
         const formatted = formatGitHubRef(parsed.owner, parsed.repo);
         expect(formatted).toBe(original);
       }
+    });
+  });
+  it('rejects dot-only and malformed components', () => {
+    expect(parseGitHubRef('github:../..')).toBeNull();
+    expect(parseGitHubRef('github:o/..')).toBeNull();
+    expect(parseGitHubRef('github:o/r@a/b')).toBeNull();
+    expect(parseGitHubRef('github:o/r@v1')).toEqual({
+      owner: 'o',
+      repo: 'r',
+      tag: 'v1',
     });
   });
 });

@@ -56,12 +56,18 @@ import { freshCredentials } from '@main/core/engine/fresh-credentials';
 import type { OAuthProfile } from '@main/auth/oauth-window';
 
 import {
+  bundledRefusal,
   createInstaller,
   type InstallerDeps,
 } from '@main/marketplace/installer';
+import { provenanceOf } from '@shared/install-link';
 import type { SyncService } from '../core/sync/service';
 import {
   createExtensionSync,
+  RELEASE_CHANGED_FORWARD,
+  RELEASE_CHANGED_RECONCILE,
+  type InstallFromRefOpts,
+  type PendingRecord,
   type ExtensionSetStore,
   type ExtensionsSet,
   type LocalExtension,
@@ -114,6 +120,14 @@ import { createInMemoryHostPair, type HostTransport } from './transport';
 import { runExtensionHost } from './extension-host-entry';
 import { createUiRegistry, type UiBroadcastEvent } from './ui-registry';
 import { withAccountTypes } from './account-types';
+
+/** A recorded GitHub package from outside the store, or a bare-URL one. No
+ *  record (a discovered dev folder) is not outside the store. */
+function isOutsideStore(ref: string | undefined): boolean {
+  if (ref === undefined) return false;
+  const { kind } = provenanceOf(ref);
+  return kind === 'github' || kind === 'url';
+}
 
 // Loads a privileged (in-process) extension entry via Node's real internal
 // module loader, Module._load — the primitive require() itself delegates to.
@@ -469,7 +483,7 @@ export interface ExtensionPlatform {
    *  Preview and commit in one step. */
   installFromRef(
     ref: string,
-    opts: { grantConsent: true },
+    opts: InstallFromRefOpts,
   ): Promise<{ ok: boolean; id?: string; error?: string }>;
   /** Brings this device in line with the user's extension set (default: the
    *  stored one; nothing before one exists). Never changes the set. */
@@ -686,6 +700,12 @@ export function createExtensionPlatform(
   const installer = createInstaller({
     extDir: deps.extDir,
     download: deps.download,
+    bundledIds: () =>
+      new Set(
+        [...entries.values()]
+          .filter((e) => e.origin === 'bundled')
+          .map((e) => e.manifest.id),
+      ),
     sourceIdOwners: () => {
       const owners: Record<string, string> = {};
       for (const d of deps.sources.list()) owners[d.id] = 'builtin';
@@ -1100,7 +1120,13 @@ export function createExtensionPlatform(
       !inProcess &&
       e.origin !== 'bundled' &&
       process.env.KIA_DORMANT_HOSTS !== '0' &&
-      (deps.dormantExtensions ?? []).includes(e.manifest.id)
+      (deps.dormantExtensions ?? []).includes(e.manifest.id) &&
+      // The product's allowlist is of STORE connectors: a GitHub package
+      // from outside the store (or a bare URL) claiming one of those ids is
+      // not on it (spec §3). A local dev install is the developer's own.
+      !isOutsideStore(
+        readInstalled(deps.extDir).find((r) => r.id === e.manifest.id)?.ref,
+      )
         ? { idleMs: deps.dormantAfterMs ?? DORMANT_AFTER_MS }
         : undefined;
     const host = createExtensionHost({
@@ -1777,6 +1803,7 @@ export function createExtensionPlatform(
         return {
           ok: true,
           token: p.token,
+          ref: p.ref,
           id: p.manifest.id,
           name: p.manifest.name,
           version: p.manifest.version,
@@ -1814,10 +1841,18 @@ export function createExtensionPlatform(
           installer.peek(token);
           const existing = entries.get(id);
           if (existing?.origin === 'bundled')
+            return { ok: false, error: bundledRefusal(id) };
+          // The guards run BEFORE the running extension is stopped, so a
+          // refused install leaves it running (spec §3).
+          try {
+            installer.check(token);
+          } catch (e) {
+            installer.discard(token);
             return {
               ok: false,
-              error: `'${id}' is bundled with the app and cannot be replaced from the marketplace`,
+              error: e instanceof Error ? e.message : String(e),
             };
+          }
           if (existing) await deactivate(existing);
           const { manifest, dir } = await installer.commit(token);
           const consent: ConsentRecord = {
@@ -2132,6 +2167,7 @@ export function createExtensionPlatform(
   const rawInstallCommit = api.installCommit.bind(api);
   const rawInstallFromRef: ExtensionPlatform['installFromRef'] = async (
     ref,
+    opts,
   ) => {
     const p = await api.installPreview(ref);
     if (!('token' in p) || !p.token)
@@ -2139,6 +2175,18 @@ export function createExtensionPlatform(
         ok: false,
         error: 'error' in p && p.error ? p.error : 'preview failed',
       };
+    // Only the bytes the user approved (spec §5): a release asset replaced
+    // since then is refused, never installed with the old consent.
+    if (opts?.integrity && p.integrity !== opts.integrity) {
+      installer.discard(p.token);
+      return {
+        ok: false,
+        error:
+          opts.context === 'reconcile'
+            ? RELEASE_CHANGED_RECONCILE
+            : RELEASE_CHANGED_FORWARD,
+      };
+    }
     // installCommit records the manifest's consent itself, so no prompt.
     return rawInstallCommit(p.token);
   };
@@ -2153,6 +2201,9 @@ export function createExtensionPlatform(
         e.origin === 'marketplace'
           ? records.get(e.manifest.id)?.ref
           : undefined,
+      ...(e.origin === 'marketplace' && records.get(e.manifest.id)?.integrity
+        ? { integrity: records.get(e.manifest.id)!.integrity! }
+        : {}),
       explicit: e.manifest.id in state,
     }));
   };
@@ -2171,9 +2222,16 @@ export function createExtensionPlatform(
     },
     log: (message) => deps.logSink.log('extensions', 'warn', message),
   });
-  const recordedRef = (id: string): string | undefined => {
+  const recorded = (id: string): PendingRecord => {
     const r = readInstalled(deps.extDir).find((x) => x.id === id);
-    return r?.origin === 'marketplace' ? r.ref : undefined;
+    return r?.origin === 'marketplace'
+      ? {
+          kind: 'installed',
+          id,
+          ref: r.ref,
+          ...(r.integrity ? { integrity: r.integrity } : {}),
+        }
+      : { kind: 'installed', id, ref: undefined };
   };
 
   // Each action and its recording into the set run on the one queue that
@@ -2182,7 +2240,8 @@ export function createExtensionPlatform(
     if (enabled && deps.extensionSet?.get()?.[id]?.removed)
       return Promise.resolve({
         ok: false,
-        error: 'This connector was removed on another device. Reinstall it first.',
+        error:
+          'This connector was removed on another device. Reinstall it first.',
       });
     return setSync.act(
       () => rawSetEnabled(id, enabled),
@@ -2202,7 +2261,9 @@ export function createExtensionPlatform(
     );
   };
   full.installCommit = async (token) => {
-    let staged: { ref: string; origin: 'marketplace' | 'dev' } | undefined;
+    let staged:
+      | { ref: string; origin: 'marketplace' | 'dev'; integrity: string | null }
+      | undefined;
     try {
       staged = installer.peekRef(token);
     } catch {
@@ -2216,6 +2277,7 @@ export function createExtensionPlatform(
       try {
         return (await forwardCore(deps.sync, 'extension:install', {
           ref: staged.ref,
+          integrity: staged.integrity,
         })) as {
           ok: boolean;
           id?: string;
@@ -2227,19 +2289,13 @@ export function createExtensionPlatform(
     }
     return setSync.act(
       () => rawInstallCommit(token),
-      (r) =>
-        r.id
-          ? { kind: 'installed', id: r.id, ref: recordedRef(r.id) }
-          : undefined,
+      (r) => (r.id ? recorded(r.id) : undefined),
     );
   };
-  full.installFromRef = async (ref) => {
+  full.installFromRef = async (ref, opts) => {
     return setSync.act(
-      () => rawInstallFromRef(ref, { grantConsent: true }),
-      (r) =>
-        r.id
-          ? { kind: 'installed', id: r.id, ref: recordedRef(r.id) }
-          : undefined,
+      () => rawInstallFromRef(ref, opts),
+      (r) => (r.id ? recorded(r.id) : undefined),
     );
   };
   // Before discovery the platform knows of no extension: a seed would write an

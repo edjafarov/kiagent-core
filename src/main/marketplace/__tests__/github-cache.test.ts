@@ -2,7 +2,11 @@
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
-import { createGitHubCache, GitHubRateLimitError } from '../github-cache';
+import {
+  createGitHubCache,
+  GitHubNotFoundError,
+  GitHubRateLimitError,
+} from '../github-cache';
 
 describe('github-cache', () => {
   let cacheDir: string;
@@ -259,6 +263,30 @@ describe('github-cache', () => {
       const result = await cache.getJSON(url);
 
       expect(result).toEqual(responseBody);
+    });
+
+    it('a 404 is GitHubNotFoundError without a cached body, the cached body with one', async () => {
+      const cacheFile = path.join(cacheDir, 'cache.json');
+      const url = 'https://raw.githubusercontent.com/o/r/v1/manifest.json';
+      let t = 0;
+      const fetchImpl = jest
+        .fn()
+        .mockResolvedValueOnce(
+          new Response(JSON.stringify({ engine: '>=9.0.0' }), { status: 200 }),
+        )
+        .mockResolvedValue(new Response('nope', { status: 404 }));
+      const cache = createGitHubCache({
+        cacheFile,
+        fetchImpl,
+        now: () => t,
+        ttlMs: 10,
+      });
+      expect(await cache.getJSON(url)).toEqual({ engine: '>=9.0.0' });
+      t = 100;
+      expect(await cache.getJSON(url)).toEqual({ engine: '>=9.0.0' });
+      await expect(cache.getJSON(`${url}?other`)).rejects.toBeInstanceOf(
+        GitHubNotFoundError,
+      );
     });
 
     it('fetch rejection returns stale body when cached', async () => {

@@ -44,6 +44,15 @@ describe('useNavigation', () => {
     expect(nav().view).toBe('home');
   });
 
+  it('replaces params on the default view before any navigate (epoch 0)', () => {
+    const nav = mount();
+    expect(nav().resolved).toBeNull();
+    act(() => nav().replaceParams({ pane: 'x' }));
+    expect(nav().view).toBe('home');
+    expect(nav().params).toEqual({ pane: 'x' });
+    expect(nav().resolved!.epoch).toBe(0);
+  });
+
   it('reopens Settings on the pane last shown; a non-string argument means none', () => {
     const nav = mount();
     act(() => nav().openSettings('advanced'));

@@ -23,7 +23,7 @@ function request(overrides: Partial<InstallRequest> = {}): InstallRequest {
     version: '1.2.3',
     caps: ['query', 'net'],
     sizeBytes: 2 * 1024 * 1024,
-    ref: 'github:acme/foo-kia-connector',
+    ref: 'github:kia-plugins/foo-kia-connector@v1.2.3',
     ...overrides,
   };
 }
@@ -154,13 +154,39 @@ describe('InstallSheet', () => {
     );
     expect(await screen.findByText(/Readme body\./)).toBeInTheDocument();
     expect(invoke).toHaveBeenCalledWith('marketplace:detail', {
-      owner: 'acme',
+      owner: 'kia-plugins',
       repo: 'foo-kia-connector',
     });
     expect(screen.getByText('2.0 MB')).toBeInTheDocument();
     expect(screen.getByText('sha512-abc')).toBeInTheDocument();
     expect(
-      screen.getByText('github:acme/foo-kia-connector'),
+      screen.getByText('github:kia-plugins/foo-kia-connector@v1.2.3'),
     ).toBeInTheDocument();
+  });
+
+  test('a GitHub package outside the store names its repository and says it is not reviewed', () => {
+    sheet({ ref: 'github:acme/foo-kia-connector@v1.2.3' });
+    const dialog = screen.getByRole('dialog');
+    expect(
+      within(dialog).getByText('github.com/acme/foo-kia-connector · v1.2.3'),
+    ).toBeInTheDocument();
+    const note = within(dialog).getByRole('note');
+    expect(note).toHaveTextContent('Not reviewed by KIAgent');
+    expect(note).toHaveTextContent(
+      'Published by acme on GitHub. It runs with the access below — install it only if you trust the publisher.',
+    );
+  });
+
+  test('a store package says From the store and shows no notice', () => {
+    sheet({ ref: 'github:KIA-PLUGINS/foo@v1.2.3' });
+    expect(screen.getByText('From the store · v1.2.3')).toBeInTheDocument();
+    expect(screen.queryByRole('note')).toBeNull();
+  });
+
+  test('an update from a GitHub repo outside the store shows the notice too', () => {
+    sheet({ mode: 'update', ref: 'github:acme/foo@v2' });
+    expect(screen.getByRole('note')).toHaveTextContent(
+      'Not reviewed by KIAgent',
+    );
   });
 });

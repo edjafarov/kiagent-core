@@ -1,5 +1,9 @@
 /** @jest-environment node */
+import fs from 'fs';
+import os from 'os';
 import path from 'path';
+
+import * as tar from 'tar';
 
 import type { ExtensionPlatform } from '../extension-platform';
 import {
@@ -69,6 +73,35 @@ describe('dormant utility hosts (#137)', () => {
     await sleepMs(200);
     expect(snap('test.basic')?.dormant).toBeUndefined();
     expect(h.spawns.get('test.basic')).toBe(1);
+  });
+
+  it('an allowlisted id installed from a non-store GitHub repo never goes dormant', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'kia-dorm-gh-'));
+    fs.cpSync(BASIC, path.join(root, 'basic'), { recursive: true });
+    const tgz = path.join(root, 'basic.tgz');
+    await tar.c({ gzip: true, file: tgz, cwd: root }, ['basic']);
+    const bytes = fs.readFileSync(tgz);
+    fs.rmSync(root, { recursive: true, force: true });
+    platform = h.make({
+      dormantExtensions: ['test.basic'],
+      dormantAfterMs: 40,
+      download: async () => ({
+        bytes,
+        pinnedRef: 'github:someone/basic@v1',
+        repoId: 3,
+      }),
+    });
+    await platform.start();
+    expect(
+      (
+        await platform.installFromRef('github:someone/basic', {
+          grantConsent: true,
+        })
+      ).ok,
+    ).toBe(true);
+    await sleepMs(200);
+    expect(snap('test.basic')?.status).toBe('activated');
+    expect(snap('test.basic')?.dormant).toBeUndefined();
   });
 
   it('KIA_DORMANT_HOSTS=0 disables dormancy', async () => {

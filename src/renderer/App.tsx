@@ -22,6 +22,7 @@ import {
   createScreenRegistry,
   getDefaultScreens,
 } from '@renderer/screen-registry';
+import { InstallLinks } from './extensions/use-install-link';
 
 const screenRegistry = createScreenRegistry(getDefaultScreens());
 
@@ -100,6 +101,7 @@ export default function App(): React.ReactElement {
 
   return (
     <ViewContext.Provider value={nav}>
+      <InstallLinks />
       <IconSprite />
       <SourceDescriptorsProvider>
         <AppShell sidebar={<Sidebar />}>

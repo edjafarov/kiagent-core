@@ -18,6 +18,9 @@ export interface InstalledRecord {
   integrity: string | null; // SRI sha512 TOFU pin; null for origin 'dev'
   installedAt: string;
   origin: 'marketplace' | 'dev';
+  /** GitHub's numeric repository id (github: installs since 2026-11) —
+   *  the publisher identity the install guard compares. */
+  repoId?: number;
 }
 
 function readJson<T>(file: string, fallback: T): T {

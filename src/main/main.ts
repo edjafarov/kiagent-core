@@ -71,8 +71,12 @@ import {
 } from './core/processing-status';
 import { maybeOfferMoveToApplications } from './move-to-applications';
 import { createGitHubCache } from './marketplace/github-cache';
-import { createGitHubSource } from './marketplace/github-source';
-import { parseGitHubRef, formatGitHubRef } from './marketplace/github-ref';
+import {
+  createGitHubSource,
+  InstallSourceError,
+} from './marketplace/github-source';
+import { formatGitHubRef } from './marketplace/github-ref';
+import { createInstallLinks } from './install-links';
 import { createMarketplaceCatalog } from './marketplace/catalog';
 import type { MarketplaceCatalog } from './marketplace/catalog';
 import { buildMainApi } from './main-api';
@@ -82,12 +86,8 @@ import { createBusyRegistry } from './core/busy';
 import { wireOutboxPush } from './outbox-push';
 import { wireSyncAppliedPush } from './sync-applied-push';
 import { guardDraftTools } from './outbound/follower-tools';
-import {
-  SYNC_REFUSED_PUSH,
-} from './core/sync/forward-core';
-import {
-  installSettingsSync,
-} from './core/sync/settings-sync';
+import { SYNC_REFUSED_PUSH } from './core/sync/forward-core';
+import { installSettingsSync } from './core/sync/settings-sync';
 import { runCommitBatch, type CommitInput } from './core/sync/owned';
 import { followerLookup } from './core/sync/role';
 import { wireAttentionPush } from './attention/push';
@@ -279,14 +279,36 @@ function applyLoginItemSettings(launchAtLogin: boolean): void {
     app.setLoginItemSettings({ openAtLogin: launchAtLogin });
 }
 
+// `kiagent://install` links (spec §8), product-gated. Created before the
+// single-instance lock so a link on the very first launch is kept.
+const installLinks = createInstallLinks({
+  scheme: product.urlScheme,
+  show: () => showMainWindow(),
+  nudge: () => broadcast('push:install-link', undefined),
+  log: (m) => log.info(m),
+});
+if (product.urlScheme && app.isPackaged)
+  app.setAsDefaultProtocolClient(product.urlScheme);
+// macOS delivers links here, possibly before `ready`: registered at load.
+app.on('open-url', (event, url) => {
+  event.preventDefault();
+  installLinks.offer(url);
+});
+// Windows/Linux: a link that launched the app is an argument.
+installLinks.offerArgv(process.argv);
+
 const gotLock = app.requestSingleInstanceLock();
 if (!gotLock) {
   app.quit();
 } else {
   // Launching the app again is how a user asks for the window back once it is
   // hidden in the tray (close-to-tray, Windows/Linux) — without this the
-  // second launch would just exit and nothing would appear.
-  app.on('second-instance', () => showMainWindow());
+  // second launch would just exit and nothing would appear. On
+  // Windows/Linux a clicked link arrives this way too.
+  app.on('second-instance', (_e, argv) => {
+    installLinks.offerArgv(argv);
+    showMainWindow();
+  });
 }
 
 function broadcast<C extends PushChannel>(
@@ -888,8 +910,13 @@ function registerIpc(
 
     'extension:install-preview': ({ ref }) => extensions.installPreview(ref),
     'extension:install-commit': ({ token }) => extensions.installCommit(token),
-    'extension:install': ({ ref }) =>
-      extensions.installFromRef(ref, { grantConsent: true }),
+    'extension:install-link-take': () => installLinks.take(),
+    'extension:install': ({ ref, integrity }) =>
+      extensions.installFromRef(ref, {
+        grantConsent: true,
+        integrity,
+        context: 'forward',
+      }),
     'extension:uninstall': ({ id }) => extensions.uninstall(id),
     'extension:set-enabled': ({ id, enabled }) =>
       extensions.setEnabled(id, enabled),
@@ -1662,14 +1689,27 @@ app
       },
       download: async (ref) => {
         if (ref.startsWith('github:')) {
-          const parsed = parseGitHubRef(ref);
-          const resolved = parsed && (await ghSource.resolveGitHubRef(ref));
-          if (!parsed || !resolved)
-            throw new Error(`no installable release for ${ref}`);
-          return {
-            bytes: await ghSource.downloadAsset(resolved.tarballUrl),
-            pinnedRef: `${formatGitHubRef(parsed.owner, parsed.repo)}@${resolved.tag}`,
-          };
+          // Pinned to the repository as GitHub names it NOW (renames and
+          // transfers followed), plus its numeric id for the publisher guard.
+          try {
+            const resolved = await ghSource.resolveGitHubRef(ref);
+            const bytes = await ghSource
+              .downloadAsset(resolved.tarballUrl)
+              .catch((e) => {
+                throw new InstallSourceError('unreachable', e);
+              });
+            return {
+              bytes,
+              pinnedRef: `${formatGitHubRef(resolved.owner, resolved.repo)}@${resolved.tag}`,
+              repoId: resolved.repoId,
+            };
+          } catch (e) {
+            if (e instanceof InstallSourceError && e.detail !== undefined)
+              log.warn(
+                `install source unreachable: ${e.detail instanceof Error ? e.detail.message : String(e.detail)}`,
+              );
+            throw e;
+          }
         }
         return { bytes: await ghSource.downloadAsset(ref), pinnedRef: ref };
       },
@@ -1719,30 +1759,33 @@ app
       () => processingStatus.refreshWaiting(),
     );
     bootTimer.mark('ipc');
-    appProjection = p.engine.project(projection, (state: AppState, seq: Seq) => {
-      rev += 1;
-      // Onboarding step 1: any account that has ever reached 'live'. Also
-      // covers startup — the projection's init() snapshot flows through here.
-      if (state.accounts.some((a) => a.account.status === 'live'))
-        markOnboardingOnce(p.prefs, 'sourceBackfilledAt').catch(() => {});
-      // Take ONLY the feed-derived slice from the projection. Its internal
-      // state still carries init()-time snapshots of the other slices; using
-      // them here would clobber later patches (a signed-in identity would
-      // revert to null on the first sync batch — the sign-in bounce bug).
-      lastPush = {
-        state: {
-          ...state,
-          identity: lastPush.state.identity,
-          prefs: lastPush.state.prefs,
-          processing: lastPush.state.processing,
-          mcp: lastPush.state.mcp,
-          extensions: lastPush.state.extensions,
-        },
-        seq,
-        rev,
-      };
-      scheduleAppStatePush();
-    });
+    appProjection = p.engine.project(
+      projection,
+      (state: AppState, seq: Seq) => {
+        rev += 1;
+        // Onboarding step 1: any account that has ever reached 'live'. Also
+        // covers startup — the projection's init() snapshot flows through here.
+        if (state.accounts.some((a) => a.account.status === 'live'))
+          markOnboardingOnce(p.prefs, 'sourceBackfilledAt').catch(() => {});
+        // Take ONLY the feed-derived slice from the projection. Its internal
+        // state still carries init()-time snapshots of the other slices; using
+        // them here would clobber later patches (a signed-in identity would
+        // revert to null on the first sync batch — the sign-in bounce bug).
+        lastPush = {
+          state: {
+            ...state,
+            identity: lastPush.state.identity,
+            prefs: lastPush.state.prefs,
+            processing: lastPush.state.processing,
+            mcp: lastPush.state.mcp,
+            extensions: lastPush.state.extensions,
+          },
+          seq,
+          rev,
+        };
+        scheduleAppStatePush();
+      },
+    );
 
     // Non-feed slices (prefs, processing counters) refresh on their own clock.
     p.prefs.onChange((prefs) => {
@@ -1863,7 +1906,10 @@ app
           showMainWindow();
         });
       },
-      createWindow,
+      createWindow: async () => {
+        await createWindow();
+        installLinks.markReady();
+      },
       startBackground: () =>
         startBackground({
           resumeReady: async (signal) => {

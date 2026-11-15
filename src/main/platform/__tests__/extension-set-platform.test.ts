@@ -12,7 +12,14 @@ import { openDb } from '@main/db/app-db';
 import { openStore, type CoreStore } from '@main/core/store/store';
 import type { SyncService } from '@main/core/sync/service';
 
-import { createExtensionPlatform, type ExtensionPlatform } from '../extension-platform';
+import {
+  createExtensionPlatform,
+  type ExtensionPlatform,
+} from '../extension-platform';
+import {
+  RELEASE_CHANGED_FORWARD,
+  RELEASE_CHANGED_RECONCILE,
+} from '../extension-set';
 import { runExtensionHost } from '../extension-host-entry';
 import { createInMemoryHostPair } from '../transport';
 
@@ -28,9 +35,19 @@ describe('platform wiring', () => {
   let store: CoreStore;
   let platform: ExtensionPlatform;
   let setStore: ReturnType<typeof fakeStore>;
+  /** GitHub repo id the fake download reports — the publisher identity. */
+  let repoId = 1;
   // The members the platform reads, typed against the real service.
-  type PlatformSync = Pick<SyncService, 'readOnly' | 'forward' | 'enqueue' | 'onApplied'>;
-  const sync: { [K in keyof PlatformSync]: jest.Mock<ReturnType<PlatformSync[K]>, Parameters<PlatformSync[K]>> } = {
+  type PlatformSync = Pick<
+    SyncService,
+    'readOnly' | 'forward' | 'enqueue' | 'onApplied'
+  >;
+  const sync: {
+    [K in keyof PlatformSync]: jest.Mock<
+      ReturnType<PlatformSync[K]>,
+      Parameters<PlatformSync[K]>
+    >;
+  } = {
     readOnly: jest.fn(),
     forward: jest.fn(),
     enqueue: jest.fn(),
@@ -48,14 +65,14 @@ describe('platform wiring', () => {
     setStore = fakeStore();
     fs.cpSync(BASIC, path.join(tmp, 'pkg', 'basic'), { recursive: true });
     const bytes = Buffer.from(
-      (await new Promise<Buffer>((resolve, reject) => {
+      await new Promise<Buffer>((resolve, reject) => {
         const chunks: Buffer[] = [];
         tar
           .c({ gzip: true, cwd: path.join(tmp, 'pkg') }, ['basic'])
           .on('data', (c: Buffer) => chunks.push(c))
           .on('end', () => resolve(Buffer.concat(chunks)))
           .on('error', reject);
-      })),
+      }),
     );
     platform = createExtensionPlatform({
       extDir: path.join(tmp, 'extensions'),
@@ -65,12 +82,33 @@ describe('platform wiring', () => {
       // The platform's dep is the whole service; the fake carries what it reads.
       sync: sync as unknown as SyncService,
       extensionSet: setStore,
-      download: async () => ({ bytes, pinnedRef: REF }),
-      sources: { register: () => {}, get: () => undefined, list: () => [], unregister: () => {} },
-      senders: { register: () => {}, get: () => undefined, ids: () => [], unregister: () => {} },
-      scheduler: { register: jest.fn(), unregister: jest.fn(), jobs: jest.fn(async () => []), trigger: jest.fn(), env: {} } as never,
+      download: async () => ({ bytes, pinnedRef: REF, repoId }),
+      sources: {
+        register: () => {},
+        get: () => undefined,
+        list: () => [],
+        unregister: () => {},
+      },
+      senders: {
+        register: () => {},
+        get: () => undefined,
+        ids: () => [],
+        unregister: () => {},
+      },
+      scheduler: {
+        register: jest.fn(),
+        unregister: jest.fn(),
+        jobs: jest.fn(async () => []),
+        trigger: jest.fn(),
+        env: {},
+      } as never,
       registerTool: () => () => {},
-      inference: { complete: async () => '', see: async () => '', read: async () => '', hear: async () => '' },
+      inference: {
+        complete: async () => '',
+        see: async () => '',
+        read: async () => '',
+        hear: async () => '',
+      },
       laneState: () => 'open',
       logSink: { log: () => {} },
       notify: () => {},
@@ -96,6 +134,7 @@ describe('platform wiring', () => {
   // Each test seeds its own set and starts as a writable leader with
   // test.fwd enabled; the platform itself is shared because it is slow to boot.
   beforeEach(async () => {
+    repoId = 1;
     sync.readOnly.mockReset().mockReturnValue(false);
     sync.forward.mockReset();
     setStore.set(undefined);
@@ -104,13 +143,16 @@ describe('platform wiring', () => {
     await platform.reconcileExtensions({ 'test.fwd': { enabled: true } });
     setStore.set(undefined);
   });
-  const enabled = (id: string) => platform.snapshot().find((e) => e.id === id)?.enabled;
+  const enabled = (id: string) =>
+    platform.snapshot().find((e) => e.id === id)?.enabled;
 
   it('on the leader setEnabled rewrites the key; reconcile brings the device back without rewriting it', async () => {
     expect((await platform.setEnabled('test.fwd', false)).ok).toBe(true);
     expect(setStore.get()).toEqual({ 'test.fwd': { enabled: false } });
-    const writes = setStore.writes;
-    const r = await platform.reconcileExtensions({ 'test.fwd': { enabled: true } });
+    const { writes } = setStore;
+    const r = await platform.reconcileExtensions({
+      'test.fwd': { enabled: true },
+    });
     expect(r).toEqual({ installed: [], failed: [] });
     expect(enabled('test.fwd')).toBe(true);
     expect(setStore.writes).toBe(writes);
@@ -118,7 +160,10 @@ describe('platform wiring', () => {
 
   it('reconcileExtensions with no set argument reads the store, and does nothing without one', async () => {
     setStore.set(undefined);
-    await expect(platform.reconcileExtensions()).resolves.toEqual({ installed: [], failed: [] });
+    await expect(platform.reconcileExtensions()).resolves.toEqual({
+      installed: [],
+      failed: [],
+    });
     setStore.set({ 'test.fwd': { enabled: false } });
     await platform.reconcileExtensions();
     expect(enabled('test.fwd')).toBe(false);
@@ -139,13 +184,16 @@ describe('platform wiring', () => {
     const p = await platform.installPreview(REF);
     if (!('token' in p)) throw new Error('preview failed');
     sync.readOnly.mockReturnValue(true);
-    sync.forward.mockResolvedValue({ ok: true, value: { ok: true, id: 'test.basic' } });
+    sync.forward.mockResolvedValue({
+      ok: true,
+      value: { ok: true, id: 'test.basic' },
+    });
     const r = await platform.installCommit(p.token);
     expect(r).toEqual({ ok: true, id: 'test.basic' });
     expect(sync.forward).toHaveBeenCalledWith({
       kind: 'core',
       name: 'extension:install',
-      payload: { ref: REF },
+      payload: { ref: REF, integrity: expect.stringMatching(/^sha512-/) },
     });
     expect(platform.snapshot().some((e) => e.id === 'test.basic')).toBe(false);
     // the staged token is gone
@@ -157,13 +205,17 @@ describe('platform wiring', () => {
     const p = await platform.installPreview(REF);
     if (!('token' in p)) throw new Error('preview failed');
     sync.readOnly.mockReturnValue(true);
-    sync.forward.mockResolvedValue({ ok: false, code: 'no-master', message: 'x' });
+    sync.forward.mockResolvedValue({
+      ok: false,
+      code: 'no-master',
+      message: 'x',
+    });
     const r = await platform.installCommit(p.token);
     expect(r.ok).toBe(false);
     expect(platform.snapshot().some((e) => e.id === 'test.basic')).toBe(false);
   });
 
-  it('a follower commit of a local (dev) install is this machine\'s own and is not forwarded', async () => {
+  it("a follower commit of a local (dev) install is this machine's own and is not forwarded", async () => {
     const p = await platform.installPreview(BASIC);
     if (!('token' in p)) throw new Error('preview failed');
     sync.readOnly.mockReturnValue(true);
@@ -177,16 +229,72 @@ describe('platform wiring', () => {
     setStore.set({});
     const r = await platform.installFromRef(REF, { grantConsent: true });
     expect(r).toEqual({ ok: true, id: 'test.basic' });
-    expect(platform.snapshot().find((e) => e.id === 'test.basic')?.status).toBe('activated');
+    expect(platform.snapshot().find((e) => e.id === 'test.basic')?.status).toBe(
+      'activated',
+    );
     expect(await store.consents.latest('test.basic' as never)).toBeTruthy();
-    expect(setStore.get()).toEqual({ 'test.basic': { enabled: true, ref: REF } });
+    expect(setStore.get()).toEqual({
+      'test.basic': {
+        enabled: true,
+        ref: REF,
+        integrity: expect.stringMatching(/^sha512-/),
+      },
+    });
     expect((await platform.uninstall('test.basic')).ok).toBe(true);
-    expect(setStore.get()).toEqual({ 'test.basic': { enabled: false, removed: true } });
+    expect(setStore.get()).toEqual({
+      'test.basic': { enabled: false, removed: true },
+    });
+  });
+
+  it('a refused commit keeps the running extension (guards run before deactivate)', async () => {
+    setStore.set({});
+    repoId = 2; // staged while nothing is installed: passes preview
+    const other = await platform.installPreview(REF);
+    if (!('token' in other)) throw new Error('preview failed');
+    repoId = 1;
+    expect(
+      (await platform.installFromRef(REF, { grantConsent: true })).ok,
+    ).toBe(true);
+    const r = await platform.installCommit(other.token);
+    expect(r.ok).toBe(false);
+    expect(r.error).toMatch(/a different publisher/);
+    expect(platform.snapshot().find((e) => e.id === 'test.basic')?.status).toBe(
+      'activated',
+    );
+    expect((await platform.uninstall('test.basic')).ok).toBe(true);
+  });
+
+  it('installPreview returns the pinned ref', async () => {
+    const p = await platform.installPreview('github:kia-plugins/basic');
+    if (!('token' in p)) throw new Error('preview failed');
+    expect(p.ref).toBe(REF);
+  });
+
+  it('installFromRef refuses bytes other than the approved ones, with copy per context', async () => {
+    setStore.set({});
+    await expect(
+      platform.installFromRef(REF, {
+        grantConsent: true,
+        integrity: 'sha512-other',
+        context: 'forward',
+      }),
+    ).resolves.toEqual({ ok: false, error: RELEASE_CHANGED_FORWARD });
+    sync.readOnly.mockReturnValue(true);
+    setStore.writable = false;
+    const r = await platform.reconcileExtensions({
+      'test.basic': { enabled: true, ref: REF, integrity: 'sha512-other' },
+    });
+    expect(r).toEqual({
+      installed: [],
+      failed: [{ id: 'test.basic', error: RELEASE_CHANGED_RECONCILE }],
+    });
+    expect(platform.snapshot().some((e) => e.id === 'test.basic')).toBe(false);
+    setStore.writable = true;
   });
 
   it('uninstalling an id the platform does not know fails and writes no tombstone', async () => {
     setStore.set({});
-    const writes = setStore.writes;
+    const { writes } = setStore;
     expect((await platform.uninstall('no.such.id')).ok).toBe(false);
     expect(setStore.get()).toEqual({});
     expect(setStore.writes).toBe(writes);
@@ -194,10 +302,14 @@ describe('platform wiring', () => {
 
   it('enable on a tombstone is refused before the raw op', async () => {
     setStore.set({ 'test.fwd': { enabled: false, removed: true } });
-    const writes = setStore.writes;
+    const { writes } = setStore;
     const before = enabled('test.fwd');
     const r = await platform.setEnabled('test.fwd', true);
-    expect(r).toEqual({ ok: false, error: 'This connector was removed on another device. Reinstall it first.' });
+    expect(r).toEqual({
+      ok: false,
+      error:
+        'This connector was removed on another device. Reinstall it first.',
+    });
     expect(enabled('test.fwd')).toBe(before);
     expect(setStore.writes).toBe(writes);
     setStore.set({});
@@ -206,11 +318,15 @@ describe('platform wiring', () => {
   it('reconcile installs a missing connector from the set with consent, then leaves it alone when it leaves the set', async () => {
     sync.readOnly.mockReturnValue(true); // a follower: nothing is recorded
     setStore.writable = false;
-    const r = await platform.reconcileExtensions({ 'test.basic': { enabled: true, ref: REF } });
+    const r = await platform.reconcileExtensions({
+      'test.basic': { enabled: true, ref: REF },
+    });
     expect(r).toEqual({ installed: ['test.basic'], failed: [] });
     expect(enabled('test.basic')).toBe(true);
     expect(await store.consents.latest('test.basic' as never)).toBeTruthy();
-    await platform.reconcileExtensions({ 'test.basic': { enabled: false, ref: REF } });
+    await platform.reconcileExtensions({
+      'test.basic': { enabled: false, ref: REF },
+    });
     expect(enabled('test.basic')).toBe(false);
     await platform.reconcileExtensions({});
     expect(platform.snapshot().some((e) => e.id === 'test.basic')).toBe(true); // absence never uninstalls
@@ -222,7 +338,9 @@ describe('platform wiring', () => {
     setStore.set({ 'test.fwd': { enabled: true } });
     await platform.setEnabled('test.fwd', true);
     setStore.failNext = true;
-    await expect(platform.setEnabled('test.fwd', false)).rejects.toThrow(/could not be recorded in the extension set/);
+    await expect(platform.setEnabled('test.fwd', false)).rejects.toThrow(
+      /could not be recorded in the extension set/,
+    );
     expect(enabled('test.fwd')).toBe(false);
     expect(platform.hasPendingExtensionRecords()).toBe(true);
     await platform.reconcileExtensions();
