@@ -13,6 +13,7 @@ import { openStore, type CoreStore } from '@main/core/store/store';
 import type { SyncService } from '@main/core/sync/service';
 
 import { createExtensionPlatform, type ExtensionPlatform } from '../extension-platform';
+import { RELEASE_CHANGED_FORWARD, RELEASE_CHANGED_RECONCILE } from '../extension-set';
 import { runExtensionHost } from '../extension-host-entry';
 import { createInMemoryHostPair } from '../transport';
 
@@ -148,7 +149,7 @@ describe('platform wiring', () => {
     expect(sync.forward).toHaveBeenCalledWith({
       kind: 'core',
       name: 'extension:install',
-      payload: { ref: REF },
+      payload: { ref: REF, integrity: expect.stringMatching(/^sha512-/) },
     });
     expect(platform.snapshot().some((e) => e.id === 'test.basic')).toBe(false);
     // the staged token is gone
@@ -182,7 +183,9 @@ describe('platform wiring', () => {
     expect(r).toEqual({ ok: true, id: 'test.basic' });
     expect(platform.snapshot().find((e) => e.id === 'test.basic')?.status).toBe('activated');
     expect(await store.consents.latest('test.basic' as never)).toBeTruthy();
-    expect(setStore.get()).toEqual({ 'test.basic': { enabled: true, ref: REF } });
+    expect(setStore.get()).toEqual({
+      'test.basic': { enabled: true, ref: REF, integrity: expect.stringMatching(/^sha512-/) },
+    });
     expect((await platform.uninstall('test.basic')).ok).toBe(true);
     expect(setStore.get()).toEqual({ 'test.basic': { enabled: false, removed: true } });
   });
@@ -199,6 +202,30 @@ describe('platform wiring', () => {
     expect(r.error).toMatch(/a different publisher/);
     expect(platform.snapshot().find((e) => e.id === 'test.basic')?.status).toBe('activated');
     expect((await platform.uninstall('test.basic')).ok).toBe(true);
+  });
+
+  it('installPreview returns the pinned ref', async () => {
+    const p = await platform.installPreview('github:kia-plugins/basic');
+    if (!('token' in p)) throw new Error('preview failed');
+    expect(p.ref).toBe(REF);
+  });
+
+  it('installFromRef refuses bytes other than the approved ones, with copy per context', async () => {
+    setStore.set({});
+    await expect(
+      platform.installFromRef(REF, { grantConsent: true, integrity: 'sha512-other', context: 'forward' }),
+    ).resolves.toEqual({ ok: false, error: RELEASE_CHANGED_FORWARD });
+    sync.readOnly.mockReturnValue(true);
+    setStore.writable = false;
+    const r = await platform.reconcileExtensions({
+      'test.basic': { enabled: true, ref: REF, integrity: 'sha512-other' },
+    });
+    expect(r).toEqual({
+      installed: [],
+      failed: [{ id: 'test.basic', error: RELEASE_CHANGED_RECONCILE }],
+    });
+    expect(platform.snapshot().some((e) => e.id === 'test.basic')).toBe(false);
+    setStore.writable = true;
   });
 
   it('uninstalling an id the platform does not know fails and writes no tombstone', async () => {

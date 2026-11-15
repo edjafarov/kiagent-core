@@ -145,7 +145,9 @@ network.
   connectors can use." The installer depends only on manifests; the
   OAuth-binding helper it uses lives in `@main/platform/manifest`.
 - **Store-only dormancy.** The product's `dormantExtensions` allowlist
-  applies only to extensions whose provenance is store or bundled.
+  never applies to a `github` (non-store) or `url` provenance. Store,
+  bundled and local dev installs keep it; a dev install is the developer's
+  own code.
 
 ### 4. Extraction bounds
 

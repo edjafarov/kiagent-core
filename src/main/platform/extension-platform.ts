@@ -60,9 +60,14 @@ import {
   createInstaller,
   type InstallerDeps,
 } from '@main/marketplace/installer';
+import { provenanceOf } from '@shared/install-link';
 import type { SyncService } from '../core/sync/service';
 import {
   createExtensionSync,
+  RELEASE_CHANGED_FORWARD,
+  RELEASE_CHANGED_RECONCILE,
+  type InstallFromRefOpts,
+  type PendingRecord,
   type ExtensionSetStore,
   type ExtensionsSet,
   type LocalExtension,
@@ -470,7 +475,7 @@ export interface ExtensionPlatform {
    *  Preview and commit in one step. */
   installFromRef(
     ref: string,
-    opts: { grantConsent: true },
+    opts: InstallFromRefOpts,
   ): Promise<{ ok: boolean; id?: string; error?: string }>;
   /** Brings this device in line with the user's extension set (default: the
    *  stored one; nothing before one exists). Never changes the set. */
@@ -1107,7 +1112,16 @@ export function createExtensionPlatform(
       !inProcess &&
       e.origin !== 'bundled' &&
       process.env.KIA_DORMANT_HOSTS !== '0' &&
-      (deps.dormantExtensions ?? []).includes(e.manifest.id)
+      (deps.dormantExtensions ?? []).includes(e.manifest.id) &&
+      // The product's allowlist is of STORE connectors: a GitHub package
+      // from outside the store (or a bare URL) claiming one of those ids is
+      // not on it (spec §3). A local dev install is the developer's own.
+      !['github', 'url'].includes(
+        provenanceOf(
+          readInstalled(deps.extDir).find((r) => r.id === e.manifest.id)
+            ?.ref,
+        ).kind,
+      )
         ? { idleMs: deps.dormantAfterMs ?? DORMANT_AFTER_MS }
         : undefined;
     const host = createExtensionHost({
@@ -1784,6 +1798,7 @@ export function createExtensionPlatform(
         return {
           ok: true,
           token: p.token,
+          ref: p.ref,
           id: p.manifest.id,
           name: p.manifest.name,
           version: p.manifest.version,
@@ -2147,6 +2162,7 @@ export function createExtensionPlatform(
   const rawInstallCommit = api.installCommit.bind(api);
   const rawInstallFromRef: ExtensionPlatform['installFromRef'] = async (
     ref,
+    opts,
   ) => {
     const p = await api.installPreview(ref);
     if (!('token' in p) || !p.token)
@@ -2154,6 +2170,18 @@ export function createExtensionPlatform(
         ok: false,
         error: 'error' in p && p.error ? p.error : 'preview failed',
       };
+    // Only the bytes the user approved (spec §5): a release asset replaced
+    // since then is refused, never installed with the old consent.
+    if (opts?.integrity && p.integrity !== opts.integrity) {
+      installer.discard(p.token);
+      return {
+        ok: false,
+        error:
+          opts.context === 'reconcile'
+            ? RELEASE_CHANGED_RECONCILE
+            : RELEASE_CHANGED_FORWARD,
+      };
+    }
     // installCommit records the manifest's consent itself, so no prompt.
     return rawInstallCommit(p.token);
   };
@@ -2168,6 +2196,9 @@ export function createExtensionPlatform(
         e.origin === 'marketplace'
           ? records.get(e.manifest.id)?.ref
           : undefined,
+      ...(e.origin === 'marketplace' && records.get(e.manifest.id)?.integrity
+        ? { integrity: records.get(e.manifest.id)!.integrity! }
+        : {}),
       explicit: e.manifest.id in state,
     }));
   };
@@ -2186,9 +2217,16 @@ export function createExtensionPlatform(
     },
     log: (message) => deps.logSink.log('extensions', 'warn', message),
   });
-  const recordedRef = (id: string): string | undefined => {
+  const recorded = (id: string): PendingRecord => {
     const r = readInstalled(deps.extDir).find((x) => x.id === id);
-    return r?.origin === 'marketplace' ? r.ref : undefined;
+    return r?.origin === 'marketplace'
+      ? {
+          kind: 'installed',
+          id,
+          ref: r.ref,
+          ...(r.integrity ? { integrity: r.integrity } : {}),
+        }
+      : { kind: 'installed', id, ref: undefined };
   };
 
   // Each action and its recording into the set run on the one queue that
@@ -2217,7 +2255,9 @@ export function createExtensionPlatform(
     );
   };
   full.installCommit = async (token) => {
-    let staged: { ref: string; origin: 'marketplace' | 'dev' } | undefined;
+    let staged:
+      | { ref: string; origin: 'marketplace' | 'dev'; integrity: string | null }
+      | undefined;
     try {
       staged = installer.peekRef(token);
     } catch {
@@ -2231,6 +2271,7 @@ export function createExtensionPlatform(
       try {
         return (await forwardCore(deps.sync, 'extension:install', {
           ref: staged.ref,
+          integrity: staged.integrity,
         })) as {
           ok: boolean;
           id?: string;
@@ -2242,19 +2283,13 @@ export function createExtensionPlatform(
     }
     return setSync.act(
       () => rawInstallCommit(token),
-      (r) =>
-        r.id
-          ? { kind: 'installed', id: r.id, ref: recordedRef(r.id) }
-          : undefined,
+      (r) => (r.id ? recorded(r.id) : undefined),
     );
   };
-  full.installFromRef = async (ref) => {
+  full.installFromRef = async (ref, opts) => {
     return setSync.act(
-      () => rawInstallFromRef(ref, { grantConsent: true }),
-      (r) =>
-        r.id
-          ? { kind: 'installed', id: r.id, ref: recordedRef(r.id) }
-          : undefined,
+      () => rawInstallFromRef(ref, opts),
+      (r) => (r.id ? recorded(r.id) : undefined),
     );
   };
   // Before discovery the platform knows of no extension: a seed would write an

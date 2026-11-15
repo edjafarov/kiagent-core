@@ -303,11 +303,15 @@ export function createInstaller(deps: InstallerDeps) {
 
     /** Read-only: the ref a pending install was staged from (a follower hands
      *  it to the leader instead of committing). */
-    peekRef(token: string): { ref: string; origin: 'marketplace' | 'dev' } {
+    peekRef(token: string): {
+      ref: string;
+      origin: 'marketplace' | 'dev';
+      integrity: string | null;
+    } {
       const p = pending.get(token);
       if (!p)
         throw new Error('unknown or expired install token — run preview again');
-      return { ref: p.ref, origin: p.origin };
+      return { ref: p.ref, origin: p.origin, integrity: p.integrity };
     },
 
     /** The install guards for a staged package, without touching disk —

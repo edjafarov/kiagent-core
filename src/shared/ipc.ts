@@ -245,6 +245,9 @@ export interface ScheduledJob {
 export interface ExtensionPreview {
   ok: true;
   token: string;
+  /** The PINNED ref (main's canonical resolution) — what the sheet shows
+   *  and provenance is read from, never what the user typed. */
+  ref: string;
   id: string;
   name: string;
   version: string;
@@ -805,7 +808,8 @@ export interface Invokes {
    *  prompt. A follower's commit forwards this to the leader (sync spec 7.9);
    *  it is not shown to users as a separate step. */
   'extension:install': {
-    req: { ref: string };
+    /** `integrity`: the SRI the user approved on the forwarding device. */
+    req: { ref: string; integrity?: string | null };
     res: { ok: boolean; id?: string; error?: string };
   };
   'extension:uninstall': {

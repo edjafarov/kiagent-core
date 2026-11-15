@@ -27,6 +27,11 @@ describe('needsInstall', () => {
     expect(needsInstall(mp(ref), { ref })).toBe(false);
     expect(needsInstall(mp('github:kia-plugins/x@1'), {})).toBe(false);
   });
+  it('does not reinstall the same ref for an integrity difference (the local pin would refuse it)', () => {
+    const have: LocalExtension = { id: 'x', origin: 'marketplace', enabled: true, ref, integrity: 'sha512-A' };
+    const want: { ref: string; integrity: string } = { ref, integrity: 'sha512-B' };
+    expect(needsInstall(have, want)).toBe(false);
+  });
   it('never reinstalls a bundled or dev extension', () => {
     for (const origin of ['bundled', 'dev'] as const)
       expect(needsInstall({ id: 'x', origin, enabled: true, ref: 'a' }, { ref })).toBe(false);
@@ -400,5 +405,47 @@ describe('seeding', () => {
     store.writable = true;
     await sync.seed();
     expect(Object.keys(store.get()!)).toContain('kia.slack');
+  });
+});
+
+describe('integrity travels with the set (spec §5)', () => {
+  const REF = 'github:kia-plugins/slack@v1';
+  const SRI = 'sha512-abc';
+  const local: LocalExtension[] = [
+    { id: 'kia.slack', origin: 'marketplace', enabled: true, ref: REF, integrity: SRI },
+  ];
+
+  it('seed and offer carry the installed integrity', async () => {
+    const store = fakeStore();
+    const sync = mk(store, fakeOps(local));
+    await sync.seed();
+    expect(store.get()).toEqual({ 'kia.slack': { enabled: true, ref: REF, integrity: SRI } });
+    expect(sync.offer()).toEqual({ 'kia.slack': { enabled: true, ref: REF, integrity: SRI } });
+  });
+
+  it('union keeps an offered integrity and drops a malformed one', async () => {
+    const store = fakeStore();
+    store.set({});
+    const sync = mk(store, fakeOps([]));
+    expect(
+      await sync.union({
+        'kia.slack': { enabled: true, ref: REF, integrity: SRI },
+        'kia.bad': { enabled: true, ref: 'github:kia-plugins/bad@v1', integrity: 5 as never },
+      }),
+    ).toEqual(['kia.slack']);
+    expect(store.get()).toEqual({ 'kia.slack': { enabled: true, ref: REF, integrity: SRI } });
+  });
+
+  it('reconcile hands the set entry integrity to the install, as a reconcile', async () => {
+    const ops = fakeOps([]);
+    await mk(fakeStore(), ops).reconcile({ 'kia.slack': { enabled: true, ref: REF, integrity: SRI } });
+    expect(ops.installOpts).toEqual([{ grantConsent: true, integrity: SRI, context: 'reconcile' }]);
+  });
+
+  it('recordInstalled writes the integrity', async () => {
+    const store = fakeStore();
+    store.set({});
+    await mk(store, fakeOps([])).recordInstalled('kia.slack', REF, SRI);
+    expect(store.get()).toEqual({ 'kia.slack': { enabled: true, ref: REF, integrity: SRI } });
   });
 });

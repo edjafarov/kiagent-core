@@ -7,7 +7,14 @@
  *  every device uninstalls it too. Optional, so an older device ignores it. */
 export type ExtensionsSet = Record<
   string,
-  { enabled: boolean; ref?: string; removed?: true }
+  {
+    enabled: boolean;
+    ref?: string;
+    /** The sha512 SRI of the bytes the user approved; another device
+     *  installs only those bytes. Optional: older entries have none. */
+    integrity?: string;
+    removed?: true;
+  }
 >;
 
 /** The `user_prefs` key that holds the set. */
@@ -19,6 +26,8 @@ export interface LocalExtension {
   enabled: boolean;
   /** The pinned marketplace ref from installed.json. */
   ref?: string;
+  /** Its installed bytes' SRI, from installed.json. */
+  integrity?: string;
   /** state.json has an entry for it (a bundled extension's default is on). */
   explicit?: boolean;
 }
@@ -44,14 +53,27 @@ export interface ExtensionOps {
    *  the user granted it on another of their devices. */
   installFromRef(
     ref: string,
-    opts: { grantConsent: true },
+    opts: InstallFromRefOpts,
   ): Promise<{ ok: boolean; id?: string; error?: string }>;
   uninstall(id: string): Promise<{ ok: boolean; error?: string }>;
 }
 
+export const RELEASE_CHANGED_FORWARD =
+  'The release changed after you approved it — try installing again.';
+export const RELEASE_CHANGED_RECONCILE =
+  'This connector’s release changed since it was installed on your other device. Update it there first.';
+
+/** How a connector is installed without a prompt. `integrity`, when given,
+ *  must match the download; `context` picks the copy for a mismatch. */
+export interface InstallFromRefOpts {
+  grantConsent: true;
+  integrity?: string | null;
+  context?: 'forward' | 'reconcile';
+}
+
 export type PendingRecord =
   | { kind: 'enabled'; id: string; enabled: boolean }
-  | { kind: 'installed'; id: string; ref: string | undefined }
+  | { kind: 'installed'; id: string; ref: string | undefined; integrity?: string }
   | { kind: 'uninstalled'; id: string; origin: 'marketplace' | 'dev' | 'bundled' };
 
 export interface ReconcileResult {
@@ -67,7 +89,11 @@ export function setFromLocal(local: LocalExtension[]): ExtensionsSet {
   for (const e of local) {
     if (e.origin === 'marketplace') {
       out[e.id] = e.ref
-        ? { enabled: e.enabled, ref: e.ref }
+        ? {
+            enabled: e.enabled,
+            ref: e.ref,
+            ...(e.integrity ? { integrity: e.integrity } : {}),
+          }
         : { enabled: e.enabled };
     } else if (e.origin === 'bundled' && e.explicit) {
       out[e.id] = { enabled: e.enabled };
@@ -78,10 +104,17 @@ export function setFromLocal(local: LocalExtension[]): ExtensionsSet {
 
 /** An entry a join may add: well formed, and a marketplace ref or none. A
  *  local path is a dev install, and those are the joiner's own. */
-function offerable(e: unknown): e is { enabled: boolean; ref?: string } {
+function offerable(
+  e: unknown,
+): e is { enabled: boolean; ref?: string; integrity?: string } {
   if (!e || typeof e !== 'object') return false;
-  const { enabled, ref } = e as { enabled?: unknown; ref?: unknown };
+  const { enabled, ref, integrity } = e as {
+    enabled?: unknown;
+    ref?: unknown;
+    integrity?: unknown;
+  };
   if (typeof enabled !== 'boolean') return false;
+  if (integrity !== undefined && typeof integrity !== 'string') return false;
   if (ref === undefined) return true;
   return typeof ref === 'string' && ref.length > 0 && !/^([./\\~]|[A-Za-z]:|file:)/.test(ref);
 }
@@ -149,7 +182,11 @@ export function createExtensionSync(d: {
         continue;
       }
       if (needsInstall(have, want)) {
-        const r = await ops.installFromRef(want.ref!, { grantConsent: true });
+        const r = await ops.installFromRef(want.ref!, {
+          grantConsent: true,
+          integrity: want.integrity,
+          context: 'reconcile',
+        });
         if (!r.ok) {
           fail(id, r.error);
           continue;
@@ -180,7 +217,13 @@ export function createExtensionSync(d: {
         const entry = ops.list().find((e) => e.id === id);
         if (!have && entry?.origin === 'dev') return cur;
         next[id] = {
-          ...(have ?? (entry?.ref ? { ref: entry.ref } : {})),
+          ...(have ??
+            (entry?.ref
+              ? {
+                  ref: entry.ref,
+                  ...(entry.integrity ? { integrity: entry.integrity } : {}),
+                }
+              : {})),
           enabled,
         };
         return next;
@@ -189,11 +232,12 @@ export function createExtensionSync(d: {
   const recordInstalled = async (
       id: string,
       ref: string | undefined,
+      integrity?: string,
   ): Promise<void> => {
       if (!ref || !store.canWrite()) return;
       await store.update((cur) => ({
         ...base(cur),
-        [id]: { enabled: true, ref },
+        [id]: { enabled: true, ref, ...(integrity ? { integrity } : {}) },
       }));
   };
   const recordUninstalled = async (
@@ -209,7 +253,7 @@ export function createExtensionSync(d: {
 
   const applyRecord = async (p: PendingRecord): Promise<void> => {
     if (p.kind === 'enabled') return recordEnabled(p.id, p.enabled);
-    if (p.kind === 'installed') return recordInstalled(p.id, p.ref);
+    if (p.kind === 'installed') return recordInstalled(p.id, p.ref, p.integrity);
     return recordUninstalled(p.id, p.origin);
   };
   const flushPending = async (): Promise<void> => {
@@ -292,7 +336,13 @@ export function createExtensionSync(d: {
           const next = { ...base(cur) };
           for (const [id, e] of Object.entries(offered ?? {})) {
             if (id in next || !offerable(e)) continue;
-            next[id] = e.ref ? { enabled: e.enabled, ref: e.ref } : { enabled: e.enabled };
+            next[id] = e.ref
+              ? {
+                  enabled: e.enabled,
+                  ref: e.ref,
+                  ...(e.integrity ? { integrity: e.integrity } : {}),
+                }
+              : { enabled: e.enabled };
             added.push(id);
           }
           return added.length > 0 ? next : undefined;

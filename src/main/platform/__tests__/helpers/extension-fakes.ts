@@ -42,10 +42,18 @@ export function fakeOps(initial: LocalExtension[], opts: { failAll?: boolean } =
   const local = new Map(initial.map((e) => [e.id, { ...e }]));
   const calls: string[] = [];
   const failInstall = new Set<string>();
-  const ops: ExtensionOps & { calls: string[]; failInstall: Set<string>; local: typeof local } = {
+  /** The opts each installFromRef saw, in order. */
+  const installOpts: Array<Parameters<ExtensionOps['installFromRef']>[1]> = [];
+  const ops: ExtensionOps & {
+    calls: string[];
+    failInstall: Set<string>;
+    local: typeof local;
+    installOpts: typeof installOpts;
+  } = {
     calls,
     failInstall,
     local,
+    installOpts,
     list: () => [...local.values()].map((e) => ({ ...e })),
     async setEnabled(id, enabled) {
       calls.push(`enable:${id}:${enabled}`);
@@ -56,6 +64,7 @@ export function fakeOps(initial: LocalExtension[], opts: { failAll?: boolean } =
     },
     async installFromRef(ref, o) {
       calls.push(`install:${ref}:${o.grantConsent}`);
+      installOpts.push(o);
       const id = ref.replace(/^github:kia-plugins\//, 'kia.').replace(/@.*$/, '');
       if (opts.failAll || failInstall.has(id)) return { ok: false, error: 'offline' };
       local.set(id, { id, origin: 'marketplace', enabled: true, ref });

@@ -891,8 +891,12 @@ function registerIpc(
 
     'extension:install-preview': ({ ref }) => extensions.installPreview(ref),
     'extension:install-commit': ({ token }) => extensions.installCommit(token),
-    'extension:install': ({ ref }) =>
-      extensions.installFromRef(ref, { grantConsent: true }),
+    'extension:install': ({ ref, integrity }) =>
+      extensions.installFromRef(ref, {
+        grantConsent: true,
+        integrity,
+        context: 'forward',
+      }),
     'extension:uninstall': ({ id }) => extensions.uninstall(id),
     'extension:set-enabled': ({ id, enabled }) =>
       extensions.setEnabled(id, enabled),
