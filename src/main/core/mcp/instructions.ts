@@ -62,8 +62,10 @@ window you applied.
 
 Email threads carry their LATEST message's date as created_at (also
 metadata.lastMessageAt), so recency ordering reflects activity.
-Expand a thread's individual messages — or any document's
-attachments — with get_related(children).
+get lists each document's children (thread messages, attachments,
+voice-note transcripts, photos) with a short snippet — read them before
+saying a voice note or attachment has no text, and get the child id for
+its full body. Page past the first 20 with get_related(children).
 
 Common patterns:
   find / what about X      → search
