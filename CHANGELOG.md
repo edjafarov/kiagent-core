@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.129.0](https://github.com/edjafarov/kiagent-core/compare/v0.128.0...v0.129.0) (2026-11-20)
+
+### Features
+
+* **mcp:** a tool can set `overview: true`; `digital_memory_info` then calls it with no arguments and includes the result under `more`, keyed by the tool's name, so an extension can show what it offers without a separate call ([1805e481](https://github.com/edjafarov/kiagent-core/commit/1805e481d9d9ca8eb718b317288d6539f7af2a19))
+
 ## [0.128.0](https://github.com/edjafarov/kiagent-core/compare/v0.127.0...v0.128.0) (2026-11-20)
 
 ### Features
