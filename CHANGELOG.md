@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.128.0](https://github.com/edjafarov/kiagent-core/compare/v0.127.0...v0.128.0) (2026-11-20)
+
+### Features
+
+* **mcp:** `get` lists each document's children (thread messages, attachments, voice-note transcripts, photos) with a short snippet and `children_total`, so a client sees a voice note's transcript without calling `get_related` ([a8d89849](https://github.com/edjafarov/kiagent-core/commit/a8d898497ffeba58d58253f86e87b3d86cc828d1))
+
 ## [0.127.0](https://github.com/edjafarov/kiagent-core/compare/v0.126.0...v0.127.0) (2026-11-15)
 
 ### Features
