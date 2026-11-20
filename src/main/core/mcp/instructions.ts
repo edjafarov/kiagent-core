@@ -70,7 +70,8 @@ its full body. Page past the first 20 with get_related(children).
 Common patterns:
   find / what about X      → search
   recent X / lately        → search + from_date
-  what's in your memory    → digital_memory_info
+  what's in your memory    → digital_memory_info (also lists what
+                             other tools offer, under "more")
   how many docs per source → count
   who sent what / per-sender or per-label counts
                             → count group_by:'from'|'label'

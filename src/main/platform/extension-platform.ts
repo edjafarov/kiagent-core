@@ -1059,6 +1059,7 @@ export function createExtensionPlatform(
           description: t.description,
           inputSchema: t.inputSchema,
           tier: t.tier,
+          overview: t.overview,
           call: (args) => e.host!.callTool(t.name, args),
         }),
       );

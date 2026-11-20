@@ -596,6 +596,9 @@ describe('createExtensionPlatform', () => {
     await installFixture();
     expect(registry.has('basicsrc')).toBe(true);
     expect(tools.has('basic_echo')).toBe(true);
+    // `overview` crosses the host boundary to the registry (it is carried
+    // explicitly, like `tier`).
+    expect(tools.get('basic_echo')?.overview).toBe(true);
     const consent = await store.consents.latest('test.basic' as never);
     expect(consent?.caps).toEqual(['net']);
     const last = snapshots.at(-1)!;
