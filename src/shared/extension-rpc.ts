@@ -49,6 +49,7 @@ export interface ToolDescriptor {
   description: string;
   inputSchema: unknown;
   tier?: 'standard' | 'powerful';
+  overview?: boolean;
 }
 
 /** Serializable summary of what activate() returned; the callable objects

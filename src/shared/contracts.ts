@@ -1947,6 +1947,11 @@ export interface McpTool {
   /** Calls run as foreground work (pausing background ingest) unless a tool
    *  sets this to false — for a tool that waits on that very work (`refresh`). */
   readonly foreground?: boolean;
+  /** When true, `digital_memory_info` calls this tool with no arguments and
+   *  includes the result under `more[<tool name>]`, so a client sees what the
+   *  tool offers without a separate call. The tool must answer a call with
+   *  `{}` quickly and with a small result. */
+  readonly overview?: boolean;
   call(args: Record<string, unknown>): Promise<unknown>;
 }
 

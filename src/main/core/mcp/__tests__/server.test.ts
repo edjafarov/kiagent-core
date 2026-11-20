@@ -255,6 +255,43 @@ describe('startMcp (HTTP transport)', () => {
     expect(after.some((t) => t.name === 'echo')).toBe(false);
   });
 
+  it('digital_memory_info includes overviews of tools registered later, and drops them on dispose; tools/list is unchanged by the flag', async () => {
+    const client = await connectClient();
+    const info = async () =>
+      JSON.parse(
+        (
+          (await client.callTool({
+            name: 'digital_memory_info',
+            arguments: {},
+          })) as { content: Array<{ text: string }> }
+        ).content[0].text,
+      ) as { more?: Record<string, unknown> };
+    expect((await info()).more).toBeUndefined();
+
+    const calls: Array<Record<string, unknown>> = [];
+    const dispose = handle.registerTool({
+      name: 'ov_tool',
+      description: 'has a summary',
+      inputSchema: { type: 'object' },
+      overview: true,
+      call: async (args) => {
+        calls.push(args);
+        return { pages: 2 };
+      },
+    });
+    try {
+      expect((await info()).more).toEqual({ ov_tool: { pages: 2 } });
+      expect(calls).toEqual([{}]);
+      const listed = (await client.listTools()).tools.find(
+        (t) => t.name === 'ov_tool',
+      );
+      expect(JSON.stringify(listed)).not.toContain('overview');
+    } finally {
+      dispose();
+    }
+    expect((await info()).more).toBeUndefined();
+  });
+
   it("registerTool refuses a builtin's name: the builtin keeps serving, and the refused disposer leaves it registered", async () => {
     const client = await connectClient();
     const builtin = (await client.listTools()).tools.find(

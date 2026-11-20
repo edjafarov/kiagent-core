@@ -47,6 +47,7 @@ import {
 } from './registry';
 import { attachResourceHandlers } from './resources';
 import { buildBuiltinTools } from './tools';
+import { collectOverviews } from './tools/digital-memory-info';
 import type { LocalPathOf } from './tools/local-path';
 import type { McpSyncApi } from './tools/refresh';
 import type { SqlExecutorHandle, SqlRunnerDiagnostics } from './sql-runner';
@@ -318,6 +319,10 @@ export async function startMcp(deps: McpDeps): Promise<McpServerHandle> {
       deps.calendar,
       deps.localPathOf,
       deps.sync,
+      () =>
+        collectOverviews(registry.values(), (message, meta) =>
+          deps.logSink.log('mcp', 'warn', message, meta),
+        ),
     ),
     ...rawSql.tools,
   ]);

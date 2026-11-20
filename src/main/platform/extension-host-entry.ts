@@ -486,6 +486,7 @@ export function runExtensionHost(
           description: t.description,
           inputSchema: t.inputSchema,
           tier: t.tier,
+          overview: t.overview,
         })),
         senders: [...senders.keys()],
         drafts: [...senders.entries()]

@@ -67,6 +67,10 @@ main process wraps each in an RPC proxy and registers the proxy into the real re
 > Note: the contract type and the wire protocol (`Contributions` in `extension-rpc.ts`) agree
 > since platform 2.0.0: `{ sources, tools, senders }` is the whole contribution surface.
 
+> A contributed tool may set `overview: true`: `digital_memory_info` then calls it with `{}`
+> (3 s timeout, 12,000-char cap) and includes the result under `more[<tool name>]`. The flag
+> rides the tool descriptor across the host boundary like `tier`; it must answer `{}` fast and small.
+
 ## Capabilities
 
 These eight caps each map 1:1 to a host namespace (`CapSurfaces` in contracts.ts):

@@ -123,10 +123,12 @@ export function buildBuiltinTools(
   calendar?: CalendarToolApi,
   localPathOf?: LocalPathOf,
   sync?: McpSyncApi,
+  /** Overviews of other tools, read at CALL time (see collectOverviews). */
+  overviews?: () => Promise<Record<string, unknown>>,
 ): McpTool[] {
   const out = outbound ?? unavailableOutbound;
   const cal = calendar ?? unavailableCalendar;
-  const digitalMemoryInfo = makeDigitalMemoryInfoTool(query);
+  const digitalMemoryInfo = makeDigitalMemoryInfoTool(query, overviews);
   return [
     {
       name: 'search',

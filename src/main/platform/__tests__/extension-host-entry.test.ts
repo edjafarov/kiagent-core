@@ -82,7 +82,13 @@ describe('runExtensionHost — bootstrap/activate', () => {
     };
     expect(requireModule).toHaveBeenCalledWith('/virtual/entry.js');
     expect(contributions.tools).toEqual([
-      { name: 'echo', description: 'd', inputSchema: {}, tier: undefined },
+      {
+        name: 'echo',
+        description: 'd',
+        inputSchema: {},
+        tier: undefined,
+        overview: undefined,
+      },
     ]);
     expect(activate).toHaveBeenCalled();
   });

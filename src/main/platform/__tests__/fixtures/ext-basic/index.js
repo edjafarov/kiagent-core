@@ -50,6 +50,7 @@ module.exports = {
           name: 'basic_echo',
           description: 'echoes',
           inputSchema: { type: 'object' },
+          overview: true,
           call: async (args) => ({ echoed: args }),
         },
       ],

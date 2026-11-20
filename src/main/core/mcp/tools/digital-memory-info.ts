@@ -14,10 +14,10 @@
  *    no way to make these exact without raw SQL (query_sql/get_schema,
  *    intentionally not exposed here — see server.ts).
  */
-import type { Query } from '@shared/contracts';
+import type { McpTool, Query } from '@shared/contracts';
 
 export const digitalMemoryInfoDescription = `Information about the digital memory: connected accounts, document counts (exact by source; best-effort by type/language from a recent sample), and an approximate date range.
-Call this first to know what sources/accounts exist before calling \`search\`.`;
+Call this first to know what sources/accounts exist before calling \`search\`. The result may include \`more\`: overviews contributed by other tools (for example the list of long-term memory pages), keyed by the tool to call for details.`;
 
 export const digitalMemoryInfoInputSchema = {
   type: 'object',
@@ -37,7 +37,63 @@ export interface DigitalMemoryAccount {
   last_error: string | null;
 }
 
-export function makeDigitalMemoryInfoTool(query: Query) {
+export const OVERVIEW_TIMEOUT_MS = 3000;
+export const OVERVIEW_MAX_CHARS = 12_000;
+
+/** Calls every registered `overview: true` tool with `{}` (registry read NOW,
+ *  not at build time) and returns `{ [tool name]: result }`. A tool that
+ *  throws or exceeds the timeout is skipped; an oversized result is replaced
+ *  by a note. Calls go straight to `tool.call` — they are part of the one
+ *  `digital_memory_info` call, so no audit/foreground wrapper runs again. */
+export async function collectOverviews(
+  tools: Iterable<McpTool>,
+  warn?: (message: string, meta?: Record<string, unknown>) => void,
+): Promise<Record<string, unknown>> {
+  const targets = [...tools].filter(
+    (t) => t.overview === true && t.name !== 'digital_memory_info',
+  );
+  const settled = await Promise.all(
+    targets.map(async (tool) => {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      try {
+        const result = await Promise.race([
+          tool.call({}),
+          new Promise<never>((_, reject) => {
+            timer = setTimeout(
+              () => reject(new Error('overview timed out')),
+              OVERVIEW_TIMEOUT_MS,
+            );
+          }),
+        ]);
+        const json = JSON.stringify(result);
+        if (json === undefined) return null;
+        return json.length > OVERVIEW_MAX_CHARS
+          ? {
+              name: tool.name,
+              value: {
+                note: `Too long to include; call ${tool.name} for it.`,
+              },
+            }
+          : { name: tool.name, value: result };
+      } catch (err) {
+        warn?.(`overview of '${tool.name}' skipped`, {
+          error: err instanceof Error ? err.message : String(err),
+        });
+        return null;
+      } finally {
+        if (timer) clearTimeout(timer);
+      }
+    }),
+  );
+  const more: Record<string, unknown> = {};
+  for (const s of settled) if (s) more[s.name] = s.value;
+  return more;
+}
+
+export function makeDigitalMemoryInfoTool(
+  query: Query,
+  overviews?: () => Promise<Record<string, unknown>>,
+) {
   return async function digitalMemoryInfo(): Promise<{
     accounts: DigitalMemoryAccount[];
     counts: {
@@ -46,6 +102,7 @@ export function makeDigitalMemoryInfoTool(query: Query) {
       by_language: Array<{ key: string; count: number }>;
     };
     date_range: { oldest: string | null; newest: string | null };
+    more?: Record<string, unknown>;
   }> {
     const accounts = await query.accounts();
     // Worker accounts are synthetic (deep-extraction / enrichment emits under
@@ -94,6 +151,8 @@ export function makeDigitalMemoryInfoTool(query: Query) {
       byType.push({ key: type, count: await query.count({ type }) });
     }
 
+    const more = overviews ? await overviews() : {};
+
     return {
       accounts: digitalAccounts,
       counts: {
@@ -108,6 +167,7 @@ export function makeDigitalMemoryInfoTool(query: Query) {
         })),
       },
       date_range: { oldest, newest },
+      ...(Object.keys(more).length ? { more } : {}),
     };
   };
 }
