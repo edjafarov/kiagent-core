@@ -198,6 +198,11 @@ let bundledProviders: {
 let activity: ActivityLog | null = null;
 let stopActivityWatch: (() => void) | null = null;
 let stopOutboxScheduler: (() => void) | null = null;
+// The shared-folders service holds chokidar (fsevents) watchers. Left open at
+// quit they deadlock Node's teardown on macOS (fse_instance_destroy waits on a
+// mutex inside FreeEnvironment), after JS is gone, so no backstop can fire:
+// the process stays without a window and a restart never relaunches.
+let closeSharedFolders: (() => Promise<void>) | null = null;
 // Must stay referenced for the app's lifetime or GC destroys the icon.
 let tray: Tray | null = null;
 let trayMenu: TrayMenuController | null = null;
@@ -1591,6 +1596,7 @@ app
       }),
     });
     sharedSourceHost = { db: p.db, sharedFolders };
+    closeSharedFolders = () => sharedFolders.close();
     extensionsPlatform = createExtensionPlatform({
       sync: p.sync,
       prefs: p.prefs,
@@ -2007,6 +2013,12 @@ app.on('before-quit', (event) => {
     // the service drains admitted operations; only then do we dispose the
     // attention service and finally shut down the shared DB platform.
     await extensionsPlatform?.stop().catch(() => {});
+    // Bounded: close() also waits for a sort in progress, which must not hold
+    // the quit; the watchers themselves close at once.
+    await Promise.race([
+      closeSharedFolders?.().catch(() => {}),
+      new Promise((r) => setTimeout(r, 3000)),
+    ]);
     attentionPush?.dispose();
     await attentionService?.dispose().catch(() => {});
     await platform?.shutdown().catch(() => {});
