@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.129.1](https://github.com/edjafarov/kiagent-core/compare/v0.129.0...v0.129.1) (2026-11-21)
+
+### Bug Fixes
+
+* **quit:** the shared-folder watchers are closed before the process tears down; left open they deadlocked the quit on macOS, so a Mac joining a second computer never came back from its restart ([fe16ec75](https://github.com/edjafarov/kiagent-core/commit/fe16ec75dcaf5acd5ebbe59c8557890bf0a2156d))
+
 ## [0.129.0](https://github.com/edjafarov/kiagent-core/compare/v0.128.0...v0.129.0) (2026-11-20)
 
 ### Features
