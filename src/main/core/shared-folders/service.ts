@@ -486,6 +486,9 @@ export async function createSharedFolders(deps: SharedFoldersDeps): Promise<Shar
       clearInterval(retry);
       if (timer) clearTimeout(timer);
       timer = null;
+      // Watchers first: a quit bounds this call, and a watcher left open
+      // deadlocks process teardown on macOS.
+      await rewatch();
       await running;
       await tail;
       await rewatch();
