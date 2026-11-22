@@ -37,6 +37,7 @@ import {
   OCR_SUFFICIENT_CHARS,
   OCR_WINDOW,
 } from './classify';
+import { inferencePause } from '@shared/inference-pause';
 import { VISION_WORKER } from './identity';
 import { INDEXING_PROMPT, mergeExtraction } from './merge';
 import type { PageResult } from './merge';
@@ -211,7 +212,7 @@ export function createVisionWorker(deps: {
       if (err instanceof LaneClosedError) return 'defer';
       // The model answering changed under the call (another device took over
       // the work, or stopped): scheduling too, never a VLM failure.
-      if ((err as Error)?.name === 'ModelChangedError') return 'defer';
+      if (inferencePause(err) === 'model-changed') return 'defer';
       // A see provider is downloading / will auto-install: wait for it.
       if (err instanceof NoProviderError && session.mayBecomeReady('see'))
         return 'defer';
