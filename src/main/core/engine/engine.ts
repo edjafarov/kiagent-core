@@ -503,9 +503,10 @@ export function createEngine(deps: EngineDeps): Engine & {
     account: Account,
     signal: AbortSignal,
     scope: string,
-    /** A read-only copy passes this: a login that is about to expire is asked
-     *  of the leader, and nothing is refreshed or saved here. */
-    viaLeader?: () => Promise<Credentials | null>,
+    /** Asked on every call for a login. On a read-only copy it answers with
+     *  the leader's login, and nothing is refreshed or saved here; it answers
+     *  `undefined` on a device that may write. */
+    viaLeader?: () => Promise<Credentials | null> | undefined,
   ): Session;
   /** A usable login for an account, refreshed and saved here if it was due.
    *  For a copy that asked the leader: the warning it logs names the error's
@@ -736,14 +737,16 @@ export function createEngine(deps: EngineDeps): Engine & {
     account: Account,
     signal: AbortSignal,
     scope: string,
-    viaLeader?: () => Promise<Credentials | null>,
+    viaLeader?: () => Promise<Credentials | null> | undefined,
   ): Session => ({
     account,
     signal,
     async credentials(): Promise<Credentials | null> {
       // The mirrored login may be one another device already replaced, so
       // a copy's flow always asks the leader.
-      if (viaLeader) return viaLeader();
+      // `undefined` means this device may write now: it does it itself.
+      const asked = viaLeader?.();
+      if (asked !== undefined) return asked;
       return freshCredentials({
         vault: store.vault,
         account: account.id,
@@ -1974,7 +1977,7 @@ export function createEngine(deps: EngineDeps): Engine & {
       account: Account,
       signal: AbortSignal,
       scope: string,
-      viaLeader?: () => Promise<Credentials | null>,
+      viaLeader?: () => Promise<Credentials | null> | undefined,
     ): Session {
       return makeSession(account, signal, scope, viaLeader);
     },

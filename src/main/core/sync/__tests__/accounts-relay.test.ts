@@ -8,10 +8,12 @@ import {
   createCopyRelay,
   createLeaderRunners,
   KEEP_EVERY_MS,
+  LEADER_CHANGED_SENTENCE,
   NOT_SAVED_SENTENCE,
   UNKNOWN_SOURCE_SENTENCE,
   wrapAccountChannels,
 } from '../accounts-relay';
+import { LeadsNow, SyncReadOnly } from '../role';
 import type { ForwardRequest, ForwardResult } from '../service';
 
 const SENTINEL = 'SENTINEL-refresh-token-9f3a';
@@ -140,6 +142,23 @@ describe('the copy side', () => {
     expect(sent).toHaveLength(1);
   });
 
+  it('a leader that stopped leading before the commit ran is tried again', async () => {
+    const { relay, sent } = setup([
+      { ok: false, code: 'handler', message: LEADER_CHANGED_SENTENCE },
+      { ok: true, value: account('a1') },
+    ]);
+    await expect(relay.adopt(connected)).resolves.toMatchObject({ id: 'a1' });
+    expect(sent).toHaveLength(2);
+  });
+
+  it('a device that leads by now sends nothing and says so', async () => {
+    const { relay, sent } = setup([{ ok: true, value: account('a1') }]);
+    await expect(
+      relay.adopt(connected, { stillCopy: () => false }),
+    ).rejects.toBeInstanceOf(LeadsNow);
+    expect(sent).toHaveLength(0);
+  });
+
   it('a sign-in cancelled before it was sent is never sent', async () => {
     const ctl = new AbortController();
     const { relay, sent } = setup([{ ok: true, value: account('a1') }]);
@@ -194,6 +213,7 @@ describe('the copy side', () => {
 describe('the leader side', () => {
   const setup = (over: Record<string, unknown> = {}) => {
     const log: string[] = [];
+    let writable = true;
     const started: Account[] = [];
     const claims = new Map<string, string>();
     const rows: Account[] = [];
@@ -229,11 +249,22 @@ describe('the leader side', () => {
       engine: engine as never,
       account: async (id) => rows.find((r) => r.id === id) ?? null,
       hasSource: (id) => id === 'gmail',
+      writable: () => writable,
       ops: createAccountOps({ now: () => 0 }),
       runAccount: (a) => started.push(a),
       log: (l) => log.push(l),
     });
-    return { run, engine, log, started, claims, rows };
+    return {
+      run,
+      engine,
+      log,
+      started,
+      claims,
+      rows,
+      stopLeading: () => {
+        writable = false;
+      },
+    };
   };
 
   it('probe says whether the connector is here', async () => {
@@ -399,6 +430,30 @@ describe('the leader side', () => {
         configAtOpen: '{}',
       }),
     ).rejects.toThrow('the folder selection changed elsewhere');
+  });
+
+  it('a login request whose turn comes after this device stopped leading refreshes nothing', async () => {
+    const { run, engine, stopLeading } = setup();
+    stopLeading();
+    await expect(
+      run['accounts:fresh-credentials']({ accountId: 'a1' }),
+    ).rejects.toThrow(LEADER_CHANGED_SENTENCE);
+    expect(engine.freshCredentialsQuiet).not.toHaveBeenCalled();
+  });
+
+  it('a commit the engine refused because this device stopped leading says the leader changed', async () => {
+    const { run } = setup({
+      commitReauth: jest.fn(async () => {
+        throw new SyncReadOnly('commitReauth');
+      }),
+    });
+    await expect(
+      run['accounts:commit-reauth']({
+        opId: 'o1',
+        accountId: 'a1',
+        credentials: null,
+      }),
+    ).rejects.toThrow(LEADER_CHANGED_SENTENCE);
   });
 
   it('a refresh failure carrying the login reaches neither the answer nor the log', async () => {

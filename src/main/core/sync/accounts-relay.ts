@@ -21,6 +21,7 @@ import type {
 import { AccountFlowBusyError } from '../engine/flow-errors';
 
 import { accountKey, accountKeyOf, type AccountOps } from './account-ops';
+import { LeadsNow, SyncReadOnly } from './role';
 import type { AccountRelay, RelayContext } from './role';
 import type { SyncService } from './service';
 
@@ -57,6 +58,8 @@ export const UNKNOWN_SOURCE_SENTENCE =
   'the leader does not have this connector';
 export const UNKNOWN_ACCOUNT_SENTENCE = 'the leader does not have this source';
 export const BAD_REQUEST_SENTENCE = 'the leader could not read this request';
+export const LEADER_CHANGED_SENTENCE =
+  'The device that leads changed. Try again.';
 
 const leaderOf = (sync: Pick<SyncService, 'masterName'>): string =>
   sync.masterName() ?? 'the device that leads';
@@ -104,9 +107,14 @@ export function createCopyRelay(d: {
     const body = { ...payload, opId: d.newId() };
     const started = d.now();
     for (;;) {
+      // This device leads by now: the gate commits the result here.
+      if (ctx?.stillCopy && !ctx.stillCopy()) throw new LeadsNow();
       const r = await d.sync.forward({ kind: 'core', name, payload: body });
       if (r.ok) return r.value;
-      if (r.code !== 'no-master') throw new Error(r.message);
+      // A device that stopped leading before the commit's turn came saved
+      // nothing: the next attempt finds whoever leads now.
+      if (r.code !== 'no-master' && r.message !== LEADER_CHANGED_SENTENCE)
+        throw new Error(r.message);
       const leader = leaderOf(d.sync);
       if (ctx?.signal?.aborted) throw new Error('cancelled');
       if (d.now() - started >= KEEP_FOR_MS)
@@ -186,6 +194,8 @@ export interface LeaderRunnerDeps {
   };
   account(id: AccountId): Promise<Account | null>;
   hasSource(sourceId: string): boolean;
+  /** This device may write now. */
+  writable(): boolean;
   ops: AccountOps;
   runAccount(account: Account): void;
   log(line: string): void;
@@ -204,6 +214,7 @@ export function createLeaderRunners(
       const name = className(err);
       d.log(`${what} failed (${name})`);
       if (err instanceof AccountFlowBusyError) throw new Error(BUSY_SENTENCE);
+      if (err instanceof SyncReadOnly) throw new Error(LEADER_CHANGED_SENTENCE);
       const msg = err instanceof Error ? err.message : '';
       if (/^unknown source: /.test(msg))
         throw new Error(UNKNOWN_SOURCE_SENTENCE);
@@ -318,6 +329,8 @@ export function createLeaderRunners(
         } catch (err) {
           if (err instanceof AccountFlowBusyError)
             throw new Error(BUSY_SENTENCE);
+          if (err instanceof SyncReadOnly)
+            throw new Error(LEADER_CHANGED_SENTENCE);
           throw err;
         }
       });
@@ -329,9 +342,12 @@ export function createLeaderRunners(
       const accountId = req.accountId as AccountId;
       const key = await accountKeyOf(d.account, accountId);
       return d.ops.serial(key, () =>
-        guarded('fresh-credentials', () =>
-          d.engine.freshCredentialsQuiet(accountId),
-        ),
+        guarded('fresh-credentials', async () => {
+          // Asked when its turn comes: a device that stopped leading while
+          // this waited refreshes and saves nothing.
+          if (!d.writable()) throw new SyncReadOnly('fresh-credentials');
+          return d.engine.freshCredentialsQuiet(accountId);
+        }),
       );
     },
   };

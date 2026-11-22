@@ -312,6 +312,19 @@ describe('connect and reconnect in two halves', () => {
         accessToken: 'from-leader',
       });
       expect(viaLeader).toHaveBeenCalledTimes(2);
+
+      // A device that may write answers `undefined`: the engine refreshes
+      // and saves here, as it always did.
+      const own = engine.session(
+        account,
+        new AbortController().signal,
+        'test',
+        () => undefined,
+      );
+      await store.vault.save(account.id, { accessToken: 'old', expiresAt: soon() });
+      await expect(own.credentials()).resolves.toEqual({
+        accessToken: 'local-refresh',
+      });
     });
   });
 });

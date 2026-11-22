@@ -975,6 +975,7 @@ function registerIpc(
     engine: p.engine,
     account: (id) => p.store.account(id),
     hasSource: (id) => p.sources.get(id) !== undefined,
+    writable: () => !p.sync.readOnly(),
     ops: accountOps,
     runAccount: (account) => runAccount(p, account),
     log: (line) => p.logSink.log('sync', 'warn', `accounts relay: ${line}`),

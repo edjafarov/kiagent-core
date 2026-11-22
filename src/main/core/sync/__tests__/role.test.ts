@@ -10,7 +10,7 @@ import { resumeHeld } from '../../boot';
 import { migrate } from '../../store/schema';
 import { createWriteTx } from '../../store/write-tx';
 import { accountKey, createAccountOps } from '../account-ops';
-import { followerLookup, gateEngine, readRoleSync, SyncReadOnly } from '../role';
+import { followerLookup, gateEngine, LeadsNow, readRoleSync, SyncReadOnly } from '../role';
 
 let dir: string;
 let db: Database.Database;
@@ -665,17 +665,78 @@ describe('a read-only copy relays account changes', () => {
     expect(relay.adopt).not.toHaveBeenCalled();
   });
 
-  it('a session for an account the leader runs asks the leader for its login', async () => {
+  it('a session asks, on every call, whether the leader holds the login', async () => {
     const real = { ...idle(), session: jest.fn((...a: unknown[]) => a) };
     const relay = { credentials: jest.fn(async () => ({ accessToken: 'fresh' })) };
+    let ro = true;
     const e = { ...real } as unknown as Record<string, (...a: unknown[]) => unknown>;
-    gateEngine(e as never, () => true, owned, undefined, () => relay as never);
+    gateEngine(e as never, () => ro, owned, undefined, () => relay as never);
     const made = e.session({ id: 'acc' }, 'sig', 'scope') as unknown[];
     expect(made.slice(0, 3)).toEqual([{ id: 'acc' }, 'sig', 'scope']);
-    await expect((made[3] as () => Promise<unknown>)()).resolves.toEqual({ accessToken: 'fresh' });
+    const ask = made[3] as () => Promise<unknown> | undefined;
+    await expect(ask()).resolves.toEqual({ accessToken: 'fresh' });
     expect(relay.credentials).toHaveBeenCalledWith('acc');
-    const own = e.session({ id: 'mine' }, 'sig', 'scope') as unknown[];
-    expect(own).toHaveLength(3);
+    // The same open session after this device started leading: it does it itself.
+    ro = false;
+    expect(ask()).toBeUndefined();
+    // And one opened while leading asks the leader once the device is a copy.
+    const later = (e.session({ id: 'acc' }, 'sig', 'scope') as unknown[])[3] as () => unknown;
+    expect(later()).toBeUndefined();
+    ro = true;
+    await expect(later()).resolves.toEqual({ accessToken: 'fresh' });
+    const own = (e.session({ id: 'mine' }, 'sig', 'scope') as unknown[])[3] as () => unknown;
+    expect(own()).toBeUndefined();
+  });
+
+  it('a device that starts leading during the sign-in commits the result itself', async () => {
+    let ro = true;
+    const real = {
+      ...idle(),
+      reauth: jest.fn(async () => {
+        ro = false;
+        return { accountId: 'acc', credentials: { accessToken: 't' } };
+      }),
+      commitReauth: jest.fn(async () => 'committed-here'),
+    };
+    const relay = { commitReauth: jest.fn(), adopt: jest.fn() };
+    const e = { ...real } as unknown as Record<string, (...a: unknown[]) => Promise<unknown>>;
+    gateEngine(e as never, () => ro, owned, undefined, () => relay as never);
+    await expect(e.reconnect('acc', 'auth')).resolves.toBe('committed-here');
+    expect(relay.commitReauth).not.toHaveBeenCalled();
+    expect(real.commitReauth).toHaveBeenCalledWith({ accountId: 'acc', credentials: { accessToken: 't' } });
+  });
+
+  it('a device that starts leading while the result waits for the leader commits it itself', async () => {
+    let ro = true;
+    const real = {
+      ...idle(),
+      connectAuth: jest.fn(async () => ({ sourceId: 'gmail', identifier: 'me' })),
+      adopt: jest.fn(async () => 'adopted-here'),
+    };
+    const relay = {
+      adopt: jest.fn(async (_c: unknown, ctx: { stillCopy(): boolean }) => {
+        expect(ctx.stillCopy()).toBe(true);
+        ro = false;
+        expect(ctx.stillCopy()).toBe(false);
+        throw new LeadsNow();
+      }),
+    };
+    const e = { ...real } as unknown as Record<string, (...a: unknown[]) => Promise<unknown>>;
+    gateEngine(e as never, () => ro, owned, undefined, () => relay as never);
+    await expect(e.connect({ descriptor: { id: 'gmail' } }, {})).resolves.toBe('adopted-here');
+    expect(real.adopt).toHaveBeenCalledWith({ sourceId: 'gmail', identifier: 'me' });
+  });
+
+  it('a commit whose turn comes after this device stopped leading saves nothing', async () => {
+    let ro = false;
+    const real = { ...idle(), commitReauth: jest.fn(async () => 'saved') };
+    const e = { ...real } as unknown as Record<string, (...a: unknown[]) => Promise<unknown>>;
+    gateEngine(e as never, () => ro, owned, undefined, undefined, async (_ref, fn) => {
+      ro = true; // demoted while it waited in the queue
+      return fn();
+    });
+    await expect(e.commitReauth({ accountId: 'acc' })).rejects.toBeInstanceOf(SyncReadOnly);
+    expect(real.commitReauth).not.toHaveBeenCalled();
   });
 
   it('a commit that runs here takes its place in the account queue', async () => {
