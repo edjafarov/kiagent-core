@@ -89,6 +89,11 @@ import { wireSyncAppliedPush } from './sync-applied-push';
 import { guardDraftTools } from './outbound/follower-tools';
 import { SYNC_REFUSED_PUSH } from './core/sync/forward-core';
 import { installSettingsSync } from './core/sync/settings-sync';
+import { newId } from './core/ids';
+import {
+  createLeaderRunners,
+  wrapAccountChannels,
+} from './core/sync/accounts-relay';
 import { runCommitBatch, type CommitInput } from './core/sync/owned';
 import { followerLookup } from './core/sync/role';
 import { wireAttentionPush } from './attention/push';
@@ -954,10 +959,36 @@ function registerIpc(
   // `dispatch` still finds its text.
   // A setting changed with no leader applies here and waits in the queue
   // (`installSettingsSync`); the data verbs below still refuse.
+  // Account changes: on a copy they go to the leader for an account it runs;
+  // on the leader each runs in the account's queue, once per operation id.
+  const { accountOps } = p;
+  const accountChannelRunners = wrapAccountChannels(
+    handlers as unknown as Record<string, ((req: never) => unknown) | undefined>,
+    {
+      sync: p.sync,
+      ops: accountOps,
+      account: (id) => p.store.account(id as AccountId),
+      newId: () => newId(),
+    },
+  );
+  const accountRelayRunners = createLeaderRunners({
+    engine: p.engine,
+    account: (id) => p.store.account(id),
+    hasSource: (id) => p.sources.get(id) !== undefined,
+    writable: () => !p.sync.readOnly(),
+    ops: accountOps,
+    runAccount: (account) => runAccount(p, account),
+    log: (line) => p.logSink.log('sync', 'warn', `accounts relay: ${line}`),
+  });
   const settings = installSettingsSync({
     prefs: p.prefs,
     sync: p.sync,
     extensions,
+    extraRunner: (name) =>
+      accountChannelRunners.get(name) ??
+      (Object.prototype.hasOwnProperty.call(accountRelayRunners, name)
+        ? accountRelayRunners[name as keyof typeof accountRelayRunners]
+        : undefined),
     handlers: handlers as unknown as Record<string, (req: unknown) => unknown>,
     afterPromote: (hook) => p.afterPromote(hook),
     syncExtensions: () => syncExtensions(extensions, p),

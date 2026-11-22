@@ -83,6 +83,9 @@ export interface SettingsSyncDeps {
     | 'unionExtensions'
   >;
   handlers: Record<string, (req: unknown) => unknown>;
+  /** Verbs the leader runs that are not in the forwarded-channel table: the
+   *  account changes a copy relays (`accounts-relay`). */
+  extraRunner?: (name: string) => ((req: unknown) => Promise<unknown>) | undefined;
   afterPromote: (hook: () => void | Promise<void>) => void;
   syncExtensions: () => Promise<void>;
   onNoMaster: (message: string) => void;
@@ -227,6 +230,8 @@ export function installSettingsSync(d: SettingsSyncDeps): {
     // A copy may only send user keys: a device key in a forwarded patch is
     // this leader's own business, never another device's.
     if (name === 'prefs:patch') return prefs.patch(pickUserKeys(req));
+    const extra = d.extraRunner?.(name);
+    if (extra) return extra(req);
     const local = forwardedLocal.get(name);
     if (!local) throw new Error(`${name} is not a forwarded channel`);
     return local(req);

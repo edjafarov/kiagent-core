@@ -3,7 +3,16 @@
  *  the gate follows it and the running work is held or resumed with it. */
 import type BetterSqlite3 from 'better-sqlite3';
 
-import type { Handle, LeaseSnapshot, SyncRoleWire } from '@shared/contracts';
+import type {
+  Account,
+  AccountId,
+  Connected,
+  Credentials,
+  FolderScopeUpdate,
+  Handle,
+  LeaseSnapshot,
+  SyncRoleWire,
+} from '@shared/contracts';
 
 import type { AppDb } from '../../db/app-db';
 import { isDeviceOwned } from './sources';
@@ -177,12 +186,55 @@ const REFUSED = [
   'connect',
   'reconnect',
   'applyScope',
+  'adopt',
+  'commitReauth',
   'remove',
   'pause',
   'resume',
   'updateConfig',
   'setOption',
 ] as const;
+
+/** What a read-only copy hands to the leader instead of refusing: the commit
+ *  half of a connect or a reconnect, a folder-scope change, and a usable
+ *  login for a flow that reads the provider. */
+/** Names an account for its queue: by id, or by what a connect will create. */
+export type AccountRef =
+  | { accountId: string }
+  | { source: string; identifier: string };
+
+export interface RelayContext {
+  /** Shown while a finished sign-in waits for the leader. */
+  status?(msg: string): void;
+  /** The flow's cancel: it ends the wait. */
+  signal?: AbortSignal;
+  /** False once this device leads: the wait ends with `LeadsNow` and the
+   *  gate commits the result here. */
+  stillCopy?(): boolean;
+}
+
+/** This device started leading while a finished sign-in waited for the
+ *  leader: there is nobody to send it to, and no need. */
+export class LeadsNow extends Error {
+  constructor() {
+    super('this device leads now');
+    this.name = 'LeadsNow';
+  }
+}
+
+export interface AccountRelay {
+  adopt(c: Connected, ctx?: RelayContext): Promise<Account>;
+  commitReauth(
+    r: { accountId: AccountId; credentials: Credentials | null },
+    ctx?: RelayContext,
+  ): Promise<void>;
+  applyScope(
+    accountId: AccountId,
+    update: FolderScopeUpdate,
+    configAtOpen: string,
+  ): Promise<{ archived: number }>;
+  credentials(accountId: AccountId): Promise<Credentials | null>;
+}
 
 /** Everything that starts work goes through these, whichever path calls them:
  *  boot's attachWorker, the bundled workers and the cadence tick. The role is
@@ -209,6 +261,14 @@ export function gateEngine(
   },
   log: (level: 'info' | 'warn' | 'error', msg: string) => void = () =>
     undefined,
+  /** Asked per call: with none, a copy refuses as it always did. */
+  relay: () => AccountRelay | null = () => null,
+  /** Runs a commit that happens on this device in the account's queue, so it
+   *  never overlaps another change to the same account (`account-ops`). */
+  serial: <T>(ref: AccountRef, fn: () => Promise<T>) => Promise<T> = (
+    _ref,
+    fn,
+  ) => fn(),
 ): {
   attachHeld(): Promise<void>;
   closeWriter(): Promise<void>;
@@ -252,20 +312,121 @@ export function gateEngine(
   };
   e.rerunDeferred = async (...a) =>
     readOnly() || holding ? undefined : real.rerunDeferred.apply(engine, a);
+  // A flow on a copy that reads the provider (the folder list) uses the
+  // mirrored login while it is good and asks the leader when it is about to
+  // expire: a copy never refreshes or saves a login.
+  if (typeof real.session === 'function')
+    e.session = (...a) => {
+      const account = a[0] as { id?: string } | undefined;
+      // Asked on every call for a login, not when the session was made: the
+      // role can change while a folder picker is open.
+      return real.session.call(engine, a[0], a[1], a[2], () => {
+        const r = relay();
+        return r && readOnly() && account?.id && !owned.ownsAccount(account.id)
+          ? r.credentials(account.id as AccountId)
+          : undefined;
+      });
+    };
+  /** Does this device own what the call names? `connect` and `adopt` name a
+   *  source; every other verb names an account. */
+  const mineOf = (m: string, a: unknown[]): boolean => {
+    const first = a[0] as
+      | { descriptor?: { id?: string }; sourceId?: string; accountId?: string }
+      | string
+      | undefined;
+    if (m === 'connect')
+      return owned.ownsSource(
+        (first as { descriptor?: { id?: string } } | undefined)?.descriptor
+          ?.id ?? '',
+      );
+    if (m === 'adopt')
+      return owned.ownsSource(
+        (first as { sourceId?: string } | undefined)?.sourceId ?? '',
+      );
+    if (m === 'commitReauth')
+      return owned.ownsAccount(
+        (first as { accountId?: string } | undefined)?.accountId ?? '',
+      );
+    return typeof first === 'string' && owned.ownsAccount(first);
+  };
+  /** Another device writes for this call. Asked again at every step of a
+   *  flow: the role can change while the person signs in. */
+  const elsewhere = (m: string, a: unknown[]): boolean =>
+    readOnly() && !mineOf(m, a);
   for (const m of REFUSED) {
     e[m] = async (...a) => {
-      if (readOnly()) {
-        // `connect` names a source; every other verb names an account.
-        const mine =
-          m === 'connect'
-            ? owned.ownsSource(
-                (a[0] as { descriptor?: { id?: string } } | undefined)
-                  ?.descriptor?.id ?? '',
-              )
-            : typeof a[0] === 'string' && owned.ownsAccount(a[0]);
-        if (!mine) throw new SyncReadOnly(m);
+      // Connect and reconnect always run in two halves, whoever leads when
+      // they start: the person's part first (it writes nothing), and then the
+      // commit goes to whoever writes at that moment. A sign-in takes minutes
+      // and the role can change either way while it runs.
+      if (
+        (m === 'connect' || m === 'reconnect') &&
+        typeof real[m === 'connect' ? 'connectAuth' : 'reauth'] === 'function'
+      ) {
+        const half = m === 'connect' ? 'connectAuth' : 'reauth';
+        const commit = m === 'connect' ? 'adopt' : 'commitReauth';
+        // No sign-in is started that nobody could take.
+        if (elsewhere(m, a) && !relay()) throw new SyncReadOnly(m);
+        const auth = a[1] as RelayContext | undefined;
+        const produced = await real[half].apply(engine, a);
+        const r = relay();
+        if (!elsewhere(m, a)) return e[commit](produced);
+        if (!r) throw new SyncReadOnly(m);
+        const ctx: RelayContext = {
+          status: (msg) => auth?.status?.(msg),
+          signal:
+            m === 'connect' ? auth?.signal : (a[2] as AbortSignal | undefined),
+          stillCopy: () => elsewhere(m, a),
+        };
+        try {
+          return m === 'connect'
+            ? await r.adopt(produced as Connected, ctx)
+            : await r.commitReauth(
+                produced as {
+                  accountId: AccountId;
+                  credentials: Credentials | null;
+                },
+                ctx,
+              );
+        } catch (err) {
+          if (err instanceof LeadsNow) return e[commit](produced);
+          throw err;
+        }
       }
-      const result = await real[m].apply(engine, a);
+      if (elsewhere(m, a)) {
+        // Every other verb reaches the leader as its whole handler
+        // (forward-core), so called directly it is still refused.
+        const r = relay();
+        if (r && m === 'applyScope')
+          return r.applyScope(
+            a[0] as AccountId,
+            a[1] as FolderScopeUpdate,
+            a[2] as string,
+          );
+        throw new SyncReadOnly(m);
+      }
+      // The three commits take their place in the account's queue here, so
+      // the leader's own flow, a copy's relayed commit and a plain handler
+      // (pause, options) never overlap on one account.
+      const first = a[0] as
+        | { sourceId?: string; identifier?: string; accountId?: string }
+        | string
+        | undefined;
+      let ref: AccountRef | null = null;
+      if (m === 'adopt' && typeof first === 'object')
+        ref = { source: first.sourceId ?? '', identifier: first.identifier ?? '' };
+      else if (m === 'commitReauth' && typeof first === 'object')
+        ref = { accountId: first.accountId ?? '' };
+      else if (m === 'applyScope' && typeof first === 'string')
+        ref = { accountId: first };
+      const result = ref
+        ? await serial(ref, async () => {
+            // Asked again when its turn comes: a commit that waited in the
+            // queue while this device stopped leading saves nothing here.
+            if (elsewhere(m, a)) throw new SyncReadOnly(m);
+            return real[m].apply(engine, a);
+          })
+        : await real[m].apply(engine, a);
       if (readOnly()) await owned.loadOwned?.();
       return result;
     };

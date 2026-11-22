@@ -2253,6 +2253,9 @@ export interface CapSurfaces {
       /** In-process only (it takes functions): another device of the account
        *  answers this one's background AI calls. Null removes it. */
       setAiLender(l: InferenceLender | null): Promise<void>;
+      /** In-process only (it takes a function): how core asks for a pull from
+       *  the leader now, after a change this copy relayed. Null removes it. */
+      setPuller(f: (() => Promise<void>) | null): Promise<void>;
       /** What this device can run itself, and whether it is free to. */
       aiFitness(): Promise<AiFitness>;
       /** Answers one call lent by the leader, on this device's own
@@ -2319,6 +2322,7 @@ export const SYNC_SURFACE_METHODS = [
   'queuedSettings',
   'discardQueued',
   'setAiLender',
+  'setPuller',
   'aiFitness',
   'runAiCall',
 ] as const satisfies readonly (keyof SyncSurface)[];
@@ -2572,6 +2576,19 @@ export interface Handle {
     deferred: number;
   }>;
   stop(): Promise<void>;
+}
+
+/** What the sign-in half of a connect produced: enough for the device that
+ *  writes to create the account. A read-only copy sends it to the leader. */
+export interface Connected {
+  sourceId: string;
+  identifier: string;
+  config: Record<string, unknown> | undefined;
+  /** The login the flow captured, merged with what the source returned. */
+  credentials: Credentials | null;
+  /** The person chose folders in this flow, so a known account's scope is
+   *  replaced, not kept. */
+  usedPicker: boolean;
 }
 
 /** The one state machine. Owns transactional commits, parent resolution,

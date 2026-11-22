@@ -1161,3 +1161,231 @@ describe('connect broker — startGroup', () => {
     expect(terminal(flowIds.mail)).toBe('error');
   });
 });
+
+describe('connect broker — on a read-only copy', () => {
+  const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
+  function makeCopy(over: {
+    probe?: () => Promise<void>;
+    owns?: boolean;
+    rowAfterPulls?: number;
+    source?: Partial<Source>;
+    status?: Account['status'];
+  } = {}) {
+    const seeded: Account = { ...ACCOUNT, status: over.status ?? ACCOUNT.status };
+    const events: ConnectEvent[] = [];
+    const order: string[] = [];
+    let pulls = 0;
+    let readOnly = true;
+    const source = {
+      descriptor: { id: 'picky', name: 'Picky', documentTypes: ['t'], auth: 'none' },
+      connect: jest.fn(async () => ({ identifier: 'me@example.com' })),
+      reauthenticate: jest.fn(async () => {}),
+      manageFolders: jest.fn(async () => ({
+        config: { folderRoots: [{ id: 'a', name: 'Alpha' }] },
+        cursor: null,
+        archiveScopeRootIds: [],
+      })),
+      // eslint-disable-next-line no-empty-function, @typescript-eslint/no-empty-function
+      async *pull() {},
+      toDocument: () => null,
+      ...over.source,
+    } as unknown as Source;
+    const engine = {
+      connect: jest.fn(async (s: Source, auth: AuthChannel) => {
+        await s.connect(auth);
+        order.push('leader-adopted');
+        return { ...ACCOUNT, id: 'new1' } as Account;
+      }),
+      reconnect: jest.fn(async () => {
+        order.push('leader-committed');
+      }),
+      applyScope: jest.fn(async () => {
+        order.push('leader-scoped');
+        return { archived: 0 };
+      }),
+      remove: jest.fn(async () => {}),
+      session: () => ({
+        account: seeded,
+        signal: new AbortController().signal,
+        credentials: async () => null,
+        log: () => {},
+      }),
+      claimAccountFlow: () => {},
+      releaseAccountFlow: () => {},
+    };
+    const probe = jest.fn(over.probe ?? (async () => {}));
+    const platform = {
+      sources: { get: (id: string) => (id === 'picky' ? source : undefined) },
+      store: {
+        account: async (id: string) => {
+          if (id === ACCOUNT.id) return seeded;
+          return pulls >= (over.rowAfterPulls ?? 1) ? { ...ACCOUNT, id } : null;
+        },
+      },
+      logSink: { log: jest.fn() },
+      engine,
+      accountRelay: { probe },
+      sync: {
+        readOnly: () => readOnly,
+        ownsSource: () => over.owns ?? false,
+        ownsAccount: () => over.owns ?? false,
+        pullNow: jest.fn(async () => {
+          pulls += 1;
+          order.push('pulled');
+        }),
+      },
+    } as unknown as CorePlatform;
+    const broker = createConnectBroker(platform, (e) => events.push(e), {
+      settleMs: 2000,
+    });
+    const terminal = async () => {
+      for (let i = 0; i < 200; i += 1) {
+        const t = events.find((e) =>
+          ['done', 'error', 'reconnected', 'scope-saved'].includes(e.kind),
+        );
+        if (t) return t;
+        await wait(10);
+      }
+      throw new Error('no terminal event');
+    };
+    return {
+      broker,
+      events,
+      order,
+      engine,
+      probe,
+      source,
+      platform,
+      terminal,
+      promote: () => {
+        readOnly = false;
+      },
+    };
+  }
+
+  beforeEach(() => {
+    (runAccount as jest.Mock).mockClear();
+  });
+
+  it('a leader that cannot take the result ends connect before any sign-in', async () => {
+    const c = makeCopy({
+      probe: async () => {
+        throw new Error("Can't reach Server. Try again when it is online.");
+      },
+    });
+    c.broker.start('picky');
+    expect(await c.terminal()).toMatchObject({
+      kind: 'error',
+      msg: "Can't reach Server. Try again when it is online.",
+    });
+    expect(c.engine.connect).not.toHaveBeenCalled();
+    expect(c.source.connect).not.toHaveBeenCalled();
+  });
+
+  it('connect: the leader adopts, this copy pulls, then reports the account', async () => {
+    const c = makeCopy();
+    c.broker.start('picky');
+    expect(await c.terminal()).toMatchObject({
+      kind: 'done',
+      account: { id: 'new1' },
+    });
+    expect(c.probe).toHaveBeenCalledWith('picky');
+    expect(c.order).toEqual(['leader-adopted', 'pulled']);
+    expect(runAccount).not.toHaveBeenCalled();
+    const auth = c.engine.connect.mock.calls[0][1] as { signal?: AbortSignal };
+    expect(auth.signal).toBeInstanceOf(AbortSignal);
+  });
+
+  it('connect waits for the new row to arrive, pulling again', async () => {
+    const c = makeCopy({ rowAfterPulls: 2 });
+    c.broker.start('picky');
+    expect(await c.terminal()).toMatchObject({ kind: 'done' });
+    expect(c.order).toEqual(['leader-adopted', 'pulled', 'pulled']);
+  });
+
+  it('a cancel after the leader adopted removes nothing', async () => {
+    const c = makeCopy();
+    let flowId = '';
+    c.engine.connect.mockImplementationOnce(async () => {
+      c.broker.cancel(flowId);
+      return { ...ACCOUNT, id: 'new1' } as Account;
+    });
+    flowId = c.broker.start('picky').flowId;
+    expect(await c.terminal()).toMatchObject({ kind: 'done' });
+    expect(c.engine.remove).not.toHaveBeenCalled();
+  });
+
+  it('a device that starts leading during the sign-in starts the account itself', async () => {
+    const c = makeCopy();
+    c.engine.connect.mockImplementationOnce(async () => {
+      c.promote();
+      return { ...ACCOUNT, id: 'new1' } as Account;
+    });
+    c.broker.start('picky');
+    expect(await c.terminal()).toMatchObject({ kind: 'done' });
+    expect(runAccount).toHaveBeenCalledTimes(1);
+    expect(c.order).toEqual([]);
+  });
+
+  it('a device that starts leading before its turn in a group connects as a leader', async () => {
+    const c = makeCopy();
+    c.promote();
+    c.broker.start('picky');
+    expect(await c.terminal()).toMatchObject({ kind: 'done' });
+    expect(c.probe).not.toHaveBeenCalled();
+    expect(runAccount).toHaveBeenCalledTimes(1);
+  });
+
+  it('a source this copy owns connects here as before', async () => {
+    const c = makeCopy({ owns: true });
+    c.broker.start('picky');
+    expect(await c.terminal()).toMatchObject({ kind: 'done' });
+    expect(c.probe).not.toHaveBeenCalled();
+    expect(runAccount).toHaveBeenCalledTimes(1);
+    expect(c.order).toEqual(['leader-adopted']);
+  });
+
+  it('reconnect: asks the leader first, then pulls and reports reconnected', async () => {
+    const c = makeCopy();
+    c.broker.startReconnect(ACCOUNT.id);
+    expect(await c.terminal()).toMatchObject({
+      kind: 'reconnected',
+      accountId: ACCOUNT.id,
+    });
+    expect(c.probe).toHaveBeenCalledWith('picky');
+    expect(c.order).toEqual(['leader-committed', 'pulled']);
+    expect(runAccount).not.toHaveBeenCalled();
+  });
+
+  it('reconnect ends before the sign-in when the leader cannot take it', async () => {
+    const c = makeCopy({
+      probe: async () => {
+        throw new Error(
+          'Server needs an update before sources can be connected from this device.',
+        );
+      },
+    });
+    c.broker.startReconnect(ACCOUNT.id);
+    expect(await c.terminal()).toMatchObject({
+      kind: 'error',
+      msg: 'Server needs an update before sources can be connected from this device.',
+    });
+    expect(c.engine.reconnect).not.toHaveBeenCalled();
+  });
+
+  it('manage folders: the leader applies the scope and this copy pulls', async () => {
+    const c = makeCopy({ status: 'live' });
+    c.broker.startManageFolders(ACCOUNT.id);
+    expect(await c.terminal()).toMatchObject({
+      kind: 'scope-saved',
+      accountId: ACCOUNT.id,
+    });
+    expect(c.probe).toHaveBeenCalledWith('picky');
+    expect(c.engine.applyScope).toHaveBeenCalledWith(
+      ACCOUNT.id,
+      expect.objectContaining({ config: { folderRoots: [{ id: 'a', name: 'Alpha' }] } }),
+      JSON.stringify(ACCOUNT.config),
+    );
+    expect(c.order).toEqual(['leader-scoped', 'pulled']);
+  });
+});

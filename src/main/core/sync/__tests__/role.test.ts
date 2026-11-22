@@ -9,7 +9,8 @@ import Database from 'better-sqlite3';
 import { resumeHeld } from '../../boot';
 import { migrate } from '../../store/schema';
 import { createWriteTx } from '../../store/write-tx';
-import { followerLookup, gateEngine, readRoleSync, SyncReadOnly } from '../role';
+import { accountKey, createAccountOps } from '../account-ops';
+import { followerLookup, gateEngine, LeadsNow, readRoleSync, SyncReadOnly } from '../role';
 
 let dir: string;
 let db: Database.Database;
@@ -554,5 +555,262 @@ describe('gateEngine with device-owned accounts (step 3)', () => {
     gateEngine(e as never, () => true, owned);
     (e.attach as unknown as (w: unknown) => unknown)({});
     expect(real).not.toHaveBeenCalled();
+  });
+});
+
+describe('a read-only copy relays account changes', () => {
+  type Fn = (...a: unknown[]) => Promise<unknown>;
+  const owned = {
+    ownsAccount: (id: string) => id === 'mine',
+    ownsSource: (id: string) => id === 'local-folder',
+  };
+  const setup = (ro = true, withRelay = true) => {
+    const real = {
+      ...idle(),
+      connectAuth: jest.fn(async () => ({ sourceId: 'gmail', identifier: 'me' })),
+      adopt: jest.fn(async () => 'real-adopt'),
+      reauth: jest.fn(async () => ({ accountId: 'acc', credentials: { accessToken: 't' } })),
+      commitReauth: jest.fn(async () => 'real-commit'),
+    };
+    const relay = {
+      adopt: jest.fn(async () => ({ id: 'from-leader' })),
+      commitReauth: jest.fn(async () => undefined),
+      applyScope: jest.fn(async () => ({ archived: 3 })),
+      credentials: jest.fn(async () => null),
+    };
+    const e = { ...real } as unknown as Record<string, Fn>;
+    gateEngine(e as never, () => ro, owned, undefined, () => (withRelay ? (relay as never) : null));
+    return { real, relay, e };
+  };
+  const gmail = { descriptor: { id: 'gmail' } };
+
+  it('connect signs in here and the leader adopts the result', async () => {
+    const { real, relay, e } = setup();
+    await expect(e.connect(gmail, 'auth')).resolves.toEqual({ id: 'from-leader' });
+    expect(real.connectAuth).toHaveBeenCalledWith(gmail, 'auth');
+    expect(relay.adopt).toHaveBeenCalledWith({ sourceId: 'gmail', identifier: 'me' }, expect.anything());
+    expect(real.connect).not.toHaveBeenCalled();
+    expect(real.adopt).not.toHaveBeenCalled();
+  });
+
+  it('reconnect signs in here and the leader commits the login', async () => {
+    const { real, relay, e } = setup();
+    await e.reconnect('acc', 'auth', 'signal');
+    expect(real.reauth).toHaveBeenCalledWith('acc', 'auth', 'signal');
+    expect(relay.commitReauth).toHaveBeenCalledWith(
+      { accountId: 'acc', credentials: { accessToken: 't' } },
+      expect.objectContaining({ signal: 'signal' }),
+    );
+    expect(real.reconnect).not.toHaveBeenCalled();
+    expect(real.commitReauth).not.toHaveBeenCalled();
+  });
+
+  it('a folder-scope change goes to the leader', async () => {
+    const { real, relay, e } = setup();
+    await expect(e.applyScope('acc', { config: {} }, '{}')).resolves.toEqual({ archived: 3 });
+    expect(relay.applyScope).toHaveBeenCalledWith('acc', { config: {} }, '{}');
+    expect(real.applyScope).not.toHaveBeenCalled();
+  });
+
+  it('the sign-in halves are never refused', async () => {
+    const { real, e } = setup(true, false);
+    await e.connectAuth(gmail, 'auth');
+    await e.reauth('acc', 'auth');
+    expect(real.connectAuth).toHaveBeenCalled();
+    expect(real.reauth).toHaveBeenCalled();
+  });
+
+  it('the commit halves and the plain verbs called directly stay refused', async () => {
+    const { real, e } = setup();
+    await expect(e.adopt({ sourceId: 'gmail' })).rejects.toBeInstanceOf(SyncReadOnly);
+    await expect(e.commitReauth({ accountId: 'acc' })).rejects.toBeInstanceOf(SyncReadOnly);
+    for (const m of ['remove', 'pause', 'resume', 'updateConfig', 'setOption'])
+      await expect(e[m]('acc')).rejects.toBeInstanceOf(SyncReadOnly);
+    expect(real.adopt).not.toHaveBeenCalled();
+    expect(real.commitReauth).not.toHaveBeenCalled();
+  });
+
+  it('with no relay the three verbs refuse as before', async () => {
+    const { real, e } = setup(true, false);
+    await expect(e.connect(gmail, 'auth')).rejects.toBeInstanceOf(SyncReadOnly);
+    await expect(e.reconnect('acc', 'auth')).rejects.toBeInstanceOf(SyncReadOnly);
+    await expect(e.applyScope('acc', {}, '{}')).rejects.toBeInstanceOf(SyncReadOnly);
+    expect(real.connectAuth).not.toHaveBeenCalled();
+    expect(real.reauth).not.toHaveBeenCalled();
+  });
+
+  it('a device-owned source and account stay here', async () => {
+    const { real, relay, e } = setup();
+    real.connectAuth.mockResolvedValueOnce({ sourceId: 'local-folder', identifier: 'me' });
+    real.reauth.mockResolvedValueOnce({ accountId: 'mine', credentials: { accessToken: 't' } });
+    await e.connect({ descriptor: { id: 'local-folder' } }, 'auth');
+    await e.reconnect('mine', 'auth');
+    await e.applyScope('mine', {}, '{}');
+    expect(real.adopt).toHaveBeenCalledWith({ sourceId: 'local-folder', identifier: 'me' });
+    expect(real.commitReauth).toHaveBeenCalledWith({ accountId: 'mine', credentials: { accessToken: 't' } });
+    expect(real.applyScope).toHaveBeenCalled();
+    expect(relay.adopt).not.toHaveBeenCalled();
+    expect(relay.commitReauth).not.toHaveBeenCalled();
+    expect(relay.applyScope).not.toHaveBeenCalled();
+  });
+
+  it('a device that may write signs in and commits here', async () => {
+    const { real, relay, e } = setup(false);
+    await expect(e.connect(gmail, 'auth')).resolves.toBe('real-adopt');
+    await expect(e.reconnect('acc', 'auth')).resolves.toBe('real-commit');
+    expect(real.connectAuth).toHaveBeenCalled();
+    expect(real.adopt).toHaveBeenCalledWith({ sourceId: 'gmail', identifier: 'me' });
+    expect(real.commitReauth).toHaveBeenCalled();
+    expect(relay.adopt).not.toHaveBeenCalled();
+  });
+
+  it('a device that stops leading during the sign-in hands the result to the new leader', async () => {
+    let ro = false;
+    const real = {
+      ...idle(),
+      connectAuth: jest.fn(async () => {
+        ro = true;
+        return { sourceId: 'gmail', identifier: 'me' };
+      }),
+      adopt: jest.fn(async () => 'adopted-here'),
+    };
+    const relay = { adopt: jest.fn(async () => ({ id: 'from-leader' })) };
+    const e = { ...real } as unknown as Record<string, (...a: unknown[]) => Promise<unknown>>;
+    gateEngine(e as never, () => ro, owned, undefined, () => relay as never);
+    await expect(e.connect(gmail, {})).resolves.toEqual({ id: 'from-leader' });
+    expect(real.adopt).not.toHaveBeenCalled();
+  });
+
+  it('an engine without the two halves connects whole, as before', async () => {
+    const real = idle();
+    const e = { ...real } as unknown as Record<string, (...a: unknown[]) => Promise<unknown>>;
+    gateEngine(e as never, () => false, owned);
+    await expect(e.connect(gmail, 'auth')).resolves.toBe('real');
+    expect(real.connect).toHaveBeenCalled();
+  });
+
+  it('a session asks, on every call, whether the leader holds the login', async () => {
+    const real = { ...idle(), session: jest.fn((...a: unknown[]) => a) };
+    const relay = { credentials: jest.fn(async () => ({ accessToken: 'fresh' })) };
+    let ro = true;
+    const e = { ...real } as unknown as Record<string, (...a: unknown[]) => unknown>;
+    gateEngine(e as never, () => ro, owned, undefined, () => relay as never);
+    const made = e.session({ id: 'acc' }, 'sig', 'scope') as unknown[];
+    expect(made.slice(0, 3)).toEqual([{ id: 'acc' }, 'sig', 'scope']);
+    const ask = made[3] as () => Promise<unknown> | undefined;
+    await expect(ask()).resolves.toEqual({ accessToken: 'fresh' });
+    expect(relay.credentials).toHaveBeenCalledWith('acc');
+    // The same open session after this device started leading: it does it itself.
+    ro = false;
+    expect(ask()).toBeUndefined();
+    // And one opened while leading asks the leader once the device is a copy.
+    const later = (e.session({ id: 'acc' }, 'sig', 'scope') as unknown[])[3] as () => unknown;
+    expect(later()).toBeUndefined();
+    ro = true;
+    await expect(later()).resolves.toEqual({ accessToken: 'fresh' });
+    const own = (e.session({ id: 'mine' }, 'sig', 'scope') as unknown[])[3] as () => unknown;
+    expect(own()).toBeUndefined();
+  });
+
+  it('a device that starts leading during the sign-in commits the result itself', async () => {
+    let ro = true;
+    const real = {
+      ...idle(),
+      reauth: jest.fn(async () => {
+        ro = false;
+        return { accountId: 'acc', credentials: { accessToken: 't' } };
+      }),
+      commitReauth: jest.fn(async () => 'committed-here'),
+    };
+    const relay = { commitReauth: jest.fn(), adopt: jest.fn() };
+    const e = { ...real } as unknown as Record<string, (...a: unknown[]) => Promise<unknown>>;
+    gateEngine(e as never, () => ro, owned, undefined, () => relay as never);
+    await expect(e.reconnect('acc', 'auth')).resolves.toBe('committed-here');
+    expect(relay.commitReauth).not.toHaveBeenCalled();
+    expect(real.commitReauth).toHaveBeenCalledWith({ accountId: 'acc', credentials: { accessToken: 't' } });
+  });
+
+  it('a device that starts leading while the result waits for the leader commits it itself', async () => {
+    let ro = true;
+    const real = {
+      ...idle(),
+      connectAuth: jest.fn(async () => ({ sourceId: 'gmail', identifier: 'me' })),
+      adopt: jest.fn(async () => 'adopted-here'),
+    };
+    const relay = {
+      adopt: jest.fn(async (_c: unknown, ctx: { stillCopy(): boolean }) => {
+        expect(ctx.stillCopy()).toBe(true);
+        ro = false;
+        expect(ctx.stillCopy()).toBe(false);
+        throw new LeadsNow();
+      }),
+    };
+    const e = { ...real } as unknown as Record<string, (...a: unknown[]) => Promise<unknown>>;
+    gateEngine(e as never, () => ro, owned, undefined, () => relay as never);
+    await expect(e.connect({ descriptor: { id: 'gmail' } }, {})).resolves.toBe('adopted-here');
+    expect(real.adopt).toHaveBeenCalledWith({ sourceId: 'gmail', identifier: 'me' });
+  });
+
+  it('a commit whose turn comes after this device stopped leading saves nothing', async () => {
+    let ro = false;
+    const real = { ...idle(), commitReauth: jest.fn(async () => 'saved') };
+    const e = { ...real } as unknown as Record<string, (...a: unknown[]) => Promise<unknown>>;
+    gateEngine(e as never, () => ro, owned, undefined, undefined, async (_ref, fn) => {
+      ro = true; // demoted while it waited in the queue
+      return fn();
+    });
+    await expect(e.commitReauth({ accountId: 'acc' })).rejects.toBeInstanceOf(SyncReadOnly);
+    expect(real.commitReauth).not.toHaveBeenCalled();
+  });
+
+  it('a commit that runs here takes its place in the account queue', async () => {
+    const real = {
+      ...idle(),
+      adopt: jest.fn(async () => 'adopted'),
+      commitReauth: jest.fn(async () => 'committed'),
+    };
+    const refs: unknown[] = [];
+    const e = { ...real } as unknown as Record<string, (...a: unknown[]) => Promise<unknown>>;
+    gateEngine(e as never, () => false, owned, undefined, undefined, async (ref, fn) => {
+      refs.push(ref);
+      return fn();
+    });
+    await expect(e.adopt({ sourceId: 'gmail', identifier: 'me' })).resolves.toBe('adopted');
+    await e.commitReauth({ accountId: 'acc' });
+    await e.applyScope('acc', {}, '{}');
+    await e.pause('acc');
+    expect(refs).toEqual([
+      { source: 'gmail', identifier: 'me' },
+      { accountId: 'acc' },
+      { accountId: 'acc' },
+    ]);
+  });
+
+  it('a second Add of an account still being created waits for the first', async () => {
+    const order: string[] = [];
+    let open!: () => void;
+    const first = new Promise<void>((r) => {
+      open = r;
+    });
+    const real = {
+      ...idle(),
+      adopt: jest.fn(async (c: { n: string }) => {
+        order.push(`start ${c.n}`);
+        if (c.n === 'A') await first;
+        order.push(`end ${c.n}`);
+      }),
+    };
+    const ops = createAccountOps({ now: () => 0 });
+    const e = { ...real } as unknown as Record<string, (...a: unknown[]) => Promise<unknown>>;
+    gateEngine(e as never, () => false, owned, undefined, undefined, (ref, fn) =>
+      ops.serial('source' in ref ? accountKey(ref.source, ref.identifier) : ref.accountId, fn),
+    );
+    const a = e.adopt({ sourceId: 'gmail', identifier: 'me', n: 'A' });
+    const b = e.adopt({ sourceId: 'gmail', identifier: 'me', n: 'B' });
+    await new Promise((r) => setTimeout(r, 0));
+    expect(order).toEqual(['start A']);
+    open();
+    await Promise.all([a, b]);
+    expect(order).toEqual(['start A', 'end A', 'start B', 'end B']);
   });
 });
