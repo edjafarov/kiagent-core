@@ -40,6 +40,7 @@ import type {
 import { INVOKE_CHANNELS } from '@shared/ipc';
 import { describeResetOutcome } from '@shared/reset-outcome';
 import { windowChrome } from './window-chrome';
+import { installQuitSignalHandlers } from './quit-signals';
 
 import { createConnectBroker } from './auth/connect-broker';
 import { installCrashHandlers, type CrashDeps } from './crash-handlers';
@@ -963,7 +964,10 @@ function registerIpc(
   // on the leader each runs in the account's queue, once per operation id.
   const { accountOps } = p;
   const accountChannelRunners = wrapAccountChannels(
-    handlers as unknown as Record<string, ((req: never) => unknown) | undefined>,
+    handlers as unknown as Record<
+      string,
+      ((req: never) => unknown) | undefined
+    >,
     {
       sync: p.sync,
       ops: accountOps,
@@ -1659,6 +1663,7 @@ app
       mainApiForPlugin: (callerPluginId) =>
         buildMainApi({
           callerPluginId,
+          patchAppState: (partial) => patchState(partial),
           store: p.store,
           fileRoots,
           persistFileRoots,
@@ -2027,6 +2032,7 @@ app.on('window-all-closed', () => {
 // quit can't hang: LlamaServer.stop escalates to SIGKILL after a grace window,
 // and localAsr.dispose() awaits the signalled whisper-cli child whose own
 // SIGTERM→SIGKILL escalation is capped at ~2s (whisper-cli.ts).
+installQuitSignalHandlers(app);
 app.on('before-quit', (event) => {
   if (quitting) return;
   event.preventDefault();
