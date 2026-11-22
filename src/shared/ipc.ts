@@ -28,6 +28,12 @@ import type {
   UiContribution,
 } from './contracts';
 import type { AttentionItemWire } from './attention';
+import {
+  PRODUCT_INVOKE_CHANNELS,
+  PRODUCT_PUSH_CHANNELS,
+  type ProductInvokes,
+  type ProductPushes,
+} from './composition';
 import type { ExtErrorCode } from './source-errors';
 
 /**
@@ -445,7 +451,8 @@ export interface OutboxSendResult {
 }
 
 /** invoke(channel, payload) → response. */
-export interface Invokes {
+// Core's channels, plus the product's (src/shared/composition.ts).
+export interface Invokes extends ProductInvokes {
   'app:get-state': { req: void; res: AppStatePush };
 
   'sources:list': { req: void; res: SourceDescriptor[] };
@@ -851,7 +858,7 @@ export interface Invokes {
 }
 
 /** main → renderer broadcasts. */
-export interface Pushes {
+export interface Pushes extends ProductPushes {
   'push:app-state': AppStatePush;
   'push:connect': ConnectEvent;
   'push:logs': LogRecord[];
@@ -880,14 +887,25 @@ export interface Pushes {
 export type InvokeChannel = keyof Invokes;
 export type PushChannel = keyof Pushes;
 
+/** A channel a product extension answers: main registers no handler. */
+export type ProductInvokeChannel = keyof ProductInvokes;
+/** A channel main itself answers. */
+export type CoreInvokeChannel = Exclude<InvokeChannel, ProductInvokeChannel>;
+
+export function isProductInvokeChannel(
+  channel: InvokeChannel,
+): channel is ProductInvokeChannel {
+  return Object.prototype.hasOwnProperty.call(PRODUCT_INVOKE_CHANNELS, channel);
+}
+
 /**
- * The handler main must supply for every declared channel. Both IPC seams
+ * The handler main must supply for every channel it answers. Both IPC seams
  * (`updaterInvokeHandlers`, `outboundInvokeHandlers`) return `Pick`s of this
  * so their slices compose into main's one exhaustive map; it lives here
  * rather than in main.ts so neither seam has to import from the entrypoint.
  */
 export type InvokeHandlers = {
-  [C in InvokeChannel]: (
+  [C in CoreInvokeChannel]: (
     req: Invokes[C]['req'],
   ) => Invokes[C]['res'] | Promise<Invokes[C]['res']>;
 };
@@ -908,6 +926,7 @@ export type InvokeHandlers = {
  * above it holds, and preload only ever builds Sets from these.
  */
 const INVOKE_CHANNEL_MAP = {
+  ...PRODUCT_INVOKE_CHANNELS,
   'app:get-state': 0,
   'sources:list': 0,
   'sources:count-files': 0,
@@ -1006,6 +1025,7 @@ export const INVOKE_CHANNELS = Object.keys(
 ) as readonly InvokeChannel[];
 
 const PUSH_CHANNEL_MAP = {
+  ...PRODUCT_PUSH_CHANNELS,
   'push:app-state': 0,
   'push:connect': 0,
   'push:logs': 0,

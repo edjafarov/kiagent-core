@@ -31,13 +31,13 @@ import type {
 import type {
   AppStatePush,
   ConnectEvent,
-  InvokeChannel,
+  CoreInvokeChannel,
   InvokeHandlers,
   Invokes,
   PushChannel,
   Pushes,
 } from '@shared/ipc';
-import { INVOKE_CHANNELS } from '@shared/ipc';
+import { INVOKE_CHANNELS, isProductInvokeChannel } from '@shared/ipc';
 import { describeResetOutcome } from '@shared/reset-outcome';
 import { windowChrome } from './window-chrome';
 import { installQuitSignalHandlers } from './quit-signals';
@@ -1026,7 +1026,7 @@ function registerIpc(
   // `handlers` cannot be missing one of them without failing tsc. The
   // generic `dispatch` keeps `req` tied to its channel instead of collapsing
   // to a union call signature at the indexing site.
-  const dispatch = <C extends InvokeChannel>(
+  const dispatch = <C extends CoreInvokeChannel>(
     channel: C,
     req: Invokes[C]['req'],
   ) => handlers[channel](req);
@@ -1047,6 +1047,9 @@ function registerIpc(
     platform: extensions,
   });
   for (const channel of INVOKE_CHANNELS) {
+    // A product extension registers its own handler for these when it
+    // activates; a second registration would throw.
+    if (isProductInvokeChannel(channel)) continue;
     ipcMain.handle(
       channel,
       channel === 'ext:invoke'

@@ -26,3 +26,23 @@ export const SOURCES_POLICY: {
   readonly hidden: readonly string[];
   readonly showGetStarted: boolean;
 } = { hidden: [], showGetStarted: true };
+
+/** IPC channels the product's extensions answer themselves, with their
+ *  request and response types. The window may call them; core registers no
+ *  handler for them (the extension does, when it activates). */
+export type ProductInvokes = Record<never, never>;
+
+/** Every `ProductInvokes` channel, as data (the values carry nothing). */
+export const PRODUCT_INVOKE_CHANNELS = {} as const satisfies Record<
+  keyof ProductInvokes,
+  0
+>;
+
+/** Push channels the product's extensions send to the window. */
+export type ProductPushes = Record<never, never>;
+
+/** Every `ProductPushes` channel, as data. */
+export const PRODUCT_PUSH_CHANNELS = {} as const satisfies Record<
+  keyof ProductPushes,
+  0
+>;
