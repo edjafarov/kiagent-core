@@ -1390,6 +1390,37 @@ export interface ExtensionInference extends Inference {
   } | null>;
 }
 
+/** Another device of the account answers background calls of some kinds
+ *  for this one (a leader that is unfit for them). The plane asks it in place
+ *  of "the first ready local provider"; task routes and interactive calls are
+ *  never its business. */
+export interface InferenceLender {
+  /** This kind is handed to another device. */
+  takes(kind: InferenceKind): boolean;
+  /** A helper is connected for it right now. */
+  ready(kind: InferenceKind): boolean;
+  /** Who answers this kind: the helper's own provider id and model. Null =
+   *  never known. */
+  identity(kind: InferenceKind): { providerId: string; modelId: string } | null;
+  /** Rejects with `LaneClosedError` when no helper can take it. The identity
+   *  returned is the one that actually answered. */
+  handle(call: {
+    kind: InferenceKind;
+    payload: unknown;
+    signal?: AbortSignal;
+  }): Promise<{ value: unknown; providerId: string; modelId: string }>;
+  /** Fired when takes/ready/identity may have changed. */
+  onChange(fn: () => void): () => void;
+}
+
+/** What this device can run itself, per kind. */
+export interface InferenceFitness {
+  kind: InferenceKind;
+  local: 'ready' | 'possible' | 'none';
+  providerId: string | null;
+  modelId: string | null;
+}
+
 export type ProviderStatus =
   | 'ready'
   | 'standby'
