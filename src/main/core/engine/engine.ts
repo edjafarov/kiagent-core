@@ -26,6 +26,7 @@ import type {
   Worker,
   WorkerSession,
   MessageEvidenceReadInput,
+  Connected,
 } from '@shared/contracts';
 
 import { sourceErrorCode } from '@shared/source-errors';
@@ -525,6 +526,20 @@ export function createEngine(deps: EngineDeps): Engine & {
     auth: AuthChannel,
     signal?: AbortSignal,
   ): Promise<void>;
+  /** The two halves of `connect` and of `reconnect`. The sign-in halves write
+   *  nothing, so a read-only copy runs them; the commit halves run on the
+   *  device that writes (a copy sends them to the leader). */
+  connectAuth(source: Source, auth: AuthChannel): Promise<Connected>;
+  adopt(c: Connected): Promise<Account>;
+  reauth(
+    accountId: AccountId,
+    auth: AuthChannel,
+    signal?: AbortSignal,
+  ): Promise<{ accountId: AccountId; credentials: Credentials | null }>;
+  commitReauth(r: {
+    accountId: AccountId;
+    credentials: Credentials | null;
+  }): Promise<void>;
   /** Apply a folder-scope edit the source computed: stop the loop, then ONE
    *  store transaction (config + cursor + archival of the roots the SOURCE
    *  named + a `changes` row per archived document) and a restart.
@@ -1095,6 +1110,13 @@ export function createEngine(deps: EngineDeps): Engine & {
       }
     },
     async connect(source: Source, auth: AuthChannel): Promise<Account> {
+      return engine.adopt(await engine.connectAuth(source, auth));
+    },
+
+    /** The sign-in half of connect: everything the person does. It writes
+     *  nothing, so a read-only copy runs it and hands the result to the
+     *  leader's `adopt`. */
+    async connectAuth(source: Source, auth: AuthChannel): Promise<Connected> {
       // Capture credentials the flow produces so the PLATFORM persists them —
       // the source never stores a blob.
       let captured: Credentials | null = null;
@@ -1120,8 +1142,26 @@ export function createEngine(deps: EngineDeps): Engine & {
         },
       };
       const connected = await source.connect(wrapped);
-      const { identifier } = connected;
-      let { config } = connected;
+      if (connected.credentials) {
+        captured = { ...(captured ?? {}), ...connected.credentials };
+      }
+      return {
+        sourceId: source.descriptor.id,
+        identifier: connected.identifier,
+        config: connected.config,
+        credentials: captured,
+        usedPicker,
+      };
+    },
+
+    /** The commit half of connect: the account row, its login, and the old
+     *  loop stopped. Only a device that may write runs it. */
+    async adopt(c: Connected): Promise<Account> {
+      const source = deps.sources.get(c.sourceId);
+      if (!source) throw new Error(`unknown source: ${c.sourceId}`);
+      const { identifier, usedPicker } = c;
+      let { config } = c;
+      const captured = c.credentials;
       // Re-Adding a known folder-scoped account through a connect that shows
       // NO picker (Gmail, MS365 write fixed defaults) must not reset the
       // user's folder selection: the upsert below replaces config wholesale,
@@ -1157,9 +1197,6 @@ export function createEngine(deps: EngineDeps): Engine & {
       // reconcile pass may legitimately exceed the mass-archive breaker.
       grantAllowance(account.id, 'full');
       await running.get(`account:${account.id}`)?.stop();
-      if (connected.credentials) {
-        captured = { ...(captured ?? {}), ...connected.credentials };
-      }
       if (captured) await store.vault.save(account.id, captured);
       logs.log(
         `source:${source.descriptor.id}`,
@@ -1616,6 +1653,17 @@ export function createEngine(deps: EngineDeps): Engine & {
       auth: AuthChannel,
       signal?: AbortSignal,
     ): Promise<void> {
+      await engine.commitReauth(await engine.reauth(accountId, auth, signal));
+    },
+
+    /** The sign-in half of reconnect: fully cancellable, writes nothing. A
+     *  read-only copy runs it and hands the login to the leader's
+     *  `commitReauth`. */
+    async reauth(
+      accountId: AccountId,
+      auth: AuthChannel,
+      signal?: AbortSignal,
+    ): Promise<{ accountId: AccountId; credentials: Credentials | null }> {
       const account = await store.account(accountId);
       if (!account) throw new Error(`unknown account: ${accountId}`);
       const source = deps.sources.get(account.source);
@@ -1654,6 +1702,18 @@ export function createEngine(deps: EngineDeps): Engine & {
       // throws and the account is exactly as it was.
       await source.reauthenticate(account, wrapped);
       if (signal?.aborted) throw new Error('reconnect cancelled');
+      return { accountId, credentials: captured };
+    },
+
+    /** The commit half of reconnect: from the point of no return on. */
+    async commitReauth(r: {
+      accountId: AccountId;
+      credentials: Credentials | null;
+    }): Promise<void> {
+      const { accountId } = r;
+      const captured = r.credentials;
+      const account = await store.account(accountId);
+      if (!account) throw new Error(`unknown account: ${accountId}`);
 
       // ── POINT OF NO RETURN (C-28.3) ──
       // From the line below, `signal` is deliberately NOT consulted again, and

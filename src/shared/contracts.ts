@@ -2574,6 +2574,19 @@ export interface Handle {
   stop(): Promise<void>;
 }
 
+/** What the sign-in half of a connect produced: enough for the device that
+ *  writes to create the account. A read-only copy sends it to the leader. */
+export interface Connected {
+  sourceId: string;
+  identifier: string;
+  config: Record<string, unknown> | undefined;
+  /** The login the flow captured, merged with what the source returned. */
+  credentials: Credentials | null;
+  /** The person chose folders in this flow, so a known account's scope is
+   *  replaced, not kept. */
+  usedPicker: boolean;
+}
+
 /** The one state machine. Owns transactional commits, parent resolution,
  *  status transitions, retry/backoff, cadence, and feeding workers +
  *  projections. Commit-path pipeline: convert → detect languages → index. */
