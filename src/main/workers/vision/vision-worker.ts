@@ -209,6 +209,9 @@ export function createVisionWorker(deps: {
     } catch (err) {
       // Ordinary scheduling: the window closed mid-run. Never a failure.
       if (err instanceof LaneClosedError) return 'defer';
+      // The model answering changed under the call (another device took over
+      // the work, or stopped): scheduling too, never a VLM failure.
+      if ((err as Error)?.name === 'ModelChangedError') return 'defer';
       // A see provider is downloading / will auto-install: wait for it.
       if (err instanceof NoProviderError && session.mayBecomeReady('see'))
         return 'defer';

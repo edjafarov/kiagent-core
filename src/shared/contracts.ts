@@ -1383,7 +1383,13 @@ export interface ExtensionInference extends Inference {
    *  it. `null` when no ready provider supports the kind; never throws. */
   /** Text → vectors on the background lane (never interactive). */
   embed(texts: string[], opts?: { task?: string }): Promise<EmbedResult>;
-  describe(kind: InferenceKind): Promise<{
+  /** `opts.lane` is the lane the caller will execute on (default
+   *  interactive): a background loop names its lane so it sees the model of
+   *  another device that answers this one's background work. */
+  describe(
+    kind: InferenceKind,
+    opts?: { lane?: Lane },
+  ): Promise<{
     providerId: string;
     modelId: string;
     generation: number;
@@ -1411,6 +1417,16 @@ export interface InferenceLender {
   }): Promise<{ value: unknown; providerId: string; modelId: string }>;
   /** Fired when takes/ready/identity may have changed. */
   onChange(fn: () => void): () => void;
+}
+
+/** A device's own AI ability and free compute, as the sync surface reports it. */
+export interface AiFitness {
+  /** Few cores, little memory, or a CPU-only model. */
+  weak: boolean;
+  onPower: boolean;
+  /** The background lane is closed here, or a local call is executing. */
+  busy: boolean;
+  kinds: InferenceFitness[];
 }
 
 /** What this device can run itself, per kind. */
@@ -2234,6 +2250,17 @@ export interface CapSurfaces {
       discardQueued(rowId: number): Promise<void>;
       /** Primary keys the swap kept for an owner-capture table. */
       retained(table: string): Promise<string[]>;
+      /** In-process only (it takes functions): another device of the account
+       *  answers this one's background AI calls. Null removes it. */
+      setAiLender(l: InferenceLender | null): Promise<void>;
+      /** What this device can run itself, and whether it is free to. */
+      aiFitness(): Promise<AiFitness>;
+      /** Answers one call lent by the leader, on this device's own
+       *  providers (never a remote one). */
+      runAiCall(call: {
+        kind: InferenceKind;
+        payload: unknown;
+      }): Promise<{ value: unknown; providerId: string; modelId: string }>;
     };
   };
   /** Host-initiated only — no extension→host surface. */
@@ -2291,6 +2318,9 @@ export const SYNC_SURFACE_METHODS = [
   'retained',
   'queuedSettings',
   'discardQueued',
+  'setAiLender',
+  'aiFitness',
+  'runAiCall',
 ] as const satisfies readonly (keyof SyncSurface)[];
 
 // Compile-time cover check: a key added to the type but not the list fails here.

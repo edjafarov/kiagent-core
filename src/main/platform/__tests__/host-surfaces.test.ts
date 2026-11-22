@@ -661,6 +661,27 @@ describe('buildSurfaces', () => {
     expect(describeFn).toHaveBeenCalledWith('complete');
   });
 
+  it('describe names the lane the caller executes on', async () => {
+    const describeFn = jest.fn(async () => null);
+    const { deps } = makeDeps({
+      inference: {
+        complete: async () => '',
+        see: async () => '',
+        read: async () => '',
+        hear: async () => '',
+        lane: async () => 'open' as const,
+        describe: describeFn,
+      },
+    });
+    const { surfaces } = buildSurfaces(deps);
+    await surfaces.inference.describe('complete', { lane: 'background' });
+    expect(describeFn).toHaveBeenCalledWith(
+      'complete',
+      undefined,
+      'background',
+    );
+  });
+
   it('describe resolves null when no provider is ready', async () => {
     const { deps } = makeDeps({
       inference: {
