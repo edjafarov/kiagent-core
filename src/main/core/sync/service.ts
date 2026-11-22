@@ -168,6 +168,10 @@ export interface SyncService {
   setRunners(r: ForwardRunners | null): void;
   /** Another device answers this one's background AI calls (null: none). */
   setAiLender(l: InferenceLender | null): Promise<void>;
+  setPuller(f: (() => Promise<void>) | null): Promise<void>;
+  /** Asks for a pull from the leader now and waits for it; with no puller
+   *  installed, or one that fails, it resolves and the next pull brings it. */
+  pullNow(): Promise<void>;
   aiFitness(): Promise<AiFitness>;
   /** Answers one AI call lent by the leader, on this device's own providers. */
   runAiCall(call: {
@@ -479,6 +483,7 @@ export function createSyncService(deps: SyncServiceDeps): SyncService {
   const appliedListeners: ((tables: string[], meta: AppliedMeta) => void)[] =
     [];
   let forwarder: Forwarder | null = null;
+  let puller: (() => Promise<void>) | null = null;
   let runners: ForwardRunners | null = null;
   const dispatch = async (req: ForwardRequest): Promise<ForwardResult> => {
     if (!runners)
@@ -748,6 +753,16 @@ export function createSyncService(deps: SyncServiceDeps): SyncService {
     },
     setAiLender: async (l) => {
       deps.ai?.setLender(l);
+    },
+    setPuller: async (f) => {
+      puller = f;
+    },
+    pullNow: async () => {
+      try {
+        await puller?.();
+      } catch (err) {
+        log('warn', `sync: a requested pull failed: ${String(err)}`);
+      }
     },
     aiFitness: async () =>
       deps.ai?.fitness() ?? {

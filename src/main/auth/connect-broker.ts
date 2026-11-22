@@ -41,7 +41,11 @@ function covers(creds: Credentials, requested: string[]): boolean {
 export function createConnectBroker(
   platform: CorePlatform,
   send: (event: ConnectEvent) => void,
-  brokerOpts?: { cancelGraceMs?: number },
+  brokerOpts?: {
+    cancelGraceMs?: number;
+    /** How long a copy waits for its pull after the leader took a change. */
+    settleMs?: number;
+  },
 ) {
   const oauthProfiles = new Map<string, OAuthProfile>();
   /** How long a CANCELLED account flow is given to settle on its own before
@@ -82,6 +86,40 @@ export function createConnectBroker(
     string,
     { cancelled: boolean; abort: AbortController }
   >();
+
+  // ── On a read-only copy ───────────────────────────────────────────────
+  // The person's part of a flow runs here; the leader takes what it produced
+  // (the engine gate relays the commit). So before anything interactive the
+  // leader is asked whether it can take the result, and after it did, this
+  // copy pulls so the change shows without waiting for the next sync.
+  const relayedSource = (sourceId: string): boolean =>
+    !!platform.sync?.readOnly() && !platform.sync.ownsSource(sourceId);
+  const relayedAccount = (accountId: string): boolean =>
+    !!platform.sync?.readOnly() && !platform.sync.ownsAccount(accountId);
+  const settleMs = brokerOpts?.settleMs ?? 10_000;
+  const within = async (work: Promise<unknown>, ms: number): Promise<void> => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    await Promise.race([
+      work.catch(() => undefined),
+      new Promise<void>((resolve) => {
+        timer = setTimeout(resolve, ms);
+        timer.unref?.();
+      }),
+    ]);
+    if (timer) clearTimeout(timer);
+  };
+  /** Pulls from the leader, and for a new account waits until its row is
+   *  here. Bounded: a late pull changes nothing, the next one brings it. */
+  const pullFromLeader = async (newAccountId?: AccountId): Promise<void> => {
+    const deadline = Date.now() + settleMs;
+    await within(platform.sync.pullNow(), settleMs);
+    if (!newAccountId) return;
+    while (Date.now() < deadline) {
+      if (await platform.store.account(newAccountId).catch(() => null)) return;
+      await new Promise((r) => setTimeout(r, 250));
+      await within(platform.sync.pullNow(), Math.max(0, deadline - Date.now()));
+    }
+  };
 
   /** Reject-and-forget every pending prompt/picker belonging to `flowId`. */
   function sweepFlow(flowId: string, reason: string): void {
@@ -288,7 +326,10 @@ export function createConnectBroker(
     }
     const flow = { cancelled: false, abort: new AbortController() };
     flows.set(flowId, flow);
-    const auth: AuthChannel = {
+    const relayed = relayedSource(sourceId);
+    const auth: AuthChannel & { signal: AbortSignal } = {
+      // A copy's finished sign-in waits for the leader; a cancel ends the wait.
+      signal: flow.abort.signal,
       async oauth(scopes: string[]): Promise<Credentials> {
         send({ flowId, kind: 'status', msg: 'Waiting for sign-in…' });
         return oauth(scopes, flow.abort.signal);
@@ -350,7 +391,18 @@ export function createConnectBroker(
       try {
         await after.catch(() => {});
         if (flow.cancelled) throw new Error('connect flow cancelled');
+        // No browser opens for a sign-in the leader could not take.
+        if (relayed) await platform.accountRelay.probe(sourceId);
+        if (flow.cancelled) throw new Error('connect flow cancelled');
         const account = await platform.engine.connect(source, auth);
+        if (relayed) {
+          // The leader has the account and runs it. A cancel that lands now
+          // removes nothing: the leader may have matched an account that
+          // already existed, with its documents.
+          await pullFromLeader(account.id);
+          send({ flowId, kind: 'done', account });
+          return;
+        }
         // A cancel that landed while connect() was mid-flight INSIDE the
         // source (post-answer credential validation, QR pairing) had no
         // broker-held promise to reject — connect() completed and
@@ -509,7 +561,15 @@ export function createConnectBroker(
               return answers;
             },
           };
+          if (relayedAccount(account.id))
+            await platform.accountRelay.probe(account.source);
+          if (flow.cancelled) throw new Error('reconnect cancelled');
           await platform.engine.reconnect(account.id, auth, flow.abort.signal);
+          if (relayedAccount(account.id)) {
+            // The leader saved the login and restarted the account.
+            await pullFromLeader();
+            return { flowId, kind: 'reconnected', accountId: account.id };
+          }
           // **C-28.3 — there is deliberately no `if (flow.cancelled) throw`
           // here, and its absence is the fix.** `engine.reconnect` RESOLVES
           // only after its point of no return: the loop is stopped, the
@@ -553,6 +613,8 @@ export function createConnectBroker(
             throw new Error(
               'reconnect this source before managing its folders',
             );
+          if (relayedAccount(accountId))
+            await platform.accountRelay.probe(account.source);
           // Snapshot BEFORE the picker opens: this is the "did the world change
           // while the user was clicking" question, and — **C-28.2** — it is
           // also the value handed to `applyScope` as the store's CAS baseline.
@@ -597,6 +659,7 @@ export function createConnectBroker(
           // such property in this train); that decision lives in `applyScope`,
           // not here, so the broker stays a courier.
           await platform.engine.applyScope(accountId, update, configAtOpen);
+          if (relayedAccount(accountId)) await pullFromLeader();
           const before = new Set(folderRootIds(account.config));
           const after = folderRootIds(update.config);
           const retained = after.filter((id) => before.has(id)).length;
