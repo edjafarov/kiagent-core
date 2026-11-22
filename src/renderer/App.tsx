@@ -2,6 +2,7 @@ import React from 'react';
 import { useAppGate } from '@renderer/state/app-state';
 import { useNavigation } from '@renderer/state/navigation';
 import {
+  INITIAL_VIEW,
   ROUTE_META,
   ViewContext,
   isExtView,
@@ -10,6 +11,7 @@ import {
   type View,
   type ViewParams,
 } from '@renderer/state/view';
+import { SOURCES_POLICY } from '@shared/composition';
 import type { AppState } from '@shared/contracts';
 import { TitleBar } from '@renderer/components/TitleBar';
 import { Sidebar } from '@renderer/components/Sidebar';
@@ -67,7 +69,7 @@ function selectShellGate(s: AppState | null) {
 export default function App(): React.ReactElement {
   const gate = useAppGate(selectShellGate);
 
-  const nav = useNavigation<View, ViewParams>('sources', resolveInitialView);
+  const nav = useNavigation<View, ViewParams>(INITIAL_VIEW, resolveInitialView);
 
   // Gate 1: nothing loaded yet.
   if (!gate.loaded) {
@@ -103,7 +105,10 @@ export default function App(): React.ReactElement {
     <ViewContext.Provider value={nav}>
       <InstallLinks />
       <IconSprite />
-      <SourceDescriptorsProvider>
+      <SourceDescriptorsProvider
+        hidden={SOURCES_POLICY.hidden}
+        showGetStarted={SOURCES_POLICY.showGetStarted}
+      >
         <AppShell sidebar={<Sidebar />}>
           <React.Fragment key={`${view}:${resolved?.epoch ?? 0}`}>
             {frame === 'page' ? (
