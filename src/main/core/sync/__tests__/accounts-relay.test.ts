@@ -198,15 +198,21 @@ describe('the leader side', () => {
     const claims = new Map<string, string>();
     const rows: Account[] = [];
     const engine = {
-      adopt: jest.fn(async (c: Connected) => {
+      adopt: jest.fn(async (c: Connected, started?: (a: Account) => void) => {
         const a = account(`acc-${rows.length + 1}`, {
           source: c.sourceId,
           identifier: c.identifier,
         });
         rows.push(a);
+        started?.(a);
         return a;
       }),
-      commitReauth: jest.fn(async () => undefined),
+      commitReauth: jest.fn(
+        async (r: { accountId: string }, started?: (a: Account) => void) => {
+          const row = rows.find((x) => x.id === r.accountId);
+          if (row) started?.(row);
+        },
+      ),
       applyScope: jest.fn(async () => ({ archived: 1 })),
       claimAccountFlow: (id: AccountId, flow: string) => {
         const held = claims.get(id);
@@ -247,7 +253,7 @@ describe('the leader side', () => {
       opId: 'o1',
       connected,
     })) as Account;
-    expect(engine.adopt).toHaveBeenCalledWith(connected);
+    expect(engine.adopt).toHaveBeenCalledWith(connected, expect.any(Function));
     expect(started.map((s) => s.id)).toEqual([a.id]);
   });
 
@@ -313,10 +319,13 @@ describe('the leader side', () => {
       accountId: 'a1',
       credentials: { accessToken: 't' },
     });
-    expect(engine.commitReauth).toHaveBeenCalledWith({
+    expect(engine.commitReauth).toHaveBeenCalledWith(
+      {
       accountId: 'a1',
       credentials: { accessToken: 't' },
-    });
+    },
+      expect.any(Function),
+    );
     expect(started.map((s) => s.id)).toEqual(['a1']);
     expect(claims.size).toBe(0);
   });

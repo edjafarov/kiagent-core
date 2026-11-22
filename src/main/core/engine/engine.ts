@@ -541,16 +541,19 @@ export function createEngine(deps: EngineDeps): Engine & {
    *  nothing, so a read-only copy runs them; the commit halves run on the
    *  device that writes (a copy sends them to the leader). */
   connectAuth(source: Source, auth: AuthChannel): Promise<Connected>;
-  adopt(c: Connected): Promise<Account>;
+  /** `started` runs last, inside the same step as the commit: a caller that
+   *  restarts the account passes it, so nothing queued behind the commit (a
+   *  Remove) can run between the commit and the restart. */
+  adopt(c: Connected, started?: (account: Account) => void): Promise<Account>;
   reauth(
     accountId: AccountId,
     auth: AuthChannel,
     signal?: AbortSignal,
   ): Promise<{ accountId: AccountId; credentials: Credentials | null }>;
-  commitReauth(r: {
-    accountId: AccountId;
-    credentials: Credentials | null;
-  }): Promise<void>;
+  commitReauth(
+    r: { accountId: AccountId; credentials: Credentials | null },
+    started?: (account: Account) => void,
+  ): Promise<void>;
   /** Apply a folder-scope edit the source computed: stop the loop, then ONE
    *  store transaction (config + cursor + archival of the roots the SOURCE
    *  named + a `changes` row per archived document) and a restart.
@@ -1171,7 +1174,10 @@ export function createEngine(deps: EngineDeps): Engine & {
 
     /** The commit half of connect: the account row, its login, and the old
      *  loop stopped. Only a device that may write runs it. */
-    async adopt(c: Connected): Promise<Account> {
+    async adopt(
+      c: Connected,
+      started?: (account: Account) => void,
+    ): Promise<Account> {
       const source = deps.sources.get(c.sourceId);
       if (!source) throw new Error(`unknown source: ${c.sourceId}`);
       const { identifier, usedPicker } = c;
@@ -1218,6 +1224,7 @@ export function createEngine(deps: EngineDeps): Engine & {
         'info',
         `connected ${identifier}`,
       );
+      started?.(account);
       return account;
     },
 
@@ -1721,10 +1728,10 @@ export function createEngine(deps: EngineDeps): Engine & {
     },
 
     /** The commit half of reconnect: from the point of no return on. */
-    async commitReauth(r: {
-      accountId: AccountId;
-      credentials: Credentials | null;
-    }): Promise<void> {
+    async commitReauth(
+      r: { accountId: AccountId; credentials: Credentials | null },
+      started?: (account: Account) => void,
+    ): Promise<void> {
       const { accountId } = r;
       const captured = r.credentials;
       const account = await store.account(accountId);
@@ -1794,6 +1801,10 @@ export function createEngine(deps: EngineDeps): Engine & {
         'info',
         `reconnected ${account.identifier}`,
       );
+      if (started) {
+        const fresh = await store.account(accountId);
+        if (fresh) started(fresh);
+      }
     },
 
     async applyScope(

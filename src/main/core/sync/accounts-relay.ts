@@ -170,11 +170,11 @@ const className = (err: unknown): string => {
 
 export interface LeaderRunnerDeps {
   engine: {
-    adopt(c: Connected): Promise<Account>;
-    commitReauth(r: {
-      accountId: AccountId;
-      credentials: Credentials | null;
-    }): Promise<void>;
+    adopt(c: Connected, started?: (account: Account) => void): Promise<Account>;
+    commitReauth(
+      r: { accountId: AccountId; credentials: Credentials | null },
+      started?: (account: Account) => void,
+    ): Promise<void>;
     applyScope(
       accountId: AccountId,
       update: FolderScopeUpdate,
@@ -260,11 +260,11 @@ export function createLeaderRunners(
       const connected = c as unknown as Connected;
       const key = accountKey(connected.sourceId, connected.identifier);
       return relayed(req.opId, key, () =>
-        guarded('adopt', async () => {
-          const account = await d.engine.adopt(connected);
-          d.runAccount(account);
-          return account;
-        }),
+        // The restart happens inside the engine's commit step, so a Remove
+        // queued behind it cannot run between the commit and the restart.
+        guarded('adopt', () =>
+          d.engine.adopt(connected, (account) => d.runAccount(account)),
+        ),
       );
     },
 
@@ -282,11 +282,11 @@ export function createLeaderRunners(
       const key = await accountKeyOf(d.account, accountId);
       return relayed(opId, key, () =>
         guarded('commit-reauth', () =>
-          claimed(accountId, opId, async () => {
-            await d.engine.commitReauth({ accountId, credentials });
-            const fresh = await d.account(accountId);
-            if (fresh) d.runAccount(fresh);
-          }),
+          claimed(accountId, opId, () =>
+            d.engine.commitReauth({ accountId, credentials }, (account) =>
+              d.runAccount(account),
+            ),
+          ),
         ),
       );
     },

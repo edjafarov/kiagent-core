@@ -148,6 +148,29 @@ describe('connect and reconnect in two halves', () => {
     expect(await store.read.accounts()).toEqual([]);
   });
 
+  it('the commit halves call back with the account once it is saved', async () => {
+    const engine = make(source() as Source);
+    const seen: string[] = [];
+    const account = await engine.adopt(
+      {
+        sourceId: 'scoped',
+        identifier: 'me@example.com',
+        config: {},
+        credentials: { accessToken: 't1' },
+        usedPicker: false,
+      },
+      (a) => seen.push(`adopted ${a.id}`),
+    );
+    await engine.commitReauth(
+      { accountId: account.id, credentials: { accessToken: 't2' } },
+      (a) => seen.push(`recommitted ${a.id} ${a.status}`),
+    );
+    expect(seen).toEqual([
+      `adopted ${account.id}`,
+      `recommitted ${account.id} connecting`,
+    ]);
+  });
+
   it('connect is both halves', async () => {
     const engine = make(source() as Source);
     const account = await engine.connect(source() as Source, auth('t1'));
