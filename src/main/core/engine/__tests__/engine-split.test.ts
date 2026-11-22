@@ -210,4 +210,83 @@ describe('connect and reconnect in two halves', () => {
       ).rejects.toThrow('unknown account: missing');
     });
   });
+
+  describe('a login for a copy that asked', () => {
+    const SENTINEL = 'SENTINEL-refresh-9f3a';
+    const soon = () => new Date(Date.now() + 10_000).toISOString();
+    const makeWith = (
+      refresh: () => Promise<{ accessToken: string } | null>,
+      log: (...a: unknown[]) => void,
+    ) => {
+      const s = source() as Source;
+      return createEngine({
+        store,
+        sources: { get: (id) => (id === s.descriptor.id ? s : undefined) },
+        refreshers: new Map([['scoped', refresh]]),
+        inference: {
+          complete: async () => 's',
+          see: async () => 's',
+          read: async () => 's',
+          hear: async () => 's',
+        },
+        convert: async (input) => input,
+        logs: { log },
+      });
+    };
+
+    it('a failed refresh logs no error text', async () => {
+      const lines: unknown[][] = [];
+      const engine = makeWith(
+        async () => {
+          throw new Error(`boom ${SENTINEL}`);
+        },
+        (...a) => lines.push(a),
+      );
+      const account = await engine.adopt({
+        sourceId: 'scoped',
+        identifier: 'me@example.com',
+        config: {},
+        credentials: { accessToken: 'old', expiresAt: soon() },
+        usedPicker: false,
+      });
+      await expect(
+        engine.freshCredentialsQuiet(account.id),
+      ).resolves.toMatchObject({ accessToken: 'old' });
+      expect(JSON.stringify(lines)).toContain('token refresh failed');
+      expect(JSON.stringify(lines)).not.toContain(SENTINEL);
+    });
+
+    it("a session that goes through the leader never refreshes or saves here", async () => {
+      const refresh = jest.fn(async () => ({ accessToken: 'local-refresh' }));
+      const engine = makeWith(refresh, () => {});
+      const account = await engine.adopt({
+        sourceId: 'scoped',
+        identifier: 'me@example.com',
+        config: {},
+        credentials: { accessToken: 'old', expiresAt: soon() },
+        usedPicker: false,
+      });
+      const viaLeader = jest.fn(async () => ({ accessToken: 'from-leader' }));
+      const session = engine.session(
+        account,
+        new AbortController().signal,
+        'test',
+        viaLeader,
+      );
+      await expect(session.credentials()).resolves.toEqual({
+        accessToken: 'from-leader',
+      });
+      expect(refresh).not.toHaveBeenCalled();
+      expect((await store.vault.load(account.id))?.accessToken).toBe('old');
+
+      await store.vault.save(account.id, {
+        accessToken: 'good',
+        expiresAt: new Date(Date.now() + 3_600_000).toISOString(),
+      });
+      await expect(session.credentials()).resolves.toMatchObject({
+        accessToken: 'good',
+      });
+      expect(viaLeader).toHaveBeenCalledTimes(1);
+    });
+  });
 });
