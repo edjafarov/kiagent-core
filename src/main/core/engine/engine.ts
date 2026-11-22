@@ -47,7 +47,7 @@ import { seedConsumerName } from '../store/maintenance-keys';
 import type { CoreStore } from '../store/store';
 import { readMessageEvidence as readMessageEvidenceOperation } from './message-evidence';
 import { FetchDeferredError } from './fetch-deferred';
-import { freshCredentials } from './fresh-credentials';
+import { freshCredentials, REFRESH_MARGIN_MS } from './fresh-credentials';
 import { isParked, isResting } from './resting';
 
 export interface LogSink {
@@ -499,7 +499,18 @@ export function createEngine(deps: EngineDeps): Engine & {
    *  without this verb the broker would have to re-implement the vault load
    *  and the expiring-token refresh, which is the one place a stale token
    *  must PROPAGATE rather than be swallowed (engine.ts:406-414). */
-  session(account: Account, signal: AbortSignal, scope: string): Session;
+  session(
+    account: Account,
+    signal: AbortSignal,
+    scope: string,
+    /** A read-only copy passes this: a login that is about to expire is asked
+     *  of the leader, and nothing is refreshed or saved here. */
+    viaLeader?: () => Promise<Credentials | null>,
+  ): Session;
+  /** A usable login for an account, refreshed and saved here if it was due.
+   *  For a copy that asked the leader: the warning it logs names the error's
+   *  class and never its text, which may carry the login. */
+  freshCredentialsQuiet(accountId: AccountId): Promise<Credentials | null>;
   /** Re-authenticate ONE existing account in place. Invariant 2: it may
    *  replace credentials and status, and must preserve config, cursor,
    *  folder roots and documents byte-for-byte — so it calls neither
@@ -722,10 +733,19 @@ export function createEngine(deps: EngineDeps): Engine & {
     account: Account,
     signal: AbortSignal,
     scope: string,
+    viaLeader?: () => Promise<Credentials | null>,
   ): Session => ({
     account,
     signal,
-    credentials(): Promise<Credentials | null> {
+    async credentials(): Promise<Credentials | null> {
+      if (viaLeader) {
+        const creds = await store.vault.load(account.id);
+        if (!creds) return null;
+        const due =
+          creds.expiresAt !== undefined &&
+          Date.parse(creds.expiresAt) < Date.now() + REFRESH_MARGIN_MS;
+        return due ? viaLeader() : creds;
+      }
       return freshCredentials({
         vault: store.vault,
         account: account.id,
@@ -1944,8 +1964,31 @@ export function createEngine(deps: EngineDeps): Engine & {
       }
     },
 
-    session(account: Account, signal: AbortSignal, scope: string): Session {
-      return makeSession(account, signal, scope);
+    session(
+      account: Account,
+      signal: AbortSignal,
+      scope: string,
+      viaLeader?: () => Promise<Credentials | null>,
+    ): Session {
+      return makeSession(account, signal, scope, viaLeader);
+    },
+
+    async freshCredentialsQuiet(
+      accountId: AccountId,
+    ): Promise<Credentials | null> {
+      const account = await store.account(accountId);
+      if (!account) throw new Error(`unknown account: ${accountId}`);
+      return freshCredentials({
+        vault: store.vault,
+        account: accountId,
+        refresh: deps.refreshers?.get(account.source),
+        warn: () =>
+          logs.log(
+            `source:${account.source}`,
+            'warn',
+            'token refresh failed for a copy that asked',
+          ),
+      });
     },
 
     claimAccountFlow(accountId: AccountId, flowId: string): void {

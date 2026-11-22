@@ -198,12 +198,19 @@ const REFUSED = [
 /** What a read-only copy hands to the leader instead of refusing: the commit
  *  half of a connect or a reconnect, a folder-scope change, and a usable
  *  login for a flow that reads the provider. */
+export interface RelayContext {
+  /** Shown while a finished sign-in waits for the leader. */
+  status?(msg: string): void;
+  /** The flow's cancel: it ends the wait. */
+  signal?: AbortSignal;
+}
+
 export interface AccountRelay {
-  adopt(c: Connected): Promise<Account>;
-  commitReauth(r: {
-    accountId: AccountId;
-    credentials: Credentials | null;
-  }): Promise<void>;
+  adopt(c: Connected, ctx?: RelayContext): Promise<Account>;
+  commitReauth(
+    r: { accountId: AccountId; credentials: Credentials | null },
+    ctx?: RelayContext,
+  ): Promise<void>;
   applyScope(
     accountId: AccountId,
     update: FolderScopeUpdate,
@@ -282,6 +289,19 @@ export function gateEngine(
   };
   e.rerunDeferred = async (...a) =>
     readOnly() || holding ? undefined : real.rerunDeferred.apply(engine, a);
+  // A flow on a copy that reads the provider (the folder list) uses the
+  // mirrored login while it is good and asks the leader when it is about to
+  // expire: a copy never refreshes or saves a login.
+  if (typeof real.session === 'function')
+    e.session = (...a) => {
+      const account = a[0] as { id?: string } | undefined;
+      const r = relay();
+      if (r && readOnly() && account?.id && !owned.ownsAccount(account.id))
+        return real.session.call(engine, a[0], a[1], a[2], () =>
+          r.credentials(account.id as AccountId),
+        );
+      return real.session.apply(engine, a);
+    };
   for (const m of REFUSED) {
     e[m] = async (...a) => {
       if (readOnly()) {
@@ -311,15 +331,26 @@ export function gateEngine(
           // the result. Every other verb reaches the leader as its whole
           // handler (forward-core), so called directly it is still refused.
           const r = relay();
-          if (r && m === 'connect')
-            return r.adopt((await real.connectAuth.apply(engine, a)) as Connected);
-          if (r && m === 'reconnect')
+          if (r && m === 'connect') {
+            const auth = a[1] as RelayContext | undefined;
+            return r.adopt(
+              (await real.connectAuth.apply(engine, a)) as Connected,
+              { status: (msg) => auth?.status?.(msg), signal: auth?.signal },
+            );
+          }
+          if (r && m === 'reconnect') {
+            const auth = a[1] as RelayContext | undefined;
             return r.commitReauth(
               (await real.reauth.apply(engine, a)) as {
                 accountId: AccountId;
                 credentials: Credentials | null;
               },
+              {
+                status: (msg) => auth?.status?.(msg),
+                signal: a[2] as AbortSignal | undefined,
+              },
             );
+          }
           if (r && m === 'applyScope')
             return r.applyScope(
               a[0] as AccountId,

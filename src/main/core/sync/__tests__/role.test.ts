@@ -587,7 +587,7 @@ describe('a read-only copy relays account changes', () => {
     const { real, relay, e } = setup();
     await expect(e.connect(gmail, 'auth')).resolves.toEqual({ id: 'from-leader' });
     expect(real.connectAuth).toHaveBeenCalledWith(gmail, 'auth');
-    expect(relay.adopt).toHaveBeenCalledWith({ sourceId: 'gmail', identifier: 'me' });
+    expect(relay.adopt).toHaveBeenCalledWith({ sourceId: 'gmail', identifier: 'me' }, expect.anything());
     expect(real.connect).not.toHaveBeenCalled();
     expect(real.adopt).not.toHaveBeenCalled();
   });
@@ -596,7 +596,10 @@ describe('a read-only copy relays account changes', () => {
     const { real, relay, e } = setup();
     await e.reconnect('acc', 'auth', 'signal');
     expect(real.reauth).toHaveBeenCalledWith('acc', 'auth', 'signal');
-    expect(relay.commitReauth).toHaveBeenCalledWith({ accountId: 'acc', credentials: { accessToken: 't' } });
+    expect(relay.commitReauth).toHaveBeenCalledWith(
+      { accountId: 'acc', credentials: { accessToken: 't' } },
+      expect.objectContaining({ signal: 'signal' }),
+    );
     expect(real.reconnect).not.toHaveBeenCalled();
     expect(real.commitReauth).not.toHaveBeenCalled();
   });
@@ -659,5 +662,18 @@ describe('a read-only copy relays account changes', () => {
     expect(real.connect).toHaveBeenCalled();
     expect(real.reconnect).toHaveBeenCalled();
     expect(relay.adopt).not.toHaveBeenCalled();
+  });
+
+  it('a session for an account the leader runs asks the leader for its login', async () => {
+    const real = { ...idle(), session: jest.fn((...a: unknown[]) => a) };
+    const relay = { credentials: jest.fn(async () => ({ accessToken: 'fresh' })) };
+    const e = { ...real } as unknown as Record<string, (...a: unknown[]) => unknown>;
+    gateEngine(e as never, () => true, owned, undefined, () => relay as never);
+    const made = e.session({ id: 'acc' }, 'sig', 'scope') as unknown[];
+    expect(made.slice(0, 3)).toEqual([{ id: 'acc' }, 'sig', 'scope']);
+    await expect((made[3] as () => Promise<unknown>)()).resolves.toEqual({ accessToken: 'fresh' });
+    expect(relay.credentials).toHaveBeenCalledWith('acc');
+    const own = e.session({ id: 'mine' }, 'sig', 'scope') as unknown[];
+    expect(own).toHaveLength(3);
   });
 });
