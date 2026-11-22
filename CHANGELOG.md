@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.131.0](https://github.com/edjafarov/kiagent-core/compare/v0.130.0...v0.131.0) (2026-11-22)
+
+### Features
+
+* **sync:** a read-only copy connects, reconnects and manages sources: the sign-in runs on the copy and writes nothing, and the leader commits the result and runs the source. The engine's `connect` and `reconnect` split into `connectAuth` / `adopt` and `reauth` / `commitReauth`; the read-only gate relays the commit, a folder-scope change and the plain account channels (pause, resume, remove, sync now, cadence, options) to the leader
+* **sync:** the leader runs every account change in one queue per account, once per operation id, so a retried request from a copy runs nothing twice
+* **sync:** `host.sync.setPuller`: core asks the sync extension for a pull right after the leader took a change
+
+### Bug Fixes
+
+* **connect:** a failure while the leader saves a relayed login is answered with a fixed sentence and logged by error class, never with the error text
+
 ## [0.130.0](https://github.com/edjafarov/kiagent-core/compare/v0.129.1...v0.130.0) (2026-11-22)
 
 ### Features
