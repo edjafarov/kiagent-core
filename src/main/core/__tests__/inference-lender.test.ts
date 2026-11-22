@@ -139,6 +139,21 @@ describe('a lender answers background calls', () => {
     expect(l.calls).toHaveLength(0);
   });
 
+  it("the lender's own closed lane arrives as the plane's LaneClosedError", async () => {
+    const { p } = plane();
+    const l = fakeLender({
+      handle: async () => {
+        throw Object.assign(new Error('nobody took it'), {
+          name: 'LaneClosedError',
+        });
+      },
+    });
+    p.setLender(l.lender);
+    await expect(
+      p.read(new Uint8Array([1]), { lane: 'background' }),
+    ).rejects.toBeInstanceOf(LaneClosedError);
+  });
+
   it('a kind the lender does not take runs here', async () => {
     const { p, ocr } = plane();
     const l = fakeLender();

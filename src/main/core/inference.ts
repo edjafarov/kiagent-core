@@ -375,7 +375,16 @@ export function createInference(
         // The helper's plane has its own generation numbering.
         if (payload && typeof payload === 'object')
           delete (payload as Record<string, unknown>).generation;
-        const r = await from.handle({ kind, payload, signal });
+        let r: Awaited<ReturnType<InferenceLender['handle']>>;
+        try {
+          r = await from.handle({ kind, payload, signal });
+        } catch (err) {
+          // The lender lives in an extension and cannot construct this
+          // class; workers test for it with `instanceof`.
+          if ((err as Error)?.name === 'LaneClosedError')
+            throw new LaneClosedError((err as Error).message);
+          throw err;
+        }
         who = { providerId: r.providerId, modelId: r.modelId };
         return r.value;
       },
