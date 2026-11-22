@@ -60,6 +60,8 @@ import { bootPhase, canWrite, gateEngine, readSyncGate } from './sync/role';
 import { notMineToRun } from './sync/sources';
 import { collapseFormerlyOwned, uncleanFormerlyOwned } from './sync/collapse';
 import { createSyncService, type SyncService } from './sync/service';
+import { createCopyRelay, type CopyRelay } from './sync/accounts-relay';
+import { newId } from './ids';
 import { applyPendingSwap } from './sync/swap';
 import { isResting } from './engine/resting';
 import type { BusyRegistry } from './busy';
@@ -221,6 +223,10 @@ export interface CorePlatform {
   senders: SenderRegistry;
   /** Per-source OAuth refreshers; source families add theirs at registration. */
   refreshers: Map<string, (creds: Credentials) => Promise<Credentials | null>>;
+  /** What a read-only copy hands to the leader: the commit half of a connect
+   *  or a reconnect, a folder-scope change. The engine gate uses it; the
+   *  connect broker asks its `probe` before a sign-in starts. */
+  accountRelay: CopyRelay;
   /** The crash-isolated converter (#136): parsers + WASM rasteriser. */
   converter: Converter;
   convert(input: DocumentInput, signal?: AbortSignal): Promise<DocumentInput>;
@@ -515,11 +521,29 @@ export async function bootCore(deps: BootDeps): Promise<CorePlatform> {
   await prefs.attachUser(createDbUserPrefsStore(db, () => !sync.readOnly()));
   // What was queued before the last quit shows again, before anything serves an edit.
   await restoreQueuedSettings(prefs, sync, (c, l, m) => sink.log(c, l, m));
+  const accountRelay = createCopyRelay({
+    sync,
+    newId: () => newId(),
+    now: Date.now,
+    sleep: (ms, signal) =>
+      new Promise<void>((resolve) => {
+        const t = setTimeout(resolve, ms);
+        signal?.addEventListener(
+          'abort',
+          () => {
+            clearTimeout(t);
+            resolve();
+          },
+          { once: true },
+        );
+      }),
+  });
   gate = gateEngine(
     engine,
     () => sync.readOnly(),
     sync,
     (l, m) => sink.log('sync', l, m),
+    () => accountRelay,
   );
   // A follower's copied rows change only by what the master sends.
   let archiveSweep = false;
@@ -581,6 +605,7 @@ export async function bootCore(deps: BootDeps): Promise<CorePlatform> {
     sources,
     senders,
     refreshers,
+    accountRelay,
     convert,
     converter,
     admission,
