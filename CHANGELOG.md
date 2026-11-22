@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.130.0](https://github.com/edjafarov/kiagent-core/compare/v0.129.1...v0.130.0) (2026-11-22)
+
+### Features
+
+* **inference:** a lender can answer background calls for a kind: `setLender`, a lane-aware `describe`, `runLent` and `fitness` on the plane, so a leader that runs a kind badly hands each background call to a fit copy; interactive calls and task routes are unchanged ([b0190f0d](https://github.com/edjafarov/kiagent-core/commit/b0190f0d))
+* **sync:** `host.sync.setAiLender`, `aiFitness` and `runAiCall`; `host.inference.describe` takes a lane; the vision worker defers a page when the model changed under it ([28c6a0d3](https://github.com/edjafarov/kiagent-core/commit/28c6a0d3))
+
+### Bug Fixes
+
+* **inference:** a lender's closed lane reaches the caller as the plane's `LaneClosedError` ([076e9cc2](https://github.com/edjafarov/kiagent-core/commit/076e9cc2))
+
 ## [0.129.1](https://github.com/edjafarov/kiagent-core/compare/v0.129.0...v0.129.1) (2026-11-21)
 
 ### Bug Fixes
