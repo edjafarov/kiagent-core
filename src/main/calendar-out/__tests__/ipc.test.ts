@@ -10,7 +10,7 @@ import type {
   Prefs,
   WritableCalendar,
 } from '@shared/contracts';
-import type { InvokeChannel, InvokeHandlers } from '@shared/ipc';
+import type { InvokeHandlers } from '@shared/ipc';
 
 import { openDb } from '../../db/app-db';
 import { openStore, type CoreStore } from '../../core/store/store';
@@ -68,7 +68,7 @@ describe('calendar-out IPC', () => {
   let hang: boolean;
   let skewMs: number;
   let refuse: boolean;
-  let handlers: Pick<InvokeHandlers, InvokeChannel>;
+  let handlers: InvokeHandlers;
 
   const draft = async (title: string, over: Record<string, unknown> = {}) =>
     asDraft(
