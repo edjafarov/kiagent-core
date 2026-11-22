@@ -19,6 +19,7 @@ import {
   ConverterTimeoutError,
   ConverterUnavailableError,
 } from '@main/core/converter/converter';
+import { inferencePause } from '@shared/inference-pause';
 import {
   passthroughDownscaler,
   VLM_MAX_EDGE,
@@ -37,7 +38,6 @@ import {
   OCR_SUFFICIENT_CHARS,
   OCR_WINDOW,
 } from './classify';
-import { inferencePause } from '@shared/inference-pause';
 import { VISION_WORKER } from './identity';
 import { INDEXING_PROMPT, mergeExtraction } from './merge';
 import type { PageResult } from './merge';
@@ -227,7 +227,7 @@ export function createVisionWorker(deps: {
   return {
     name: VISION_WORKER.name,
     version: VISION_WORKER.version,
-    schedule: { every: '30m' }, // deferred re-drive cadence; the live tail always runs
+    schedule: { every: '5m' }, // durable retry and repair cadence; the live tail always runs
     matches: (change: Change) =>
       change.kind === 'document' &&
       classifyDocument(change.document) === 'candidate',
@@ -324,12 +324,13 @@ export function createVisionWorker(deps: {
       try {
         ocrText = await session.read(bytes, { mime });
       } catch (err) {
-        // A crashed OCR helper is transient — DEFER so the re-drive can
+        // A crashed OCR helper is transient — RETRY with a durable limit so the re-drive can
         // recover the doc, rather than silently degrading to pass 2 (or,
         // worse, an OCR-less permanent record). LaneClosedError (window
         // closed mid-run) defers the same way. Only a genuine "no read
         // provider" (e.g. non-mac host) falls through to pass 2.
-        if (!(err instanceof NoProviderError)) return 'defer';
+        if (!(err instanceof NoProviderError))
+          return err instanceof LaneClosedError ? 'defer' : 'retry';
         // An OCR provider still starting is not "no OCR": wait for it.
         if (session.mayBecomeReady('read')) return 'defer';
         ocrFailed = true;
@@ -389,7 +390,7 @@ export function createVisionWorker(deps: {
         // A demoted raster helper past its deadline is load, not a bad PDF:
         // defer (re-driven when idle) instead of exhausting engine retries.
         if (err instanceof HelperTimeoutError) return 'defer';
-        throw err;
+        return 'skip'; // unreadable/corrupt PDF cannot be helped by another model call
       }
     }
     const pageCount = raster?.pageCount ?? prog?.pageCount ?? 0;
@@ -403,7 +404,8 @@ export function createVisionWorker(deps: {
           (await session.read(png, { mime: 'image/png' })) ?? '';
       } catch (err) {
         // Same transient-vs-absent split as the image path above.
-        if (!(err instanceof NoProviderError)) return 'defer';
+        if (!(err instanceof NoProviderError))
+          return err instanceof LaneClosedError ? 'defer' : 'retry';
         if (session.mayBecomeReady('read')) return 'defer';
         if (listed) {
           // No VLM for needs-ocr, and its text is already indexed: park

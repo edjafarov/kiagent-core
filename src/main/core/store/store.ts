@@ -1,4 +1,3 @@
-import type { SyncCursor } from '../sync/delta';
 import { EventEmitter } from 'events';
 import fs from 'fs';
 import path from 'path';
@@ -20,6 +19,7 @@ import type {
   Store,
   SyncStatus,
 } from '@shared/contracts';
+import type { SyncCursor } from '../sync/delta';
 
 import type { AppDb, AppDbParam } from '../../db/app-db';
 import { resetCoreStoreTables } from '../../db/repositories/core-maintenance';
@@ -57,6 +57,7 @@ import {
   type ReconcileCounts,
   type RekeyPageResult,
 } from './write-tx';
+
 function assertSecretKey(key: string): void {
   if (!key.startsWith('secret:')) throw new Error('not a secret key');
 }
@@ -214,9 +215,12 @@ export interface ScheduleRow {
  */
 export interface CoreStore extends Store {
   /** Applies a stage from the master and wakes everything a commit wakes. */
-  applySyncDelta(
-    stagePath: string,
-  ): Promise<{ applied: number; target: SyncCursor; tables: string[]; prefKeys: string[] }>;
+  applySyncDelta(stagePath: string): Promise<{
+    applied: number;
+    target: SyncCursor;
+    tables: string[];
+    prefKeys: string[];
+  }>;
   /** Takes an offer of accounts and logins from another device in one
    *  transaction (alpha-cent spec 7.7), and wakes what a commit wakes. */
   importSyncSources(input: ImportSourcesInput): Promise<ImportSourcesResult>;
@@ -372,6 +376,17 @@ export interface CoreStore extends Store {
     attempts: number,
     outcome: 'done' | 'skip' | 'failed' | 'deferred' | null,
   ): Promise<void>;
+  /** Retry a transient worker failure across runs; the fourth failure is terminal. */
+  ledgerRetry(
+    consumer: string,
+    seq: Seq,
+  ): Promise<{ attempts: number; outcome: 'deferred' | 'failed' }>;
+  /** Current visual documents passed by the feed without a ledger outcome. */
+  ledgerMissingVision(
+    consumer: string,
+    after: Seq,
+    limit: number,
+  ): Promise<Seq[]>;
   ledgerCounts(consumer: string): Promise<LedgerCounts>;
   /** Durable, change-free attempt counter (see work_attempts in schema.ts).
    *  Returns the count INCLUDING this attempt. */
@@ -811,7 +826,9 @@ export function openStore(db: AppDb, deps: StoreDeps): CoreStore {
     async importSyncSecrets(entries) {
       return writeTx
         ? writeTx.importSecrets(entries)
-        : ((await db.proc!('syncImportSecrets', { entries })) as { applied: number });
+        : ((await db.proc!('syncImportSecrets', { entries })) as {
+            applied: number;
+          });
     },
 
     async importSyncSources(input) {
@@ -960,7 +977,10 @@ export function openStore(db: AppDb, deps: StoreDeps): CoreStore {
             WHERE account_id = ? AND ${TRACKING}`,
           [account],
         );
-        await db.run(`DELETE FROM vault WHERE account_id = ? AND NOT (${TRACKING})`, [account]);
+        await db.run(
+          `DELETE FROM vault WHERE account_id = ? AND NOT (${TRACKING})`,
+          [account],
+        );
       },
     },
 
@@ -1370,10 +1390,12 @@ export function openStore(db: AppDb, deps: StoreDeps): CoreStore {
     },
 
     async pendingChanges(cursor, cap = 100_000) {
-      const r = (await db.all(
-        `SELECT COUNT(*) AS n FROM (SELECT 1 FROM changes WHERE seq > ? LIMIT ?)`,
-        [cursor, cap],
-      ))[0] as { n: number };
+      const r = (
+        await db.all(
+          `SELECT COUNT(*) AS n FROM (SELECT 1 FROM changes WHERE seq > ? LIMIT ?)`,
+          [cursor, cap],
+        )
+      )[0] as { n: number };
       return r.n;
     },
 
@@ -1449,6 +1471,60 @@ export function openStore(db: AppDb, deps: StoreDeps): CoreStore {
       }
       if (names.length > 0) bumpGen();
       return { consumers: names.length, rows };
+    },
+
+    async ledgerRetry(consumer, seq) {
+      const ts = now();
+      await db.run(
+        `INSERT INTO work_ledger(consumer,seq,attempts,outcome,updated_at)
+         VALUES(?,?,1,'deferred',?)
+         ON CONFLICT(consumer,seq) DO UPDATE SET
+           attempts=CASE WHEN work_ledger.outcome='deferred'
+             THEN work_ledger.attempts+1 ELSE 1 END,
+           outcome=CASE WHEN work_ledger.outcome='deferred'
+             AND work_ledger.attempts>=3 THEN 'failed' ELSE 'deferred' END,
+           updated_at=excluded.updated_at`,
+        [consumer, seq, ts],
+      );
+      // core #139: the idle queue counter re-reads only when ledgerGen moves.
+      store.markLedgerChanged();
+      return (
+        await db.all(
+          'SELECT attempts, outcome FROM work_ledger WHERE consumer=? AND seq=?',
+          [consumer, seq],
+        )
+      )[0] as { attempts: number; outcome: 'deferred' | 'failed' };
+    },
+
+    async ledgerMissingVision(consumer, after, limit) {
+      // core #59: while seed:<consumer> exists the real cursor sits at h0 and
+      // documents past the seed cursor are not missed, just not reached yet.
+      const sql = `SELECT d.seq FROM documents d INDEXED BY docs_pending_visual
+         WHERE ${PENDING_VISUAL_WHERE} AND ${ACTIONABLE_VISUAL_SIZE_WHERE}
+           AND d.seq > ? AND d.seq <= COALESCE(
+             (SELECT cursor FROM consumers WHERE name = 'seed:' || ?),
+             (SELECT cursor FROM consumers WHERE name = ?),
+             0)
+           AND NOT EXISTS (
+             SELECT 1 FROM work_ledger l WHERE l.consumer=? AND l.seq=d.seq)
+         ORDER BY d.seq LIMIT ?`;
+      const params = [
+        after,
+        consumer,
+        consumer,
+        consumer,
+        Math.max(1, Math.min(limit, 100)),
+      ];
+      let rows: Array<{ seq: number }>;
+      try {
+        rows = (await db.all(sql, params)) as Array<{ seq: number }>;
+      } catch {
+        rows = (await db.all(
+          sql.replace(' INDEXED BY docs_pending_visual', ''),
+          params,
+        )) as Array<{ seq: number }>;
+      }
+      return rows.map((row) => row.seq);
     },
 
     async ledgerCounts(consumer) {
@@ -1543,6 +1619,10 @@ export function openStore(db: AppDb, deps: StoreDeps): CoreStore {
         `SELECT seq FROM work_ledger
           WHERE consumer = ? AND outcome = 'deferred' AND seq > ?
             AND outcome IS NOT 'skip'
+            AND (attempts=0
+              OR (attempts=1 AND julianday(updated_at) <= julianday('now','-5 minutes'))
+              OR (attempts=2 AND julianday(updated_at) <= julianday('now','-30 minutes'))
+              OR (attempts=3 AND julianday(updated_at) <= julianday('now','-120 minutes')))
           ORDER BY seq LIMIT ?`,
         [consumer, after, limit],
       )) as Array<{ seq: number }>;
@@ -1552,7 +1632,12 @@ export function openStore(db: AppDb, deps: StoreDeps): CoreStore {
     async ledgerHasDeferred(consumer) {
       const rows = await db.all(
         `SELECT 1 FROM work_ledger WHERE consumer = ? AND outcome = 'deferred'
-          AND outcome IS NOT 'skip' LIMIT 1`,
+          AND outcome IS NOT 'skip'
+          AND (attempts=0
+            OR (attempts=1 AND julianday(updated_at) <= julianday('now','-5 minutes'))
+            OR (attempts=2 AND julianday(updated_at) <= julianday('now','-30 minutes'))
+            OR (attempts=3 AND julianday(updated_at) <= julianday('now','-120 minutes')))
+          LIMIT 1`,
         [consumer],
       );
       return rows.length > 0;

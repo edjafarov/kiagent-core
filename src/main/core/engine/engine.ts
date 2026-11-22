@@ -465,6 +465,7 @@ export function createEngine(deps: EngineDeps): Engine & {
   activeConsumers(): string[];
   /** Re-drive a worker's deferred changes (scheduler calls this on cadence). */
   rerunDeferred(worker: Worker): Promise<RedriveResult>;
+  rerunMissingVision(worker: Worker): Promise<RedriveResult>;
   /** Stop every running handle (app shutdown). */
   stopAll(): Promise<void>;
   /** Persist an account's config; restarts its sync loop if one is running
@@ -893,10 +894,23 @@ export function createEngine(deps: EngineDeps): Engine & {
       };
       try {
         const outcome = (await worker.work(change, session)) ?? 'done';
+        if (outcome === 'retry') {
+          const retried = await store.ledgerRetry(
+            workerConsumerName(worker),
+            change.seq,
+          );
+          if (retried.outcome === 'failed')
+            logs.log(
+              scope,
+              'warn',
+              `visual document failed after 4 attempts at seq ${change.seq}`,
+            );
+          return { docs: [], enrich: [], ...retried };
+        }
         return {
           docs: emitted,
           enrich: enriched,
-          attempts: attempt,
+          attempts: outcome === 'defer' ? 0 : attempt,
           outcome: outcome === 'defer' ? 'deferred' : outcome,
         };
       } catch (err) {
@@ -905,10 +919,13 @@ export function createEngine(deps: EngineDeps): Engine & {
           // Bytes unavailable right now — park for the re-drive rather than
           // burn retries into a terminal 'failed' (see fetch-deferred.ts).
           logs.log(scope, 'warn', `deferred seq ${change.seq}: ${err.message}`);
+          // attempts 0, like a worker's own 'defer': the re-drive's backoff
+          // is for 'retry' rows only, and would hide this one for minutes
+          // (or for good, past its third step).
           return {
             docs: [],
             enrich: [],
-            attempts: attempt,
+            attempts: 0,
             outcome: 'deferred',
           };
         }
@@ -2415,6 +2432,89 @@ export function createEngine(deps: EngineDeps): Engine & {
 
     activeConsumers(): string[] {
       return [...attachedWorkers];
+    },
+
+    async rerunMissingVision(worker: Worker): Promise<RedriveResult> {
+      // Core's re-drive lifecycle (rerunDeferred): no repair starts once
+      // stopAll() began, also across the re-key await, and a running one is
+      // registered so stopAll() aborts and awaits it before teardown.
+      if (stopping) return undefined;
+      if (!(await store.ledgerRekeyed())) return { skipped: 'rekey-pending' };
+      if (stopping) return undefined;
+      const consumer = workerConsumerName(worker);
+      const abort = new AbortController();
+      let finished!: () => void;
+      const entry = {
+        abort,
+        done: new Promise<void>((r) => {
+          finished = r;
+        }),
+      };
+      activeRedrives.add(entry);
+      try {
+        let after: Seq = 0;
+        for (;;) {
+          if (abort.signal.aborted) return undefined; // between pages
+          const seqs = await store.ledgerMissingVision(
+            consumer,
+            after,
+            REDRIVE_PAGE,
+          );
+          if (seqs.length === 0) return undefined;
+          after = seqs[seqs.length - 1];
+          const changes = await store.changesAt(seqs);
+          const enrich: EnrichInput[] = [];
+          const docs: DocumentInput[] = [];
+          const ledger: LedgerEntry[] = [];
+          for (const change of changes) {
+            if (abort.signal.aborted) return undefined; // between changes
+            if (!worker.matches(change)) {
+              ledger.push({ seq: change.seq, attempts: 0, outcome: 'skip' });
+              continue;
+            }
+            const result = await workOne(
+              worker,
+              change,
+              abort.signal,
+              'redrive',
+            );
+            enrich.push(...result.enrich);
+            docs.push(...result.docs);
+            ledger.push({
+              seq: change.seq,
+              attempts: result.attempts,
+              outcome: result.outcome,
+            });
+          }
+          // Like rerunDeferred (#147 §4): one admitted 'redrive' unit and NO
+          // cursor — a read-then-write of the consumer's cursor could rewind a
+          // live tail that advanced meanwhile.
+          if (enrich.length || docs.length) {
+            const release = await admission.acquire('redrive', abort.signal);
+            try {
+              await store.commit({
+                consumer,
+                documents: docs.length ? docs : undefined,
+                enrich: enrich.length ? enrich : undefined,
+              });
+            } finally {
+              release();
+            }
+          }
+          if (abort.signal.aborted) return undefined; // before the ledger write
+          // Like rerunDeferred: the ledger row is this repair's only driver, so
+          // it lands only after the page's output is committed.
+          if (ledger.length) await store.ledgerRecordMany(consumer, ledger);
+        }
+      } catch (err) {
+        // Stopped mid-page: nothing of this page reached the ledger, so the
+        // next repair finds the same documents missed again.
+        if (abort.signal.aborted) return undefined;
+        throw err;
+      } finally {
+        activeRedrives.delete(entry);
+        finished();
+      }
     },
 
     async rerunDeferred(worker: Worker): Promise<RedriveResult> {

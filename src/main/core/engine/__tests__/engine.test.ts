@@ -1002,7 +1002,7 @@ describe('engine', () => {
     });
     const scan = await store.read.byExternalId(account.id, 'scan', 'note');
     const deferredSeq = scan!.seq;
-    await store.ledgerRecord(consumer, deferredSeq, 1, 'deferred');
+    await store.ledgerRecord(consumer, deferredSeq, 0, 'deferred');
     expect(await store.ledgerDeferred(consumer, 0, 10)).toEqual([deferredSeq]);
 
     // The doc gains real markdown before the re-drive (another path enriched
@@ -1048,7 +1048,7 @@ describe('engine', () => {
     for (let i = 0; i < total; i += 1) {
       const d = await store.read.byExternalId(account.id, `scan-${i}`, 'note');
       // eslint-disable-next-line no-await-in-loop
-      await store.ledgerRecord(consumer, d!.seq, 1, 'deferred');
+      await store.ledgerRecord(consumer, d!.seq, 0, 'deferred');
     }
 
     const pageSizes: number[] = [];
@@ -1107,7 +1107,7 @@ describe('engine', () => {
     for (let i = 0; i < total; i += 1) {
       const d = await store.read.byExternalId(account.id, `b-${i}`, 'note');
       // eslint-disable-next-line no-await-in-loop
-      await store.ledgerRecord(consumer, d!.seq, 1, 'deferred');
+      await store.ledgerRecord(consumer, d!.seq, 0, 'deferred');
     }
 
     let singleWrites = 0;
@@ -1166,7 +1166,7 @@ describe('engine', () => {
       const d = await store.read.byExternalId(account.id, id, 'note');
       seqs.push(d!.seq);
       // eslint-disable-next-line no-await-in-loop
-      await store.ledgerRecord(consumer, d!.seq, 1, 'deferred');
+      await store.ledgerRecord(consumer, d!.seq, 0, 'deferred');
     }
 
     const crashing: CoreStore = {
@@ -1226,7 +1226,7 @@ describe('engine', () => {
       // eslint-disable-next-line no-await-in-loop
       const d = await store.read.byExternalId(account.id, id, 'note');
       // eslint-disable-next-line no-await-in-loop
-      await store.ledgerRecord(consumer, d!.seq, 1, 'deferred');
+      await store.ledgerRecord(consumer, d!.seq, 0, 'deferred');
     }
 
     const calls: string[] = [];
@@ -1299,7 +1299,7 @@ describe('engine', () => {
       const d = await store.read.byExternalId(account.id, id, 'note');
       seqs.push(d!.seq);
       // eslint-disable-next-line no-await-in-loop
-      await store.ledgerRecord(consumer, d!.seq, 1, 'deferred');
+      await store.ledgerRecord(consumer, d!.seq, 0, 'deferred');
     }
 
     // rerunDeferred never aborts its own signal, so workOne's abort rethrow
