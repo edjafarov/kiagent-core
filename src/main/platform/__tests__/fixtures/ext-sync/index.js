@@ -53,6 +53,7 @@ module.exports = {
       drainOutbound: await host.sync.drainOutbound(),
       retained: await host.sync.retained('t'),
       setAiLender: await host.sync.setAiLender(null),
+      setPuller: await host.sync.setPuller(null),
       aiFitness: await host.sync.aiFitness(),
       runAiCall: await host.sync.runAiCall({ kind: 'read', payload: {} }),
     };
