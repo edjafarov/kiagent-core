@@ -7,7 +7,7 @@ const gate = () => {
   });
   return { p, open };
 };
-const tick = () => new Promise((r) => setImmediate(r));
+const tick = () => new Promise((r) => setTimeout(r, 0));
 
 describe('account operations on the leader', () => {
   it('runs operations with one key in order, also after a failure', async () => {
