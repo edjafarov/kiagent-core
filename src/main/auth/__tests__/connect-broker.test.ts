@@ -1175,6 +1175,7 @@ describe('connect broker — on a read-only copy', () => {
     const events: ConnectEvent[] = [];
     const order: string[] = [];
     let pulls = 0;
+    let readOnly = true;
     const source = {
       descriptor: { id: 'picky', name: 'Picky', documentTypes: ['t'], auth: 'none' },
       connect: jest.fn(async () => ({ identifier: 'me@example.com' })),
@@ -1225,7 +1226,7 @@ describe('connect broker — on a read-only copy', () => {
       engine,
       accountRelay: { probe },
       sync: {
-        readOnly: () => true,
+        readOnly: () => readOnly,
         ownsSource: () => over.owns ?? false,
         ownsAccount: () => over.owns ?? false,
         pullNow: jest.fn(async () => {
@@ -1247,7 +1248,19 @@ describe('connect broker — on a read-only copy', () => {
       }
       throw new Error('no terminal event');
     };
-    return { broker, events, order, engine, probe, source, platform, terminal };
+    return {
+      broker,
+      events,
+      order,
+      engine,
+      probe,
+      source,
+      platform,
+      terminal,
+      promote: () => {
+        readOnly = false;
+      },
+    };
   }
 
   beforeEach(() => {
@@ -1300,6 +1313,27 @@ describe('connect broker — on a read-only copy', () => {
     flowId = c.broker.start('picky').flowId;
     expect(await c.terminal()).toMatchObject({ kind: 'done' });
     expect(c.engine.remove).not.toHaveBeenCalled();
+  });
+
+  it('a device that starts leading during the sign-in starts the account itself', async () => {
+    const c = makeCopy();
+    c.engine.connect.mockImplementationOnce(async () => {
+      c.promote();
+      return { ...ACCOUNT, id: 'new1' } as Account;
+    });
+    c.broker.start('picky');
+    expect(await c.terminal()).toMatchObject({ kind: 'done' });
+    expect(runAccount).toHaveBeenCalledTimes(1);
+    expect(c.order).toEqual([]);
+  });
+
+  it('a device that starts leading before its turn in a group connects as a leader', async () => {
+    const c = makeCopy();
+    c.promote();
+    c.broker.start('picky');
+    expect(await c.terminal()).toMatchObject({ kind: 'done' });
+    expect(c.probe).not.toHaveBeenCalled();
+    expect(runAccount).toHaveBeenCalledTimes(1);
   });
 
   it('a source this copy owns connects here as before', async () => {

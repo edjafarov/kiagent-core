@@ -326,7 +326,6 @@ export function createConnectBroker(
     }
     const flow = { cancelled: false, abort: new AbortController() };
     flows.set(flowId, flow);
-    const relayed = relayedSource(sourceId);
     const auth: AuthChannel & { signal: AbortSignal } = {
       // A copy's finished sign-in waits for the leader; a cancel ends the wait.
       signal: flow.abort.signal,
@@ -391,11 +390,17 @@ export function createConnectBroker(
       try {
         await after.catch(() => {});
         if (flow.cancelled) throw new Error('connect flow cancelled');
-        // No browser opens for a sign-in the leader could not take.
-        if (relayed) await platform.accountRelay.probe(sourceId);
+        // The role is read now, not when the flow was queued: this device may
+        // have started leading while it waited. No browser opens for a
+        // sign-in the leader could not take.
+        const relayedAtStart = relayedSource(sourceId);
+        if (relayedAtStart) await platform.accountRelay.probe(sourceId);
         if (flow.cancelled) throw new Error('connect flow cancelled');
         const account = await platform.engine.connect(source, auth);
-        if (relayed) {
+        // And read again: a sign-in takes minutes. A device that leads by now
+        // has the account (committed here, or arrived from the old leader)
+        // and must start it itself.
+        if (relayedSource(sourceId)) {
           // The leader has the account and runs it. A cancel that lands now
           // removes nothing: the leader may have matched an account that
           // already existed, with its documents.
@@ -408,7 +413,8 @@ export function createConnectBroker(
         // broker-held promise to reject — connect() completed and
         // persisted the account anyway. Remove it instead of starting it:
         // a cancelled wizard must not leave a surprise account syncing.
-        if (flow.cancelled) {
+        // A sign-in the old leader adopted is never undone by a remove.
+        if (flow.cancelled && !relayedAtStart) {
           await platform.engine.remove(account.id);
           send({ flowId, kind: 'error', msg: 'connect flow cancelled' });
           return;
