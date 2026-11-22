@@ -17,6 +17,9 @@ export interface AccountOps {
   /** Runs `fn` once per `opId`, with no queue: for work that takes its place
    *  in the queue further down (the engine's commit halves do). */
   once<T>(opId: string, fn: () => Promise<T>): Promise<T>;
+  /** Drops what is remembered for `opId`: for a refusal that proves nothing
+   *  ran, so the same operation may run when it is sent again. */
+  forget(opId: string): void;
 }
 
 export function createAccountOps(d: {
@@ -60,6 +63,9 @@ export function createAccountOps(d: {
       opId === null ? queued(key, fn) : once(opId, () => queued(key, fn)),
     serial: queued,
     once,
+    forget: (opId) => {
+      results.delete(opId);
+    },
   };
 }
 

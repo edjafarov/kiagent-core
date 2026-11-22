@@ -355,40 +355,48 @@ export function gateEngine(
     readOnly() && !mineOf(m, a);
   for (const m of REFUSED) {
     e[m] = async (...a) => {
-      if (elsewhere(m, a)) {
-        // The person's part runs here and writes nothing; the leader takes
-        // the result. Every other verb reaches the leader as its whole
-        // handler (forward-core), so called directly it is still refused.
+      // Connect and reconnect always run in two halves, whoever leads when
+      // they start: the person's part first (it writes nothing), and then the
+      // commit goes to whoever writes at that moment. A sign-in takes minutes
+      // and the role can change either way while it runs.
+      if (
+        (m === 'connect' || m === 'reconnect') &&
+        typeof real[m === 'connect' ? 'connectAuth' : 'reauth'] === 'function'
+      ) {
+        const half = m === 'connect' ? 'connectAuth' : 'reauth';
+        const commit = m === 'connect' ? 'adopt' : 'commitReauth';
+        // No sign-in is started that nobody could take.
+        if (elsewhere(m, a) && !relay()) throw new SyncReadOnly(m);
+        const auth = a[1] as RelayContext | undefined;
+        const produced = await real[half].apply(engine, a);
         const r = relay();
-        if (r && (m === 'connect' || m === 'reconnect')) {
-          const auth = a[1] as RelayContext | undefined;
-          const half = m === 'connect' ? 'connectAuth' : 'reauth';
-          const commit = m === 'connect' ? 'adopt' : 'commitReauth';
-          const produced = await real[half].apply(engine, a);
-          // A sign-in takes minutes. If this device leads by now it commits
-          // the result itself, here and in the middle of the wait below.
-          if (!elsewhere(m, a)) return e[commit](produced);
-          const ctx: RelayContext = {
-            status: (msg) => auth?.status?.(msg),
-            signal:
-              m === 'connect' ? auth?.signal : (a[2] as AbortSignal | undefined),
-            stillCopy: () => elsewhere(m, a),
-          };
-          try {
-            return m === 'connect'
-              ? await r.adopt(produced as Connected, ctx)
-              : await r.commitReauth(
-                  produced as {
-                    accountId: AccountId;
-                    credentials: Credentials | null;
-                  },
-                  ctx,
-                );
-          } catch (err) {
-            if (err instanceof LeadsNow) return e[commit](produced);
-            throw err;
-          }
+        if (!elsewhere(m, a)) return e[commit](produced);
+        if (!r) throw new SyncReadOnly(m);
+        const ctx: RelayContext = {
+          status: (msg) => auth?.status?.(msg),
+          signal:
+            m === 'connect' ? auth?.signal : (a[2] as AbortSignal | undefined),
+          stillCopy: () => elsewhere(m, a),
+        };
+        try {
+          return m === 'connect'
+            ? await r.adopt(produced as Connected, ctx)
+            : await r.commitReauth(
+                produced as {
+                  accountId: AccountId;
+                  credentials: Credentials | null;
+                },
+                ctx,
+              );
+        } catch (err) {
+          if (err instanceof LeadsNow) return e[commit](produced);
+          throw err;
         }
+      }
+      if (elsewhere(m, a)) {
+        // Every other verb reaches the leader as its whole handler
+        // (forward-core), so called directly it is still refused.
+        const r = relay();
         if (r && m === 'applyScope')
           return r.applyScope(
             a[0] as AccountId,

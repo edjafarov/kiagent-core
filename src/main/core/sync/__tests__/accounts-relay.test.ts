@@ -456,6 +456,26 @@ describe('the leader side', () => {
     ).rejects.toThrow(LEADER_CHANGED_SENTENCE);
   });
 
+  it('a commit refused because this device had stopped leading runs when it comes again', async () => {
+    let leads = false;
+    const commitReauth = jest.fn(async (_r: unknown, started?: (a: Account) => void) => {
+      if (!leads) throw new SyncReadOnly('commitReauth');
+      started?.(account('a1'));
+    });
+    const { run, started } = setup({ commitReauth });
+    const body = { opId: 'o1', accountId: 'a1', credentials: { accessToken: 't' } };
+    await expect(run['accounts:commit-reauth'](body)).rejects.toThrow(
+      LEADER_CHANGED_SENTENCE,
+    );
+    leads = true;
+    await run['accounts:commit-reauth'](body);
+    expect(commitReauth).toHaveBeenCalledTimes(2);
+    expect(started).toHaveLength(1);
+    // And once it ran, the same operation runs no more.
+    await run['accounts:commit-reauth'](body);
+    expect(commitReauth).toHaveBeenCalledTimes(2);
+  });
+
   it('a refresh failure carrying the login reaches neither the answer nor the log', async () => {
     const { run, log } = setup({
       freshCredentialsQuiet: jest.fn(async () => {

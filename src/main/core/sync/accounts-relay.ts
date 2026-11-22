@@ -245,7 +245,17 @@ export function createLeaderRunners(
     opId: string,
     key: string,
     fn: () => Promise<T>,
-  ): Promise<T> => d.ops.once(opId, () => d.ops.serial(`relay:${key}`, fn));
+  ): Promise<T> =>
+    d.ops
+      .once(opId, () => d.ops.serial(`relay:${key}`, fn))
+      .catch((err: unknown) => {
+        // This device stopped leading before the commit's turn came, so
+        // nothing ran: the same operation may run when it comes again (here,
+        // if this device leads again, or on the new leader).
+        if (err instanceof Error && err.message === LEADER_CHANGED_SENTENCE)
+          d.ops.forget(opId);
+        throw err;
+      });
   return {
     'accounts:probe': async (req) => {
       const sourceId = isPlain(req) ? req.sourceId : undefined;

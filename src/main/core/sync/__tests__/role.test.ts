@@ -641,28 +641,52 @@ describe('a read-only copy relays account changes', () => {
 
   it('a device-owned source and account stay here', async () => {
     const { real, relay, e } = setup();
+    real.connectAuth.mockResolvedValueOnce({ sourceId: 'local-folder', identifier: 'me' });
+    real.reauth.mockResolvedValueOnce({ accountId: 'mine', credentials: { accessToken: 't' } });
     await e.connect({ descriptor: { id: 'local-folder' } }, 'auth');
     await e.reconnect('mine', 'auth');
     await e.applyScope('mine', {}, '{}');
-    await e.adopt({ sourceId: 'local-folder' });
-    await e.commitReauth({ accountId: 'mine' });
-    expect(real.connect).toHaveBeenCalled();
-    expect(real.reconnect).toHaveBeenCalled();
+    expect(real.adopt).toHaveBeenCalledWith({ sourceId: 'local-folder', identifier: 'me' });
+    expect(real.commitReauth).toHaveBeenCalledWith({ accountId: 'mine', credentials: { accessToken: 't' } });
     expect(real.applyScope).toHaveBeenCalled();
-    expect(real.adopt).toHaveBeenCalled();
-    expect(real.commitReauth).toHaveBeenCalled();
     expect(relay.adopt).not.toHaveBeenCalled();
     expect(relay.commitReauth).not.toHaveBeenCalled();
     expect(relay.applyScope).not.toHaveBeenCalled();
   });
 
-  it('a device that may write runs everything itself', async () => {
+  it('a device that may write signs in and commits here', async () => {
     const { real, relay, e } = setup(false);
-    await e.connect(gmail, 'auth');
-    await e.reconnect('acc', 'auth');
-    expect(real.connect).toHaveBeenCalled();
-    expect(real.reconnect).toHaveBeenCalled();
+    await expect(e.connect(gmail, 'auth')).resolves.toBe('real-adopt');
+    await expect(e.reconnect('acc', 'auth')).resolves.toBe('real-commit');
+    expect(real.connectAuth).toHaveBeenCalled();
+    expect(real.adopt).toHaveBeenCalledWith({ sourceId: 'gmail', identifier: 'me' });
+    expect(real.commitReauth).toHaveBeenCalled();
     expect(relay.adopt).not.toHaveBeenCalled();
+  });
+
+  it('a device that stops leading during the sign-in hands the result to the new leader', async () => {
+    let ro = false;
+    const real = {
+      ...idle(),
+      connectAuth: jest.fn(async () => {
+        ro = true;
+        return { sourceId: 'gmail', identifier: 'me' };
+      }),
+      adopt: jest.fn(async () => 'adopted-here'),
+    };
+    const relay = { adopt: jest.fn(async () => ({ id: 'from-leader' })) };
+    const e = { ...real } as unknown as Record<string, (...a: unknown[]) => Promise<unknown>>;
+    gateEngine(e as never, () => ro, owned, undefined, () => relay as never);
+    await expect(e.connect(gmail, {})).resolves.toEqual({ id: 'from-leader' });
+    expect(real.adopt).not.toHaveBeenCalled();
+  });
+
+  it('an engine without the two halves connects whole, as before', async () => {
+    const real = idle();
+    const e = { ...real } as unknown as Record<string, (...a: unknown[]) => Promise<unknown>>;
+    gateEngine(e as never, () => false, owned);
+    await expect(e.connect(gmail, 'auth')).resolves.toBe('real');
+    expect(real.connect).toHaveBeenCalled();
   });
 
   it('a session asks, on every call, whether the leader holds the login', async () => {

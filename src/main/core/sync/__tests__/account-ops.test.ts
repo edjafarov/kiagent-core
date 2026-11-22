@@ -139,6 +139,18 @@ describe('account operations on the leader', () => {
     expect(runs).toBe(1);
   });
 
+  it('a forgotten operation runs again', async () => {
+    const ops = createAccountOps({ now: () => 0 });
+    let runs = 0;
+    const fn = async () => {
+      runs += 1;
+    };
+    await ops.once('o', fn);
+    ops.forget('o');
+    await ops.once('o', fn);
+    expect(runs).toBe(2);
+  });
+
   it('an account has one key, by id or by what a connect creates', async () => {
     const row = { source: 'gmail', identifier: 'me@example.com' };
     await expect(accountKeyOf(async () => row, 'acc-1')).resolves.toBe(
