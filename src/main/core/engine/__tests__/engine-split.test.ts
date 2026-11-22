@@ -279,14 +279,16 @@ describe('connect and reconnect in two halves', () => {
       expect(refresh).not.toHaveBeenCalled();
       expect((await store.vault.load(account.id))?.accessToken).toBe('old');
 
+      // Also when the mirrored login looks good: another device may have
+      // replaced it already.
       await store.vault.save(account.id, {
-        accessToken: 'good',
+        accessToken: 'looks-good',
         expiresAt: new Date(Date.now() + 3_600_000).toISOString(),
       });
-      await expect(session.credentials()).resolves.toMatchObject({
-        accessToken: 'good',
+      await expect(session.credentials()).resolves.toEqual({
+        accessToken: 'from-leader',
       });
-      expect(viaLeader).toHaveBeenCalledTimes(1);
+      expect(viaLeader).toHaveBeenCalledTimes(2);
     });
   });
 });

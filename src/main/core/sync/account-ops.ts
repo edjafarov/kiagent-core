@@ -12,6 +12,11 @@ export interface AccountOps {
    *  `opId` returns the first run's result (or its failure) and runs
    *  nothing; `null` is never remembered. */
   run<T>(opId: string | null, key: string, fn: () => Promise<T>): Promise<T>;
+  /** Runs `fn` after every earlier operation with the same key. */
+  serial<T>(key: string, fn: () => Promise<T>): Promise<T>;
+  /** Runs `fn` once per `opId`, with no queue: for work that takes its place
+   *  in the queue further down (the engine's commit halves do). */
+  once<T>(opId: string, fn: () => Promise<T>): Promise<T>;
 }
 
 export function createAccountOps(d: {
@@ -36,22 +41,38 @@ export function createAccountOps(d: {
     return next;
   };
 
-  return {
-    run<T>(opId: string | null, key: string, fn: () => Promise<T>): Promise<T> {
-      if (opId === null) return queued(key, fn);
-      const known = results.get(opId);
-      if (known && d.now() - known.at <= ttlMs)
-        return known.result as Promise<T>;
-      results.delete(opId);
-      const result = queued(key, fn);
-      // A remembered failure is read again later: it is never unhandled.
-      result.catch(() => undefined);
-      results.set(opId, { at: d.now(), result });
-      while (results.size > cap) {
-        const oldest = results.keys().next().value as string;
-        results.delete(oldest);
-      }
-      return result;
-    },
+  const once = <T>(opId: string, fn: () => Promise<T>): Promise<T> => {
+    const known = results.get(opId);
+    if (known && d.now() - known.at <= ttlMs) return known.result as Promise<T>;
+    results.delete(opId);
+    const result = fn();
+    // A remembered failure is read again later: it is never unhandled.
+    result.catch(() => undefined);
+    results.set(opId, { at: d.now(), result });
+    while (results.size > cap) {
+      const oldest = results.keys().next().value as string;
+      results.delete(oldest);
+    }
+    return result;
   };
+  return {
+    run: (opId, key, fn) =>
+      opId === null ? queued(key, fn) : once(opId, () => queued(key, fn)),
+    serial: queued,
+    once,
+  };
+}
+
+/** One queue per account, whatever names it: the row's id, or the source and
+ *  identifier a connect is about to create it with. Both give the same key,
+ *  so a second Add of an account still being created waits behind the first. */
+export const accountKey = (source: string, identifier: string): string =>
+  `${source}\u0000${identifier}`;
+
+export async function accountKeyOf(
+  account: (id: string) => Promise<{ source: string; identifier: string } | null>,
+  accountId: string,
+): Promise<string> {
+  const a = await account(accountId).catch(() => null);
+  return a ? accountKey(a.source, a.identifier) : `id:${accountId}`;
 }

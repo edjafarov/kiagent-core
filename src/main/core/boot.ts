@@ -62,6 +62,12 @@ import { collapseFormerlyOwned, uncleanFormerlyOwned } from './sync/collapse';
 import { createSyncService, type SyncService } from './sync/service';
 import { createCopyRelay, type CopyRelay } from './sync/accounts-relay';
 import { newId } from './ids';
+import {
+  accountKey,
+  accountKeyOf,
+  createAccountOps,
+  type AccountOps,
+} from './sync/account-ops';
 import { applyPendingSwap } from './sync/swap';
 import { isResting } from './engine/resting';
 import type { BusyRegistry } from './busy';
@@ -227,6 +233,9 @@ export interface CorePlatform {
    *  or a reconnect, a folder-scope change. The engine gate uses it; the
    *  connect broker asks its `probe` before a sign-in starts. */
   accountRelay: CopyRelay;
+  /** One queue per account for every change to it on this device, with the
+   *  result cache that makes a copy's retried request run once. */
+  accountOps: AccountOps;
   /** The crash-isolated converter (#136): parsers + WASM rasteriser. */
   converter: Converter;
   convert(input: DocumentInput, signal?: AbortSignal): Promise<DocumentInput>;
@@ -538,12 +547,20 @@ export async function bootCore(deps: BootDeps): Promise<CorePlatform> {
         );
       }),
   });
+  const accountOps = createAccountOps({ now: Date.now });
   gate = gateEngine(
     engine,
     () => sync.readOnly(),
     sync,
     (l, m) => sink.log('sync', l, m),
     () => accountRelay,
+    async (ref, fn) =>
+      accountOps.serial(
+        'accountId' in ref
+          ? await accountKeyOf((id) => store.account(id as AccountId), ref.accountId)
+          : accountKey(ref.source, ref.identifier),
+        fn,
+      ),
   );
   // A follower's copied rows change only by what the master sends.
   let archiveSweep = false;
@@ -606,6 +623,7 @@ export async function bootCore(deps: BootDeps): Promise<CorePlatform> {
     senders,
     refreshers,
     accountRelay,
+    accountOps,
     convert,
     converter,
     admission,

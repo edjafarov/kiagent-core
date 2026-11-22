@@ -18,7 +18,9 @@ import type {
   FolderScopeUpdate,
 } from '@shared/contracts';
 
-import type { AccountOps } from './account-ops';
+import { AccountFlowBusyError } from '../engine/flow-errors';
+
+import { accountKey, accountKeyOf, type AccountOps } from './account-ops';
 import type { AccountRelay, RelayContext } from './role';
 import type { SyncService } from './service';
 
@@ -96,6 +98,9 @@ export function createCopyRelay(d: {
     payload: Record<string, unknown>,
     ctx?: RelayContext,
   ): Promise<unknown> => {
+    // A cancel that landed while the source was still finishing its sign-in
+    // sends nothing; once the leader took it, a cancel changes nothing.
+    if (ctx?.signal?.aborted) throw new Error('cancelled');
     const body = { ...payload, opId: d.newId() };
     const started = d.now();
     for (;;) {
@@ -158,8 +163,10 @@ const isPlain = (v: unknown): v is Record<string, unknown> =>
   typeof v === 'object' && v !== null && !Array.isArray(v);
 const isText = (v: unknown): v is string => typeof v === 'string' && v !== '';
 
-const className = (err: unknown): string =>
-  err instanceof Error ? err.name || 'Error' : typeof err;
+const className = (err: unknown): string => {
+  if (!(err instanceof Error)) return typeof err;
+  return err.constructor?.name || err.name || 'Error';
+};
 
 export interface LeaderRunnerDeps {
   engine: {
@@ -177,7 +184,6 @@ export interface LeaderRunnerDeps {
     releaseAccountFlow(accountId: AccountId, flowId: string): void;
     freshCredentialsQuiet(accountId: AccountId): Promise<Credentials | null>;
   };
-  accounts(): Promise<Account[]>;
   account(id: AccountId): Promise<Account | null>;
   hasSource(sourceId: string): boolean;
   ops: AccountOps;
@@ -197,7 +203,7 @@ export function createLeaderRunners(
     } catch (err) {
       const name = className(err);
       d.log(`${what} failed (${name})`);
-      if (name === 'AccountFlowBusyError') throw new Error(BUSY_SENTENCE);
+      if (err instanceof AccountFlowBusyError) throw new Error(BUSY_SENTENCE);
       const msg = err instanceof Error ? err.message : '';
       if (/^unknown source: /.test(msg))
         throw new Error(UNKNOWN_SOURCE_SENTENCE);
@@ -220,6 +226,15 @@ export function createLeaderRunners(
       d.engine.releaseAccountFlow(accountId, flowId);
     }
   };
+  /** Relayed commits to one account run one after the other, each holding
+   *  the account's flow claim; the engine's commit then takes its place in
+   *  the account's own queue (the gate), behind any plain handler. Two
+   *  queues, two keys: nothing waits on itself. */
+  const relayed = <T>(
+    opId: string,
+    key: string,
+    fn: () => Promise<T>,
+  ): Promise<T> => d.ops.once(opId, () => d.ops.serial(`relay:${key}`, fn));
   return {
     'accounts:probe': async (req) => {
       const sourceId = isPlain(req) ? req.sourceId : undefined;
@@ -243,16 +258,8 @@ export function createLeaderRunners(
       )
         throw new Error(BAD_REQUEST_SENTENCE);
       const connected = c as unknown as Connected;
-      // The queue is per account: a known account is found first, so this
-      // waits behind a pause or a scope change of the same account.
-      const known = (await d.accounts()).find(
-        (a) =>
-          a.source === connected.sourceId &&
-          a.identifier === connected.identifier,
-      );
-      const key =
-        known?.id ?? `new:${connected.sourceId}:${connected.identifier}`;
-      return d.ops.run(req.opId, key, () =>
+      const key = accountKey(connected.sourceId, connected.identifier);
+      return relayed(req.opId, key, () =>
         guarded('adopt', async () => {
           const account = await d.engine.adopt(connected);
           d.runAccount(account);
@@ -272,7 +279,8 @@ export function createLeaderRunners(
       const accountId = req.accountId as AccountId;
       const credentials = req.credentials as Credentials | null;
       const { opId } = req;
-      return d.ops.run(opId, accountId, () =>
+      const key = await accountKeyOf(d.account, accountId);
+      return relayed(opId, key, () =>
         guarded('commit-reauth', () =>
           claimed(accountId, opId, async () => {
             await d.engine.commitReauth({ accountId, credentials });
@@ -301,13 +309,14 @@ export function createLeaderRunners(
         configAtOpen: string;
         opId: string;
       };
-      return d.ops.run(opId, accountId, async () => {
+      const key = await accountKeyOf(d.account, accountId);
+      return relayed(opId, key, async () => {
         try {
           return await claimed(accountId, opId, () =>
             d.engine.applyScope(accountId, update, configAtOpen),
           );
         } catch (err) {
-          if (className(err) === 'AccountFlowBusyError')
+          if (err instanceof AccountFlowBusyError)
             throw new Error(BUSY_SENTENCE);
           throw err;
         }
@@ -318,7 +327,8 @@ export function createLeaderRunners(
       if (!isPlain(req) || !isText(req.accountId))
         throw new Error(BAD_REQUEST_SENTENCE);
       const accountId = req.accountId as AccountId;
-      return d.ops.run(null, accountId, () =>
+      const key = await accountKeyOf(d.account, accountId);
+      return d.ops.serial(key, () =>
         guarded('fresh-credentials', () =>
           d.engine.freshCredentialsQuiet(accountId),
         ),
@@ -339,6 +349,9 @@ export function wrapAccountChannels(
       'forward' | 'readOnly' | 'ownsAccount' | 'masterName'
     >;
     ops: AccountOps;
+    account(
+      id: string,
+    ): Promise<{ source: string; identifier: string } | null>;
     newId(): string;
   },
 ): Map<string, (req: unknown) => Promise<unknown>> {
@@ -348,8 +361,11 @@ export function wrapAccountChannels(
     if (!fn) continue;
     const idOf = (req: unknown): string =>
       isPlain(req) && isText(req.accountId) ? req.accountId : '';
-    const here = (opId: string | null, req: unknown): Promise<unknown> =>
-      d.ops.run(opId, idOf(req) || channel, async () => fn(req));
+    const here = async (opId: string | null, req: unknown): Promise<unknown> => {
+      const id = idOf(req);
+      const key = id ? await accountKeyOf(d.account, id) : channel;
+      return d.ops.run(opId, key, async () => fn(req));
+    };
     runners.set(channel, async (body) => {
       if (!isPlain(body) || !isText(body.opId) || !idOf(body.req))
         throw new Error(BAD_REQUEST_SENTENCE);

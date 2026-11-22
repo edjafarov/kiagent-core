@@ -89,7 +89,6 @@ import { wireSyncAppliedPush } from './sync-applied-push';
 import { guardDraftTools } from './outbound/follower-tools';
 import { SYNC_REFUSED_PUSH } from './core/sync/forward-core';
 import { installSettingsSync } from './core/sync/settings-sync';
-import { createAccountOps } from './core/sync/account-ops';
 import { newId } from './core/ids';
 import {
   createLeaderRunners,
@@ -962,14 +961,18 @@ function registerIpc(
   // (`installSettingsSync`); the data verbs below still refuse.
   // Account changes: on a copy they go to the leader for an account it runs;
   // on the leader each runs in the account's queue, once per operation id.
-  const accountOps = createAccountOps({ now: Date.now });
+  const { accountOps } = p;
   const accountChannelRunners = wrapAccountChannels(
     handlers as unknown as Record<string, ((req: never) => unknown) | undefined>,
-    { sync: p.sync, ops: accountOps, newId: () => newId() },
+    {
+      sync: p.sync,
+      ops: accountOps,
+      account: (id) => p.store.account(id as AccountId),
+      newId: () => newId(),
+    },
   );
   const accountRelayRunners = createLeaderRunners({
     engine: p.engine,
-    accounts: () => p.store.read.accounts(),
     account: (id) => p.store.account(id),
     hasSource: (id) => p.sources.get(id) !== undefined,
     ops: accountOps,

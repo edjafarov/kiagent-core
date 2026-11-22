@@ -1,4 +1,4 @@
-import { createAccountOps } from '../account-ops';
+import { accountKey, accountKeyOf, createAccountOps } from '../account-ops';
 
 const gate = () => {
   let open!: () => void;
@@ -125,5 +125,27 @@ describe('account operations on the leader', () => {
     now = 1001;
     await ops.run('a', 'k', fn);
     expect(runs).toBe(2);
+  });
+
+  it('once runs a known operation a single time, with no queue', async () => {
+    const ops = createAccountOps({ now: () => 0 });
+    let runs = 0;
+    const fn = async () => {
+      runs += 1;
+      return runs;
+    };
+    await expect(ops.once('o', fn)).resolves.toBe(1);
+    await expect(ops.once('o', fn)).resolves.toBe(1);
+    expect(runs).toBe(1);
+  });
+
+  it('an account has one key, by id or by what a connect creates', async () => {
+    const row = { source: 'gmail', identifier: 'me@example.com' };
+    await expect(accountKeyOf(async () => row, 'acc-1')).resolves.toBe(
+      accountKey('gmail', 'me@example.com'),
+    );
+    await expect(accountKeyOf(async () => null, 'acc-1')).resolves.toBe(
+      'id:acc-1',
+    );
   });
 });

@@ -9,6 +9,7 @@ import Database from 'better-sqlite3';
 import { resumeHeld } from '../../boot';
 import { migrate } from '../../store/schema';
 import { createWriteTx } from '../../store/write-tx';
+import { accountKey, createAccountOps } from '../account-ops';
 import { followerLookup, gateEngine, readRoleSync, SyncReadOnly } from '../role';
 
 let dir: string;
@@ -675,5 +676,56 @@ describe('a read-only copy relays account changes', () => {
     expect(relay.credentials).toHaveBeenCalledWith('acc');
     const own = e.session({ id: 'mine' }, 'sig', 'scope') as unknown[];
     expect(own).toHaveLength(3);
+  });
+
+  it('a commit that runs here takes its place in the account queue', async () => {
+    const real = {
+      ...idle(),
+      adopt: jest.fn(async () => 'adopted'),
+      commitReauth: jest.fn(async () => 'committed'),
+    };
+    const refs: unknown[] = [];
+    const e = { ...real } as unknown as Record<string, (...a: unknown[]) => Promise<unknown>>;
+    gateEngine(e as never, () => false, owned, undefined, undefined, async (ref, fn) => {
+      refs.push(ref);
+      return fn();
+    });
+    await expect(e.adopt({ sourceId: 'gmail', identifier: 'me' })).resolves.toBe('adopted');
+    await e.commitReauth({ accountId: 'acc' });
+    await e.applyScope('acc', {}, '{}');
+    await e.pause('acc');
+    expect(refs).toEqual([
+      { source: 'gmail', identifier: 'me' },
+      { accountId: 'acc' },
+      { accountId: 'acc' },
+    ]);
+  });
+
+  it('a second Add of an account still being created waits for the first', async () => {
+    const order: string[] = [];
+    let open!: () => void;
+    const first = new Promise<void>((r) => {
+      open = r;
+    });
+    const real = {
+      ...idle(),
+      adopt: jest.fn(async (c: { n: string }) => {
+        order.push(`start ${c.n}`);
+        if (c.n === 'A') await first;
+        order.push(`end ${c.n}`);
+      }),
+    };
+    const ops = createAccountOps({ now: () => 0 });
+    const e = { ...real } as unknown as Record<string, (...a: unknown[]) => Promise<unknown>>;
+    gateEngine(e as never, () => false, owned, undefined, undefined, (ref, fn) =>
+      ops.serial('source' in ref ? accountKey(ref.source, ref.identifier) : ref.accountId, fn),
+    );
+    const a = e.adopt({ sourceId: 'gmail', identifier: 'me', n: 'A' });
+    const b = e.adopt({ sourceId: 'gmail', identifier: 'me', n: 'B' });
+    await new Promise((r) => setTimeout(r, 0));
+    expect(order).toEqual(['start A']);
+    open();
+    await Promise.all([a, b]);
+    expect(order).toEqual(['start A', 'end A', 'start B', 'end B']);
   });
 });

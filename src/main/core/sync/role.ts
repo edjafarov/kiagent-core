@@ -198,6 +198,11 @@ const REFUSED = [
 /** What a read-only copy hands to the leader instead of refusing: the commit
  *  half of a connect or a reconnect, a folder-scope change, and a usable
  *  login for a flow that reads the provider. */
+/** Names an account for its queue: by id, or by what a connect will create. */
+export type AccountRef =
+  | { accountId: string }
+  | { source: string; identifier: string };
+
 export interface RelayContext {
   /** Shown while a finished sign-in waits for the leader. */
   status?(msg: string): void;
@@ -246,6 +251,12 @@ export function gateEngine(
     undefined,
   /** Asked per call: with none, a copy refuses as it always did. */
   relay: () => AccountRelay | null = () => null,
+  /** Runs a commit that happens on this device in the account's queue, so it
+   *  never overlaps another change to the same account (`account-ops`). */
+  serial: <T>(ref: AccountRef, fn: () => Promise<T>) => Promise<T> = (
+    _ref,
+    fn,
+  ) => fn(),
 ): {
   attachHeld(): Promise<void>;
   closeWriter(): Promise<void>;
@@ -360,7 +371,23 @@ export function gateEngine(
           throw new SyncReadOnly(m);
         }
       }
-      const result = await real[m].apply(engine, a);
+      // The three commits take their place in the account's queue here, so
+      // the leader's own flow, a copy's relayed commit and a plain handler
+      // (pause, options) never overlap on one account.
+      const first = a[0] as
+        | { sourceId?: string; identifier?: string; accountId?: string }
+        | string
+        | undefined;
+      let ref: AccountRef | null = null;
+      if (m === 'adopt' && typeof first === 'object')
+        ref = { source: first.sourceId ?? '', identifier: first.identifier ?? '' };
+      else if (m === 'commitReauth' && typeof first === 'object')
+        ref = { accountId: first.accountId ?? '' };
+      else if (m === 'applyScope' && typeof first === 'string')
+        ref = { accountId: first };
+      const result = ref
+        ? await serial(ref, async () => real[m].apply(engine, a))
+        : await real[m].apply(engine, a);
       if (readOnly()) await owned.loadOwned?.();
       return result;
     };

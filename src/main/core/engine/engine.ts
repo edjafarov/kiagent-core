@@ -47,7 +47,7 @@ import { seedConsumerName } from '../store/maintenance-keys';
 import type { CoreStore } from '../store/store';
 import { readMessageEvidence as readMessageEvidenceOperation } from './message-evidence';
 import { FetchDeferredError } from './fetch-deferred';
-import { freshCredentials, REFRESH_MARGIN_MS } from './fresh-credentials';
+import { freshCredentials } from './fresh-credentials';
 import { isParked, isResting } from './resting';
 
 export interface LogSink {
@@ -738,14 +738,9 @@ export function createEngine(deps: EngineDeps): Engine & {
     account,
     signal,
     async credentials(): Promise<Credentials | null> {
-      if (viaLeader) {
-        const creds = await store.vault.load(account.id);
-        if (!creds) return null;
-        const due =
-          creds.expiresAt !== undefined &&
-          Date.parse(creds.expiresAt) < Date.now() + REFRESH_MARGIN_MS;
-        return due ? viaLeader() : creds;
-      }
+      // The mirrored login may be one another device already replaced, so
+      // a copy's flow always asks the leader.
+      if (viaLeader) return viaLeader();
       return freshCredentials({
         vault: store.vault,
         account: account.id,

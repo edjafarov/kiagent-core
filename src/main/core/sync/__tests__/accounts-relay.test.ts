@@ -1,6 +1,7 @@
 import type { Account, AccountId, Connected } from '@shared/contracts';
 
-import { createAccountOps } from '../account-ops';
+import { AccountFlowBusyError } from '../../engine/flow-errors';
+import { accountKey, createAccountOps } from '../account-ops';
 import {
   BAD_REQUEST_SENTENCE,
   BUSY_SENTENCE,
@@ -139,10 +140,33 @@ describe('the copy side', () => {
     expect(sent).toHaveLength(1);
   });
 
-  it('a cancel ends the wait', async () => {
+  it('a sign-in cancelled before it was sent is never sent', async () => {
     const ctl = new AbortController();
-    const { relay, sent } = setup([]);
+    const { relay, sent } = setup([{ ok: true, value: account('a1') }]);
     ctl.abort();
+    await expect(
+      relay.adopt(connected, { signal: ctl.signal }),
+    ).rejects.toThrow('cancelled');
+    expect(sent).toHaveLength(0);
+  });
+
+  it('a cancel ends the wait for the leader', async () => {
+    const ctl = new AbortController();
+    const sent: ForwardRequest[] = [];
+    const relay = createCopyRelay({
+      sync: {
+        forward: async (req) => {
+          sent.push(req);
+          return NO_MASTER;
+        },
+        masterName: () => 'Server',
+      },
+      newId: () => 'op',
+      now: () => 0,
+      sleep: async () => {
+        ctl.abort();
+      },
+    });
     await expect(
       relay.adopt(connected, { signal: ctl.signal }),
     ).rejects.toThrow('cancelled');
@@ -186,11 +210,7 @@ describe('the leader side', () => {
       applyScope: jest.fn(async () => ({ archived: 1 })),
       claimAccountFlow: (id: AccountId, flow: string) => {
         const held = claims.get(id);
-        if (held && held !== flow) {
-          const e = new Error('busy');
-          e.name = 'AccountFlowBusyError';
-          throw e;
-        }
+        if (held && held !== flow) throw new AccountFlowBusyError(held);
         claims.set(id, flow);
       },
       releaseAccountFlow: (id: AccountId, flow: string) => {
@@ -201,7 +221,6 @@ describe('the leader side', () => {
     };
     const run = createLeaderRunners({
       engine: engine as never,
-      accounts: async () => rows,
       account: async (id) => rows.find((r) => r.id === id) ?? null,
       hasSource: (id) => id === 'gmail',
       ops: createAccountOps({ now: () => 0 }),
@@ -410,6 +429,7 @@ describe('the plain account channels', () => {
         },
       },
       ops: createAccountOps({ now: () => 0 }),
+      account: async () => null,
       newId: () => {
         n += 1;
         return `op${n}`;
@@ -467,5 +487,45 @@ describe('the plain account channels', () => {
     await expect(run({ req: { accountId: 'acc' } })).rejects.toThrow(
       BAD_REQUEST_SENTENCE,
     );
+  });
+
+  it("a handler waits behind the leader's own commit to the same account", async () => {
+    const ops = createAccountOps({ now: () => 0 });
+    const row = { source: 'gmail', identifier: 'me@example.com' };
+    const order: string[] = [];
+    const table: Record<string, ((req: never) => unknown) | undefined> = {
+      'accounts:update-outbound': (async () => {
+        order.push('outbound');
+      }) as never,
+    };
+    wrapAccountChannels(table, {
+      sync: {
+        readOnly: () => false,
+        ownsAccount: () => false,
+        masterName: () => null,
+        forward: async () => NO_MASTER,
+      },
+      ops,
+      account: async () => row,
+      newId: () => 'op',
+    });
+    let open!: () => void;
+    const held = new Promise<void>((r) => {
+      open = r;
+    });
+    // What the engine gate does for a folder-scope commit made on the leader.
+    const scope = ops.serial(accountKey('gmail', 'me@example.com'), async () => {
+      order.push('scope:start');
+      await held;
+      order.push('scope:end');
+    });
+    const outbound = (
+      table['accounts:update-outbound'] as unknown as (r: unknown) => Promise<unknown>
+    )({ accountId: 'acc-1' });
+    await new Promise((r) => setTimeout(r, 0));
+    expect(order).toEqual(['scope:start']);
+    open();
+    await Promise.all([scope, outbound]);
+    expect(order).toEqual(['scope:start', 'scope:end', 'outbound']);
   });
 });
