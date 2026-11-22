@@ -3,6 +3,8 @@ import {
   ModelChangedError,
   type EmbedResult,
   type InferenceKind,
+  type InferenceFitness,
+  type InferenceLender,
   type ActiveCallOp,
   type Inference,
   type InferenceProvider,
@@ -132,11 +134,26 @@ export interface InferencePlane extends Inference {
   describe(
     kind: InferenceKind,
     task?: string,
+    /** The lane the caller will execute on. Interactive (the default) names
+     *  this device's own provider; background names a lender's helper while
+     *  one is ready, and is null while a lent kind has none. */
+    lane?: Lane,
   ): Promise<{
     providerId: string;
     modelId: string;
     generation: number;
   } | null>;
+  /** Another device answers background calls of the kinds it takes. */
+  setLender(lender: InferenceLender | null): void;
+  /** Answers a call lent by another device: background gate, then the first
+   *  ready LOCAL provider. Task routes and lenders are never consulted. */
+  runLent(call: {
+    kind: InferenceKind;
+    payload: unknown;
+    signal?: AbortSignal;
+  }): Promise<{ value: unknown; providerId: string; modelId: string }>;
+  /** What this device can run itself, per kind. */
+  fitness(): InferenceFitness[];
   /** Current generation token. One integer per plane, monotonically
    *  increasing, never persisted — a restart is a new generation by
    *  construction (see `createInference`'s seed). */
@@ -322,8 +339,62 @@ export function createInference(
   >();
   /** One record per (kind, task): a task's describe never overwrites the
    *  task-less one a caller without that task will compare against. */
-  const describedKey = (kind: string, task: string | undefined): string =>
-    `${kind}|${task ?? ''}`;
+  const describedKey = (
+    kind: string,
+    task: string | undefined,
+    lane: Lane = 'interactive',
+  ): string => `${kind}|${task ?? ''}|${lane}`;
+
+  let lender: InferenceLender | null = null;
+  let offLender: (() => void) | null = null;
+  /** Providers standing in for a lender's helper: their identity is the one
+   *  that answered, known only after the call. */
+  const lentProviders = new WeakSet<InferenceProvider>();
+  const lends = (kind: InferenceKind, lane: Lane | undefined): boolean =>
+    lane === 'background' && lender !== null && lender.takes(kind);
+  /** One per call: it carries the caller's signal in and the answering
+   *  identity out. */
+  const lentProvider = (
+    from: InferenceLender,
+    kind: InferenceKind,
+    signal: AbortSignal | undefined,
+  ): InferenceProvider => {
+    let who = from.identity(kind);
+    const p: InferenceProvider = {
+      get id() {
+        return who?.providerId ?? 'peer';
+      },
+      supports: [kind],
+      status: () => 'ready',
+      describe: () => (who ? { modelId: who.modelId } : null),
+      async handle(req) {
+        const payload =
+          req.payload && typeof req.payload === 'object'
+            ? { ...(req.payload as Record<string, unknown>) }
+            : req.payload;
+        // The helper's plane has its own generation numbering.
+        if (payload && typeof payload === 'object')
+          delete (payload as Record<string, unknown>).generation;
+        let r: Awaited<ReturnType<InferenceLender['handle']>>;
+        try {
+          r = await from.handle({ kind, payload, signal });
+        } catch (err) {
+          // The lender lives in an extension and cannot construct this
+          // class; workers test for it with `instanceof`.
+          if ((err as Error)?.name === 'LaneClosedError')
+            throw new LaneClosedError((err as Error).message);
+          throw err;
+        }
+        who = { providerId: r.providerId, modelId: r.modelId };
+        return r.value;
+      },
+    };
+    lentProviders.add(p);
+    return p;
+  };
+  /** Identity is read after the call for a remote provider and for a lent one. */
+  const late = (p: InferenceProvider): boolean =>
+    p.remote === true || lentProviders.has(p);
 
   const bump = (): void => {
     generation += 1;
@@ -358,6 +429,8 @@ export function createInference(
   const pick = (
     kind: InferenceKind,
     task?: string,
+    lane?: Lane,
+    signal?: AbortSignal,
   ): InferenceProvider => {
     const routedId = task === undefined ? undefined : routeTable.get(task);
     const routed =
@@ -371,6 +444,18 @@ export function createInference(
     ) {
       return routed;
     }
+    if (lender && lends(kind, lane)) {
+      // Never this device's own provider: a missing helper is "not now".
+      if (!lender.ready(kind))
+        throw new LaneClosedError(
+          `no other device is available for '${kind}' right now`,
+        );
+      return lentProvider(lender, kind, signal);
+    }
+    return pickLocal(kind);
+  };
+
+  const pickLocal = (kind: InferenceKind): InferenceProvider => {
     const p = providers.find(
       (x) => !x.remote && x.supports.includes(kind) && x.status() === 'ready',
     );
@@ -380,10 +465,8 @@ export function createInference(
     return p;
   };
 
-  const modelIdOf = (
-    p: InferenceProvider,
-    kind: InferenceKind,
-  ): string => p.describe?.(kind)?.modelId ?? p.id;
+  const modelIdOf = (p: InferenceProvider, kind: InferenceKind): string =>
+    p.describe?.(kind)?.modelId ?? p.id;
 
   /** Throws BEFORE `p.handle(...)` when the caller passed a `generation`
    *  from `describe()` and the plane has moved on since. Checked AFTER
@@ -424,7 +507,7 @@ export function createInference(
     attempt: (p: InferenceProvider, task: string | undefined) => Promise<T>,
     signal?: AbortSignal,
   ): Promise<T> => {
-    const p = pick(kind, task);
+    const p = pick(kind, task, lane, signal);
     try {
       return await attempt(p, task);
     } catch (err) {
@@ -444,7 +527,7 @@ export function createInference(
         'info',
         `${p.id} can't serve ${task ?? kind} now — answering locally`,
       );
-      return attempt(pick(kind), undefined);
+      return attempt(pick(kind, undefined, lane, signal), undefined);
     }
   };
 
@@ -475,7 +558,7 @@ export function createInference(
         // would make this field always equal what `handle()` itself resolves
         // moments later (see `describedAt`'s comment) — forwarding the
         // RECORDED value is what keeps the provider's own re-check meaningful.
-        const recorded = describedAt.get(describedKey('complete', task));
+        const recorded = describedAt.get(describedKey('complete', task, lane));
         // Only a record made for THIS provider: a routed task that ends up
         // local never carries the remote's model id into the local check.
         const expectModelId =
@@ -509,7 +592,7 @@ export function createInference(
           text: normalized.text,
           providerId: p.id,
           // A remote provider learns its model from the call itself.
-          modelId: p.remote ? modelIdOf(p, 'complete') : modelId,
+          modelId: late(p) ? modelIdOf(p, 'complete') : modelId,
           generation,
           profile,
           promptTokens: normalized.promptTokens,
@@ -554,7 +637,7 @@ export function createInference(
         return {
           text: String(out),
           providerId: p.id,
-          modelId: p.remote ? modelIdOf(p, 'see') : modelId,
+          modelId: late(p) ? modelIdOf(p, 'see') : modelId,
         };
       },
       opts?.signal,
@@ -568,14 +651,18 @@ export function createInference(
       return meta.text;
     },
     completeWithMeta,
-    async describe(kind, task) {
+    async describe(kind, task, lane = 'interactive') {
       let p: InferenceProvider;
       try {
-        p = pick(kind, task);
+        p = pick(kind, task, lane);
       } catch (err) {
         if (err instanceof NoProviderError) return null;
+        // A lent kind with no helper ready: no model now.
+        if (err instanceof LaneClosedError) return null;
         throw err;
       }
+      // A lent kind whose helper was never heard from has no identity.
+      if (lentProviders.has(p) && p.describe?.(kind) == null) return null;
       const modelId = modelIdOf(p, kind);
       // First-write-wins per generation (see describedAt's doc comment):
       // the map only ever holds CURRENT-generation entries (bump()
@@ -583,7 +670,7 @@ export function createInference(
       // already recorded one this generation — keep it. The RETURN value
       // below is unaffected: this caller still gets the live,
       // freshly-resolved modelId regardless of who wrote first.
-      const key = describedKey(kind, task);
+      const key = describedKey(kind, task, lane);
       if (!describedAt.has(key)) {
         describedAt.set(key, { generation, modelId, providerId: p.id });
       }
@@ -598,7 +685,7 @@ export function createInference(
       const lane = opts?.lane ?? 'interactive';
       const waited = gate(lane, opts?.signal);
       if (waited) await waited;
-      const p = pick('read');
+      const p = pick('read', undefined, lane, opts?.signal);
       const out = await tracked(p, 'read', undefined, () =>
         p.handle({
           kind: 'read',
@@ -611,7 +698,7 @@ export function createInference(
     async embed(texts, opts) {
       const waited = gate('background', opts?.signal);
       if (waited) await waited;
-      const p = pick('embed');
+      const p = pick('embed', undefined, 'background', opts?.signal);
       const out = await tracked(p, 'embed', opts?.task, () =>
         p.handle({ kind: 'embed', payload: { texts }, lane: 'background' }),
       );
@@ -621,7 +708,7 @@ export function createInference(
       const lane = opts?.lane ?? 'interactive';
       const waited = gate(lane, opts?.signal);
       if (waited) await waited;
-      const p = pick('hear');
+      const p = pick('hear', undefined, lane, opts?.signal);
       const out = await p.handle({
         kind: 'hear',
         payload: {
@@ -638,11 +725,15 @@ export function createInference(
       return String(out);
     },
     hasProvider(kind) {
+      // Lent: the provider exists, on another device (never "none": the
+      // vision worker would take its OCR-less path).
+      if (lender?.takes(kind)) return true;
       return providers.some(
         (p) => !p.remote && p.supports.includes(kind) && p.status() === 'ready',
       );
     },
     mayBecomeReady(kind) {
+      if (lender?.takes(kind)) return true;
       return providers.some((p) => {
         if (p.remote || !p.supports.includes(kind)) return false;
         const st = p.status();
@@ -674,6 +765,67 @@ export function createInference(
       };
     },
     providers: () => [...providers],
+    setLender(next) {
+      offLender?.();
+      lender = next;
+      offLender = next ? next.onChange(bump) : null;
+      bump();
+    },
+    async runLent(call) {
+      const waited = gate('background', call.signal);
+      if (waited) await waited;
+      const p = pickLocal(call.kind);
+      const task = (call.payload as { task?: unknown } | null)?.task;
+      const run = (): Promise<unknown> =>
+        p.handle({
+          kind: call.kind,
+          payload: call.payload,
+          lane: 'background',
+        });
+      const value =
+        call.kind === 'hear'
+          ? await run()
+          : await tracked(
+              p,
+              call.kind,
+              typeof task === 'string' ? task : undefined,
+              run,
+            );
+      return { value, providerId: p.id, modelId: modelIdOf(p, call.kind) };
+    },
+    fitness() {
+      const kinds: InferenceKind[] = [
+        'complete',
+        'see',
+        'read',
+        'hear',
+        'embed',
+      ];
+      const stateOf = (x: InferenceProvider): 'ready' | 'possible' | 'none' => {
+        const st = x.status();
+        if (st === 'ready') return 'ready';
+        if (st === 'standby' || x.mayBecomeReady?.() === true)
+          return 'possible';
+        if (typeof st === 'object' && 'downloading' in st) return 'possible';
+        return 'none';
+      };
+      return kinds.map((kind): InferenceFitness => {
+        const own = providers.filter(
+          (x) => !x.remote && x.supports.includes(kind),
+        );
+        const best =
+          own.find((x) => stateOf(x) === 'ready') ??
+          own.find((x) => stateOf(x) === 'possible');
+        if (!best)
+          return { kind, local: 'none', providerId: null, modelId: null };
+        return {
+          kind,
+          local: stateOf(best),
+          providerId: best.id,
+          modelId: modelIdOf(best, kind),
+        };
+      });
+    },
     setRoute(task, providerId) {
       if ((routeTable.get(task) ?? null) === providerId) return;
       // No bump: a route decides only which provider serves its task;

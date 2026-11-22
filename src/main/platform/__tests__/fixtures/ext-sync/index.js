@@ -52,6 +52,9 @@ module.exports = {
       runForwarded: await host.sync.runForwarded({ kind: 'k' }),
       drainOutbound: await host.sync.drainOutbound(),
       retained: await host.sync.retained('t'),
+      setAiLender: await host.sync.setAiLender(null),
+      aiFitness: await host.sync.aiFitness(),
+      runAiCall: await host.sync.runAiCall({ kind: 'read', payload: {} }),
     };
     fs.writeFileSync(process.env.KIA_SYNC_FIXTURE_OUT, JSON.stringify(calls));
   },

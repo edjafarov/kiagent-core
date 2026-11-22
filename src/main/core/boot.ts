@@ -483,6 +483,18 @@ export async function bootCore(deps: BootDeps): Promise<CorePlatform> {
       }
       await platform.promote();
     },
+    ai: {
+      setLender: (l) => inference.setLender(l),
+      fitness: () => ({
+        weak: hostBudget(platform.host, platform.llmAccel()).weak,
+        onPower: !platform.scheduler.env.onBattery,
+        busy:
+          !backgroundLaneOpen(platform) ||
+          inference.activeCalls.list().length > 0,
+        kinds: inference.fitness(),
+      }),
+      run: (call) => inference.runLent(call),
+    },
     sources,
     log: (level, msg) => sink.log('sync', level, msg),
   });

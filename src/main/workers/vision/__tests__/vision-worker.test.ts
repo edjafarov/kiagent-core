@@ -883,6 +883,20 @@ describe('a dead VLM never strands a doc whose OCR ran (windows-ocr §3)', () =>
     expect(await worker().work(change({}), s)).toBe('defer');
     expect(bump).not.toHaveBeenCalled();
   });
+  it('a model change under the call never counts: another device took over or left', async () => {
+    const bump = jest.fn();
+    const s = fakeSession({
+      read: async () => 'few',
+      see: async () => {
+        throw Object.assign(new Error('model changed'), {
+          name: 'ModelChangedError',
+        });
+      },
+      bump,
+    });
+    expect(await worker().work(change({}), s)).toBe('defer');
+    expect(bump).not.toHaveBeenCalled();
+  });
   it('NoProviderError(see) while a see provider may become ready never counts', async () => {
     const bump = jest.fn();
     const s = fakeSession({

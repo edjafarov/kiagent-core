@@ -4,6 +4,9 @@
 import fs from 'node:fs';
 
 import type {
+  AiFitness,
+  InferenceKind,
+  InferenceLender,
   ForwardRequestWire,
   ForwardResultWire,
   OfferedSettingsWire,
@@ -163,6 +166,14 @@ export interface SyncService {
     settings: OfferedSettingsWire,
   ): Promise<{ prefs: string[]; extensions: string[] }>;
   setRunners(r: ForwardRunners | null): void;
+  /** Another device answers this one's background AI calls (null: none). */
+  setAiLender(l: InferenceLender | null): Promise<void>;
+  aiFitness(): Promise<AiFitness>;
+  /** Answers one AI call lent by the leader, on this device's own providers. */
+  runAiCall(call: {
+    kind: InferenceKind;
+    payload: unknown;
+  }): Promise<{ value: unknown; providerId: string; modelId: string }>;
   /** Runs a forwarded request on the leader, with no ledger: every forwarded
    *  handler is an idempotent upsert. A follower refuses. */
   runForwarded(req: ForwardRequest): Promise<ForwardResult>;
@@ -314,6 +325,15 @@ export interface SyncServiceDeps {
   resumeWork?: () => Promise<void>;
   /** Milliseconds, for the delivery queue's backoff. */
   nowMs?: () => number;
+  /** The inference plane's lending side; absent in a build without one. */
+  ai?: {
+    setLender(l: InferenceLender | null): void;
+    fitness(): AiFitness;
+    run(call: {
+      kind: InferenceKind;
+      payload: unknown;
+    }): Promise<{ value: unknown; providerId: string; modelId: string }>;
+  };
   /** What `sync_state` said at boot, read once. The writer worker derives its
    *  fence from the same row (`bootPhase`), so nothing is posted to it: a
    *  tracking leader wakes fenced (another device may lead by now) and only
@@ -725,6 +745,20 @@ export function createSyncService(deps: SyncServiceDeps): SyncService {
     },
     setRunners: (r) => {
       runners = r;
+    },
+    setAiLender: async (l) => {
+      deps.ai?.setLender(l);
+    },
+    aiFitness: async () =>
+      deps.ai?.fitness() ?? {
+        weak: true,
+        onPower: false,
+        busy: true,
+        kinds: [],
+      },
+    runAiCall: async (call) => {
+      if (!deps.ai) throw new Error('inference is not wired');
+      return deps.ai.run(call);
     },
     runForwarded: async (req) => {
       if (readOnly()) {

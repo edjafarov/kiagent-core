@@ -8,6 +8,7 @@ import type {
   EmbedResult,
   EventMeta,
   InferenceKind,
+  Lane,
   LaneState,
   LogLevel,
   Query,
@@ -211,7 +212,11 @@ export interface SurfaceDeps {
     /** Optional like `describe`: production injects the plane's `embed`;
      *  a surface built without it rejects every call. */
     embed?(texts: string[], opts?: { task?: string }): Promise<EmbedResult>;
-    describe?(kind: InferenceKind): Promise<{
+    describe?(
+      kind: InferenceKind,
+      task?: string,
+      lane?: Lane,
+    ): Promise<{
       providerId: string;
       modelId: string;
       generation: number;
@@ -632,7 +637,12 @@ export function buildSurfaces(deps: SurfaceDeps): {
           ...(opts as object),
         }),
       lane: () => deps.inference.lane(),
-      describe: (kind) => describeInference(kind as InferenceKind),
+      describe: (kind, opts) => {
+        const lane = (opts as { lane?: Lane } | undefined)?.lane;
+        return lane === undefined
+          ? describeInference(kind as InferenceKind)
+          : describeInference(kind as InferenceKind, undefined, lane);
+      },
       // Background only: an extension cannot embed on the interactive lane.
       embed: async (texts, opts) => {
         if (!deps.inference.embed) {
