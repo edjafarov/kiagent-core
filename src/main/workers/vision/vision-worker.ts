@@ -331,8 +331,14 @@ export function createVisionWorker(deps: {
         // worse, an OCR-less permanent record). LaneClosedError (window
         // closed mid-run) defers the same way. Only a genuine "no read
         // provider" (e.g. non-mac host) falls through to pass 2.
-        if (!(err instanceof NoProviderError))
-          return err instanceof LaneClosedError ? 'defer' : 'retry';
+        if (!(err instanceof NoProviderError)) {
+          if (err instanceof LaneClosedError) return 'defer';
+          session.log(
+            'info',
+            `vision: text recognition failed on ${doc.id}, will retry: ${String(err)}`,
+          );
+          return 'retry';
+        }
         // An OCR provider still starting is not "no OCR": wait for it.
         if (session.mayBecomeReady('read')) return 'defer';
         ocrFailed = true;
@@ -406,8 +412,14 @@ export function createVisionWorker(deps: {
           (await session.read(png, { mime: 'image/png' })) ?? '';
       } catch (err) {
         // Same transient-vs-absent split as the image path above.
-        if (!(err instanceof NoProviderError))
-          return err instanceof LaneClosedError ? 'defer' : 'retry';
+        if (!(err instanceof NoProviderError)) {
+          if (err instanceof LaneClosedError) return 'defer';
+          session.log(
+            'info',
+            `vision: text recognition failed on ${doc.id} page ${page}, will retry: ${String(err)}`,
+          );
+          return 'retry';
+        }
         if (session.mayBecomeReady('read')) return 'defer';
         if (listed) {
           // No VLM for needs-ocr, and its text is already indexed: park

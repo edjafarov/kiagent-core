@@ -104,11 +104,12 @@ export function attachBundledWorkers(
       hear.local === 'ready';
     const now = ready ? ['hear'] : [];
     const can = hear && hear.local !== 'none' ? ['hear'] : [];
-    // Only macOS decodes every format (transcode.ts); elsewhere wav and mp3.
-    if (process.platform === 'darwin') {
-      now.push('decode');
-      can.push('decode');
-    }
+    // Only macOS decodes every format (transcode.ts); elsewhere wav and mp3,
+    // and a file in any other format is skipped for good. Every device lists
+    // `decode` as part of the work, so one that lacks it hands audio to a
+    // device that has it, and never to another that lacks it.
+    can.push('decode');
+    if (process.platform === 'darwin') now.push('decode');
     return { ready, can, now };
   });
   registerRedrive(platform, audioWorker, [deps.localAsr]);

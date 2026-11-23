@@ -212,3 +212,26 @@ it('needs-ocr with extraction is done', () => {
     }),
   ).toBe('skip');
 });
+
+it('an image format nothing here can open is not visual work', () => {
+  for (const [mime, title] of [
+    ['image/svg+xml', 'logo.svg'],
+    ['image/vnd.djvu', 'book.djvu'],
+    ['IMAGE/SVG+XML', 'Logo.SVG'],
+  ])
+    expect(
+      classifyDocument({
+        ...base,
+        title,
+        metadata: { mime, sizeBytes: 90_000 },
+      } as Document),
+    ).toBe('skip');
+  // A readable image keeps its place.
+  expect(
+    classifyDocument({
+      ...base,
+      title: 'scan.png',
+      metadata: { mime: 'image/png', sizeBytes: 90_000 },
+    } as Document),
+  ).toBe('candidate');
+});

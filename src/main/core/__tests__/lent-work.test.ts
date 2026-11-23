@@ -14,14 +14,17 @@ const document = {
 const change: Change = { seq: 5, kind: 'document', document };
 
 const localCalls: string[] = [];
+const localPayloads: unknown[] = [];
 
 function setup(laneOpen = true) {
   localCalls.length = 0;
+  localPayloads.length = 0;
   const lent = createLentWork({
     inference: {
       // The local-only path: no task route, no lender.
       runLent: async (call) => {
         localCalls.push(call.kind);
+        localPayloads.push(call.payload);
         return { value: `${call.kind} here`, providerId: 'p', modelId: 'm' };
       },
     },
@@ -58,7 +61,7 @@ const worker: Worker = {
     const n = await session.bump('ocr');
     session.enrich({
       documentId: c.document.id,
-      markdown: `${bytes?.length} bytes, other ${other}, attempt ${n}, ${await session.read(new Uint8Array())}`,
+      markdown: `${bytes?.length} bytes, other ${other}, attempt ${n}, ${await session.read(new Uint8Array(), { mime: 'image/png' })}`,
       metadata: { progress: undefined },
     });
     session.emit({
@@ -92,6 +95,8 @@ describe('answering a lent job', () => {
     expect(asked).toEqual(['bytes:d1', 'bump:ocr']);
     // Its model call ran on this device's own provider.
     expect(localCalls).toEqual(['read']);
+    // With everything the worker set on the call.
+    expect(localPayloads[0]).toMatchObject({ mime: 'image/png' });
   });
 
   it('refuses a worker it does not have at that version', async () => {

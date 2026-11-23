@@ -72,6 +72,24 @@ export function isVlmDecodable(doc: Document): boolean {
   return !VLM_UNDECODABLE_EXT_RE.test(name);
 }
 
+// `image/*` formats neither text recognition nor the vision model can open:
+// drawings (SVG), scanned-book containers (DjVu), editor files, icons. Taken
+// for images they failed on every attempt and ended as failed work.
+const UNREADABLE_IMAGE_MIMES = new Set([
+  'image/svg+xml',
+  'image/vnd.djvu',
+  'image/x-djvu',
+  'image/vnd.adobe.photoshop',
+  'image/x-xcf',
+  'image/vnd.dwg',
+  'image/vnd.dxf',
+  'image/x-icon',
+  'image/vnd.microsoft.icon',
+  'image/x-eps',
+  'image/emf',
+  'image/wmf',
+]);
+
 export function classifyDocument(doc: Document): 'candidate' | 'skip' {
   if (doc.archivedAt) return 'skip';
   if (doc.type !== 'attachment' && doc.type !== 'file') return 'skip';
@@ -89,7 +107,9 @@ export function classifyDocument(doc: Document): 'candidate' | 'skip' {
   // `matches()` stops the worker's feed loop permanently — a non-string
   // mime must classify as absent, not crash.
   const image =
-    (typeof meta.mime === 'string' && meta.mime.startsWith('image/')) ||
+    (typeof meta.mime === 'string' &&
+      meta.mime.startsWith('image/') &&
+      !UNREADABLE_IMAGE_MIMES.has(meta.mime.toLowerCase())) ||
     (!pdf && VISUAL_EXT_RE.test(name) && !/\.pdf$/i.test(name));
   if (!pdf && !image) return 'skip';
   // PDFs go to the parser first (workers/convert); only one it found

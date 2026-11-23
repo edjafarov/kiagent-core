@@ -95,27 +95,22 @@ export function createLentWork(deps: {
       const session: WorkerSession = {
         signal,
         async inference(prompt, opts) {
+          // Everything the caller set travels, as in the engine's own
+          // session; only the lane and the provider choice are this device's.
           const { value } = await local('complete', {
-            prompt,
-            maxTokens: opts?.maxTokens,
             profile: 'default',
+            ...opts,
+            prompt,
           });
           return typeof value === 'string'
             ? value
             : String((value as { text?: unknown } | null)?.text ?? '');
         },
         async see(image, prompt, opts) {
-          return String(
-            (await local('see', { image, prompt, mime: opts?.mime })).value,
-          );
+          return String((await local('see', { ...opts, image, prompt })).value);
         },
         async seeWithMeta(image, prompt, opts) {
-          const r = await local('see', {
-            image,
-            prompt,
-            mime: opts?.mime,
-            task: opts?.task,
-          });
+          const r = await local('see', { ...opts, image, prompt });
           return {
             text: String(r.value),
             providerId: r.providerId,
@@ -123,14 +118,10 @@ export function createLentWork(deps: {
           };
         },
         async read(image, opts) {
-          return String(
-            (await local('read', { image, mime: opts?.mime })).value,
-          );
+          return String((await local('read', { ...opts, image })).value);
         },
         async hear(audio, opts) {
-          return String(
-            (await local('hear', { audio, format: opts?.format })).value,
-          );
+          return String((await local('hear', { ...opts, audio })).value);
         },
         // Only the job's own document: the leader serves nothing else.
         fetchBytes: (doc) =>
