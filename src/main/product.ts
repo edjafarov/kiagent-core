@@ -23,6 +23,7 @@ const schema = z
       .string()
       .regex(/^[a-z][a-z0-9+.-]{1,31}$/)
       .optional(),
+    headless: z.boolean().optional(),
   })
   .strict();
 
@@ -57,6 +58,11 @@ export interface ProductConfig {
    * (electron-builder `protocols`), which macOS needs.
    */
   urlScheme?: string;
+  /**
+   * A product that runs with no window, tray or dialogs (a server): the same
+   * runtime, started without them. Absent/false: the desktop app.
+   */
+  headless?: boolean;
 }
 
 export const DEFAULT_PRODUCT: ProductConfig = {

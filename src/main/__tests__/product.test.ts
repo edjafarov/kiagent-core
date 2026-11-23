@@ -172,4 +172,13 @@ describe('loadProductConfig', () => {
     );
     expect(loadProductConfig([tmp], () => {})).toEqual(DEFAULT_PRODUCT);
   });
+
+  it('accepts headless; absent means the desktop app', () => {
+    fs.writeFileSync(
+      path.join(tmp, 'product.json'),
+      JSON.stringify({ productName: 'Acme', headless: true }),
+    );
+    expect(loadProductConfig([tmp]).headless).toBe(true);
+    expect(DEFAULT_PRODUCT.headless).toBeUndefined();
+  });
 });
