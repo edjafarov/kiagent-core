@@ -56,6 +56,11 @@ module.exports = {
       setPuller: await host.sync.setPuller(null),
       aiFitness: await host.sync.aiFitness(),
       runAiCall: await host.sync.runAiCall({ kind: 'read', payload: {} }),
+      setWorkLender: await host.sync.setWorkLender(null),
+      runLentWork: await host.sync.runLentWork(
+        { worker: 'convert', version: 1, change: null },
+        null,
+      ),
     };
     fs.writeFileSync(process.env.KIA_SYNC_FIXTURE_OUT, JSON.stringify(calls));
   },
