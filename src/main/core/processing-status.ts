@@ -144,7 +144,9 @@ export function createProcessingStatus(deps: ProcessingStatusDeps): {
         deps.patch({ lane });
       }
       const edge = prev !== null && prev !== 'open' && lane === 'open';
-      if (edge || (lane === 'open' && wakePending)) {
+      // `wakePending` comes only while work may run: an open lane, or a
+      // helper answering for a busy device (the lane shown stays the real one).
+      if (edge || wakePending) {
         void deps
           .wakeWorkers()
           .then(refreshWaiting, (e) =>

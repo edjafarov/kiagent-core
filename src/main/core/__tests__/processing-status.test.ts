@@ -245,6 +245,17 @@ test('an open tick with a pending wake wakes workers even without a closed→ope
   expect(t.wakeWorkers).toHaveBeenCalledTimes(1);
 });
 
+test('a pending wake on a closed lane wakes workers: a helper answers for a busy device', async () => {
+  const t = setup();
+  t.status.tick('battery');
+  t.status.tick('battery', true);
+  await flush();
+  expect(t.wakeWorkers).toHaveBeenCalledTimes(1);
+  // The lane shown stays the real one.
+  expect(t.patch).toHaveBeenCalledWith({ lane: 'battery' });
+  expect(t.patch).not.toHaveBeenCalledWith({ lane: 'open' });
+});
+
 test('the very first tick wakes when a wake is pending (closure before the first tick)', async () => {
   const t = setup();
   t.status.tick('open', true);

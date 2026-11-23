@@ -1,7 +1,9 @@
 import { createAdmission } from '../admission';
 import {
+  backgroundAdmits,
   backgroundLaneOpen,
   backgroundLaneState,
+  effectiveLaneState,
   enrichmentInputsFor,
   requestLaneWake,
   takeLaneWake,
@@ -199,4 +201,59 @@ it('requestLaneWake arms exactly one pending wake (#59 §0 repair completion)', 
   requestLaneWake(target);
   expect(takeLaneWake(target)).toBe(true);
   expect(takeLaneWake(target)).toBe(false);
+});
+
+describe('a busy device with a helper', () => {
+  /** A helper answers `see`; nobody answers `read`. */
+  const withHelper = (p: CorePlatform): CorePlatform => {
+    (p as { inference: unknown }).inference = {
+      lent: (k: string) => k === 'see',
+    };
+    return p;
+  };
+  const alone = (p: CorePlatform): CorePlatform => {
+    (p as { inference: unknown }).inference = { lent: () => false };
+    return p;
+  };
+
+  it('work of a kind the helper answers is admitted, other kinds are not', () => {
+    const p = withHelper(platform({ onBattery: true }));
+    expect(backgroundAdmits(p, ['see', 'read'], NOON)).toBe(true);
+    expect(backgroundAdmits(p, ['read'], NOON)).toBe(false);
+    expect(
+      backgroundAdmits(alone(platform({ onBattery: true })), ['see'], NOON),
+    ).toBe(false);
+    expect(backgroundAdmits(alone(platform({})), ['read'], NOON)).toBe(true);
+  });
+
+  it.each([
+    ['open stays open', {}, true, 'open'],
+    ['on battery with a helper reads open', { onBattery: true }, true, 'open'],
+    [
+      'on battery alone keeps its reason',
+      { onBattery: true },
+      false,
+      'battery',
+    ],
+    [
+      'in use with a helper reads open',
+      { window: 'idle' as const, userActive: true },
+      true,
+      'open',
+    ],
+    [
+      'processing turned off is never overridden',
+      { enabled: false },
+      true,
+      'disabled',
+    ],
+  ])('the lane extensions see: %s', (_n, over, helper, want) => {
+    const p = platform(over);
+    expect(effectiveLaneState(helper ? withHelper(p) : alone(p), NOON)).toBe(
+      want,
+    );
+    // The real reason is still what the status row is given.
+    if (want === 'open' && Object.keys(over).length)
+      expect(backgroundLaneState(p, NOON)).not.toBe('open');
+  });
 });

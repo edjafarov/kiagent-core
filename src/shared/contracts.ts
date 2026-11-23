@@ -1426,6 +1426,10 @@ export interface AiFitness {
   onPower: boolean;
   /** The background lane is closed here, or a local call is executing. */
   busy: boolean;
+  /** Why the background lane is closed here, or `open`. A leader hands its
+   *  background AI work to a helper while this is closed for a reason other
+   *  than `disabled`. */
+  lane?: LaneState;
   kinds: InferenceFitness[];
 }
 
