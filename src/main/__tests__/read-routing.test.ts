@@ -6,9 +6,9 @@ const read = (rel: string) =>
 
 describe('read routing (spec §3.3)', () => {
   // #147: the renderer reads also run as foreground work (inForeground).
-  it('MCP and the renderer foreground IPC use the read plane', () => {
+  // What MCP is handed is asserted on the built runtime (runtime.test.ts).
+  it('the renderer foreground IPC uses the read plane', () => {
     const main = read('main.ts');
-    expect(main).toMatch(/query:\s*p\.readsFor\('mcp'\)/);
     expect(main).toMatch(
       /'search:query':\s*\(req\)\s*=>\s*inForeground\(\s*p\.admission,\s*\(\)\s*=>\s*p\.readsFor\('renderer'\)\.search\(/,
     );
@@ -53,8 +53,7 @@ describe('read routing (spec §3.3)', () => {
 });
 
 describe('query_sql routing', () => {
-  it('the app hands the MCP server the killable runner; the server never opens a handle itself', () => {
-    expect(read('main.ts')).toMatch(/sqlExecutor:\s*createSqlRunner\(/);
+  it('the server never opens a handle itself', () => {
     expect(read('core/mcp/server.ts')).not.toMatch(/new Database\(/);
     expect(read('core/mcp/server.ts')).not.toMatch(/better-sqlite3/);
   });
