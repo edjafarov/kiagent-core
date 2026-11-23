@@ -46,6 +46,12 @@ import {
  * extensions) rather than a core-committed contract.
  */
 export interface MainProcessApi {
+  seedAccount(
+    source: string,
+    identifier: string,
+    creds: Credentials,
+  ): Promise<{ accountId: string }>;
+
   readonly apiVersion: 1;
   identity: {
     get(): Promise<Identity | null>;
@@ -129,6 +135,12 @@ export interface MainProcessApi {
       req: import('http').IncomingMessage,
       res: import('http').ServerResponse,
     ): Promise<boolean>;
+    draftMessage(a: {
+      accountId: string;
+      to: string[];
+      subject: string;
+      body: string;
+    }): Promise<{ draft_id: string }>;
     /** A review link for an event draft's CURRENT revision (Email Kia
      *  appends it to the reply). Remote origin when the tunnel is up, else
      *  loopback; null when the draft is no longer a draft. Default TTL 24 h. */
@@ -169,6 +181,8 @@ export interface MainProcessApi {
 const EVENT_LINK_TTL_MS = 24 * 60 * 60_000;
 
 export interface BuildMainApiDeps {
+  patchAppState?(partial: { identity: Identity | null }): void;
+
   store: CoreStore;
   mcp: McpServerHandle;
   /** Only the electron `App` members actually used — keeps this testable
@@ -281,9 +295,23 @@ export function buildMainApi(deps: BuildMainApiDeps): MainProcessApi {
     );
   return {
     apiVersion: 1,
+    async seedAccount(source, identifier, creds) {
+      const account = await deps.store.createAccount({
+        source,
+        identifier,
+        config: {},
+        status: 'connecting',
+      });
+      await deps.store.vault.save(account.id, creds);
+      deps.runAccount?.(account);
+      return { accountId: account.id };
+    },
     identity: {
       get: () => deps.store.identity.get(),
-      set: (i) => deps.store.identity.set(i),
+      set: async (i) => {
+        await deps.store.identity.set(i);
+        deps.patchAppState?.({ identity: i });
+      },
     },
     vault: {
       load: (accountId) => deps.store.vault.load(accountId),
@@ -451,6 +479,7 @@ export function buildMainApi(deps: BuildMainApiDeps): MainProcessApi {
     outbound: {
       setRemoteBaseUrl: (url) => deps.outbound.service.setRemoteBaseUrl(url),
       handleRequest: (req, res) => deps.outbound.routes.handleRemote(req, res),
+      draftMessage: (a) => deps.outbound.service.draftMessage(a),
       eventConfirmUrl: async (draftId, opts) => {
         const cal = deps.outbound.calendar;
         if (!cal) return null;

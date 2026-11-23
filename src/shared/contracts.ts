@@ -1637,7 +1637,7 @@ export interface WorkerSession {
 /** 'done' advances; 'skip' is terminal (never retried); 'defer' parks the
  *  change for the worker's NEXT scheduled window — the two-pass pattern.
  *  A thrown error retries up to maxAttempts, records 'failed', moves on. */
-export type WorkOutcome = 'done' | 'skip' | 'defer';
+export type WorkOutcome = 'done' | 'skip' | 'defer' | 'retry';
 
 /** A consumer with a durable cursor over the document feed. Results live in
  *  the module's PrivateDb or come back as documents via emit(). Delivery is

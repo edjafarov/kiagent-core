@@ -177,7 +177,7 @@ it('read throws NoProviderError (no OCR provider, e.g. non-mac) → straight to 
 // Finding 3: a crashed OCR helper is transient, not "no provider". It must
 // DEFER (so the re-drive recovers the doc) rather than silently degrade to
 // pass 2 — which, before the fix, left a doc permanently OCR-less.
-it('read throws a generic error (helper crash) → defer, no enrich', async () => {
+it('read throws a generic error (helper crash) → retry, no enrich', async () => {
   const see = jest.fn(async () => 'a description of the page');
   const session = fakeSession({
     read: async () => {
@@ -196,7 +196,7 @@ it('read throws a generic error (helper crash) → defer, no enrich', async () =
 
   const result = await worker.work(change({}), session);
 
-  expect(result).toBe('defer');
+  expect(result).toBe('retry');
   expect(session.enriched).toHaveLength(0);
   expect(see).not.toHaveBeenCalled(); // did NOT fall through to pass 2
 });
@@ -335,7 +335,7 @@ it('worker has correct metadata', () => {
 
   expect(worker.name).toBe('vision');
   expect(worker.version).toBe(1);
-  expect(worker.schedule).toEqual({ every: '30m' });
+  expect(worker.schedule).toEqual({ every: '5m' });
 });
 
 it('downscales for `see` but hands `read` the FULL-SIZE page', async () => {
@@ -564,7 +564,7 @@ describe('windowed OCR', () => {
       },
       fetchBytes,
     });
-    expect(await worker.work(change({}), failing)).toBe('defer');
+    expect(await worker.work(change({}), failing)).toBe('retry');
     await worker.work(change({}), fakeSession({ read: ocrByPage, fetchBytes }));
     expect(fetchBytes).toHaveBeenCalledTimes(2);
   });
@@ -1092,7 +1092,7 @@ describe('a read provider still starting (selftest pending) is waited for', () =
   });
 });
 
-it('a raster helper timeout defers; other raster errors still reject', async () => {
+it('a raster helper timeout defers; other raster errors skip (unreadable PDF)', async () => {
   const mk = (err: Error) =>
     createVisionWorker({
       rasterizer: { pdfToPngs: jest.fn(async () => Promise.reject(err)) },
@@ -1103,9 +1103,9 @@ it('a raster helper timeout defers; other raster errors still reject', async () 
       new HelperTimeoutError('kia-vision rasterize timed out after 120000ms'),
     ).work(change({}), fakeSession()),
   ).toBe('defer');
-  await expect(
-    mk(new Error('corrupt')).work(change({}), fakeSession()),
-  ).rejects.toThrow('corrupt');
+  expect(await mk(new Error('corrupt')).work(change({}), fakeSession())).toBe(
+    'skip',
+  );
 });
 
 it('pre-flight: waits for the foreground before the lane check and any fetch', async () => {

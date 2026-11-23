@@ -83,7 +83,7 @@ export function attachBundledWorkers(
 }
 
 /** The deferred-work re-drive job shared by the bundled workers: gated on the
- *  processing window, only runs when this worker actually has deferred work,
+ *  processing window, also repairs missed vision work after the feed cursor,
  *  and triggers ONLY the installers passed for this worker — deferred OCR
  *  work must never download whisper, and deferred audio work must not keep
  *  Gemma installs warm (demand-only downloading, spec §5). The consumer is
@@ -103,9 +103,13 @@ export function registerRedrive(
       // Existence probe, NOT a fetch: this gate used to pull every deferred
       // seq across the DB worker boundary — 2.1M rows in one structured-clone
       // reply — merely to ask whether the backlog was empty.
-      if (!(await platform.store.ledgerHasDeferred(consumer))) return;
-      for (const i of installers) i.ensureInstalled(); // no-op if installed/downloading/opted-out
-      await platform.engine.rerunDeferred(worker);
+      const hasDeferred = await platform.store.ledgerHasDeferred(consumer);
+      if (hasDeferred) {
+        for (const i of installers) i.ensureInstalled(); // no-op if installed/downloading/opted-out
+        await platform.engine.rerunDeferred(worker);
+      }
+      if (worker.name === 'vision')
+        await platform.engine.rerunMissingVision(worker);
     },
   );
 }

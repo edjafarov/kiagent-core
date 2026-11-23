@@ -16,6 +16,7 @@ import {
   type ContributedUnavailableReason,
 } from '@renderer/screens/ContributedUnavailable';
 import { ContributedPage } from '@renderer/contributed-page';
+import { PRODUCT_SCREENS } from '@renderer/composition';
 
 /** 'page': the screen renders its own Page (top bar + pane).
  *  'host': App renders the top bar and puts the screen in the legacy frame. */
@@ -62,6 +63,7 @@ export function getDefaultScreens(): ScreenDefinitions {
       frame: 'page',
       factory: (params) => <Settings pane={params.pane} />,
     },
+    ...PRODUCT_SCREENS,
   };
 }
 
@@ -108,6 +110,7 @@ export function createScreenRegistry(
       if (!ext || reason) {
         return (
           <ContributedUnavailable
+            key={view}
             extensionName={ext?.name ?? extensionId}
             reason={reason ?? 'not-installed'}
           />
@@ -115,6 +118,7 @@ export function createScreenRegistry(
       }
       return (
         <ContributedPage
+          key={view}
           ext={ext}
           contributionId={contributionId}
           params={params}

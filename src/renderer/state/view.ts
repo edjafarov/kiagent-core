@@ -1,5 +1,10 @@
 import { createContext, useContext } from 'react';
 import {
+  PRODUCT_INITIAL_VIEW,
+  PRODUCT_ROUTES,
+  type ProductViewParams,
+} from '@shared/composition';
+import {
   resolveInitialFrom,
   type NavContextValue,
   type Resolved,
@@ -9,18 +14,18 @@ import {
  * Routed screens. Deliberately small: Sources owns its own in-screen
  * navigation. Settings is a routed page; its pane is the `pane` param.
  *
- * `ROUTE_META` is the catalog pattern (see the extension-UI design spec,
- * "the product has already generalised routing; core has not"), populated
- * here with CORE'S OWN routes only — the product's own copy carries
- * more. A route added to `ROUTE_META` becomes a `KnownView` everywhere with
- * no second edit: the union and the runtime list cannot disagree,
- * structurally, the same way the product's ROUTE_META comment describes.
+ * `ROUTE_META` is the route catalog: core's own routes plus the product's
+ * (`PRODUCT_ROUTES` in src/shared/composition.ts). A route in either becomes a
+ * `KnownView` everywhere with no second edit: the union and the runtime
+ * list cannot disagree. A product route cannot replace a core route's
+ * entry.
  */
 export interface RouteMeta {
   title: string;
 }
 
 export const ROUTE_META = {
+  ...PRODUCT_ROUTES,
   sources: { title: 'Sources' },
   connection: { title: 'Connection' },
   logs: { title: 'Logs' },
@@ -34,6 +39,12 @@ export const KNOWN_VIEWS = Object.keys(ROUTE_META) as readonly KnownView[];
 export function isKnownView(v: string): v is KnownView {
   return Object.prototype.hasOwnProperty.call(ROUTE_META, v);
 }
+
+/** The view a fresh window opens on: the product's, else Sources. */
+export const INITIAL_VIEW: KnownView =
+  PRODUCT_INITIAL_VIEW !== null && isKnownView(PRODUCT_INITIAL_VIEW)
+    ? PRODUCT_INITIAL_VIEW
+    : 'sources';
 
 /**
  * B3: an extension-contributed view id, `ext:<extension id>/<contribution
@@ -107,7 +118,7 @@ export function isExtView(v: string): v is ExtView {
 
 export type View = KnownView | ExtView;
 
-export interface ViewParams {
+export interface ViewParams extends ProductViewParams {
   /** Sources: that source's page. */
   accountId?: string;
   anchor?: string;
@@ -131,7 +142,7 @@ export interface ViewParams {
 export type ViewContextValue = NavContextValue<View, ViewParams>;
 
 export const ViewContext = createContext<ViewContextValue>({
-  view: 'sources',
+  view: INITIAL_VIEW,
   params: {},
   navigate: () => {},
   back: () => {},

@@ -786,7 +786,7 @@ describe('consumer flushes (#147 §4)', () => {
     const worker = enrichWorker('late');
     const consumer = workerConsumerName(worker);
     const d = await store.read.byExternalId(acc.id, 'd1', 'note');
-    await store.ledgerRecord(consumer, d!.seq, 1, 'deferred');
+    await store.ledgerRecord(consumer, d!.seq, 0, 'deferred');
     const admission = cap1();
     admission.foreground(); // never leaves: the flush waits for a slot
     const engine = engineWith(admission);
@@ -808,7 +808,7 @@ describe('consumer flushes (#147 §4)', () => {
     const worker = enrichWorker('late');
     const consumer = workerConsumerName(worker);
     const d = await store.read.byExternalId(acc.id, 'd1', 'note');
-    await store.ledgerRecord(consumer, d!.seq, 1, 'deferred');
+    await store.ledgerRecord(consumer, d!.seq, 0, 'deferred');
     const engine = engineWith(cap1());
     const probe = jest.spyOn(store, 'ledgerDeferred');
     const stopping = engine.stopAll(); // the scheduler's probe finishes after this
@@ -832,7 +832,7 @@ describe('consumer flushes (#147 §4)', () => {
       // eslint-disable-next-line no-await-in-loop
       const d = await store.read.byExternalId(acc.id, id, 'note');
       // eslint-disable-next-line no-await-in-loop
-      await store.ledgerRecord(consumer, d!.seq, 1, 'deferred');
+      await store.ledgerRecord(consumer, d!.seq, 0, 'deferred');
     }
     let release!: () => void;
     const gate = new Promise<void>((r) => {
@@ -866,7 +866,7 @@ describe('consumer flushes (#147 §4)', () => {
       // eslint-disable-next-line no-await-in-loop
       const d = (await store.read.search({ text: id }))[0];
       // eslint-disable-next-line no-await-in-loop
-      await store.ledgerRecord(consumer, d.seq, 1, 'deferred');
+      await store.ledgerRecord(consumer, d.seq, 0, 'deferred');
     }
     const engine = engineWith({
       acquire: async (kind) => {
@@ -919,7 +919,7 @@ describe('consumer flushes (#147 §4)', () => {
       // eslint-disable-next-line no-await-in-loop
       const d = (await store.read.search({ text: id }))[0];
       // eslint-disable-next-line no-await-in-loop
-      await store.ledgerRecord(consumer, d.seq, 1, 'deferred');
+      await store.ledgerRecord(consumer, d.seq, 0, 'deferred');
     }
     await Promise.race([
       engineWith(admission).rerunDeferred(worker),

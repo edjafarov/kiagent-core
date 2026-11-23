@@ -12,6 +12,7 @@ function makePlatform(deferred: string[]) {
   const registered: Array<{ id: string; cb: () => Promise<void> }> = [];
   const ledgerQueries: string[] = [];
   const reruns: string[] = [];
+  const repairs: string[] = [];
   const platform = {
     prefs: { get: () => ({ processing: { enabled: true, window: 'always' } }) },
     host: {
@@ -47,6 +48,9 @@ function makePlatform(deferred: string[]) {
       rerunDeferred: async (w: Worker) => {
         reruns.push(w.name);
       },
+      rerunMissingVision: async (w: Worker) => {
+        repairs.push(w.name);
+      },
     },
   };
   (platform as Record<string, unknown>).admission = createAdmission({
@@ -54,7 +58,13 @@ function makePlatform(deferred: string[]) {
     userActive: () => false,
     enrichment: enrichmentInputsFor(() => platform as never),
   });
-  return { platform: platform as never, registered, ledgerQueries, reruns };
+  return {
+    platform: platform as never,
+    registered,
+    ledgerQueries,
+    reruns,
+    repairs,
+  };
 }
 
 const worker = (name: string, version: number): Worker =>
@@ -92,6 +102,7 @@ describe('registerRedrive', () => {
     await a.registered[0].cb();
     expect(calls).toEqual(['llm']);
     expect(a.reruns).toEqual(['vision']);
+    expect(a.repairs).toEqual(['vision']); // vision also repairs missed work
 
     // audio has deferred work → asr install requested, llm NOT (deferred
     // audio work must not keep Gemma installs warm — spec §5)
@@ -100,6 +111,7 @@ describe('registerRedrive', () => {
     registerRedrive(b.platform, worker('audio', 2), [asr]);
     await b.registered[0].cb();
     expect(calls).toEqual(['asr']);
+    expect(b.repairs).toEqual([]); // only vision has the missed-work repair
   });
 
   it('does nothing when the ledger is empty', async () => {

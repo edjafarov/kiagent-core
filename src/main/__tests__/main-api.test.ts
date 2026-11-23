@@ -992,3 +992,82 @@ describe('buildMainApi sharedFolders', () => {
     expect(() => api.setTransport(null)).toThrow('unavailable');
   });
 });
+
+describe('buildMainApi product-facing members', () => {
+  function build(
+    over: Partial<Parameters<typeof buildMainApi>[0]> = {},
+    storeOver: Record<string, unknown> = {},
+  ) {
+    const stubbed = stubStore();
+    Object.assign(stubbed.store, storeOver);
+    const api = buildMainApi({
+      store: stubbed.store,
+      mcp: stubMcp().mcp,
+      app: stubApp(),
+      dataDir: '/fake/data',
+      tray: stubTray().tray,
+      ui: { openWindow: () => {} },
+      outbound: stubOutbound(true).outbound,
+      ...over,
+    });
+    return { api, stubbed };
+  }
+
+  it('seedAccount creates a connecting account, saves its credentials, and starts it', async () => {
+    const created: unknown[] = [];
+    const started: unknown[] = [];
+    const { api, stubbed } = build(
+      { runAccount: (a) => started.push(a) },
+      {
+        createAccount: async (a: unknown) => {
+          created.push(a);
+          return { id: 'acc-1', ...(a as object) };
+        },
+      },
+    );
+    await expect(
+      api.seedAccount('gmail', 'a@x.test', { accessToken: 't' }),
+    ).resolves.toEqual({ accountId: 'acc-1' });
+    expect(created).toEqual([
+      {
+        source: 'gmail',
+        identifier: 'a@x.test',
+        config: {},
+        status: 'connecting',
+      },
+    ]);
+    expect(stubbed.vaultSaveArgs).toEqual([['acc-1', { accessToken: 't' }]]);
+    expect(started).toHaveLength(1);
+  });
+
+  it('identity.set stores the identity, then tells the window', async () => {
+    const patches: unknown[] = [];
+    const { api, stubbed } = build({ patchAppState: (p) => patches.push(p) });
+    const identity = { name: 'Ada', emails: ['a@x.test'], phones: [] };
+    await api.identity.set(identity);
+    expect(stubbed.identitySetArgs).toEqual([identity]);
+    expect(patches).toEqual([{ identity }]);
+  });
+
+  it('outbound.draftMessage hands the draft to the outbound service', async () => {
+    const drafts: unknown[] = [];
+    const { outbound } = stubOutbound(true);
+    Object.assign(outbound.service, {
+      draftMessage: async (a: unknown) => {
+        drafts.push(a);
+        return { draft_id: 'd-1' };
+      },
+    });
+    const { api } = build({ outbound });
+    const draft = {
+      accountId: 'acc-1',
+      to: ['b@x.test'],
+      subject: 's',
+      body: 'b',
+    };
+    await expect(api.outbound.draftMessage(draft)).resolves.toEqual({
+      draft_id: 'd-1',
+    });
+    expect(drafts).toEqual([draft]);
+  });
+});

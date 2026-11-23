@@ -11,6 +11,7 @@ import {
   type Lane,
 } from '@shared/contracts';
 
+import { inferencePause } from '@shared/inference-pause';
 import { abortError } from './abort';
 import { createActiveCalls, type ActiveCalls } from './active-calls';
 import type { LogSink } from './engine/engine';
@@ -511,12 +512,12 @@ export function createInference(
     try {
       return await attempt(p, task);
     } catch (err) {
-      const name = (err as Error)?.name;
+      const pause = inferencePause(err);
       if (
         !p.remote ||
-        name === 'ModelChangedError' ||
-        name === 'LaneClosedError' ||
-        name === 'AbortError'
+        pause === 'model-changed' ||
+        pause === 'lane-closed' ||
+        (err as Error)?.name === 'AbortError'
       ) {
         throw err;
       }
