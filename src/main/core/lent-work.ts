@@ -1,6 +1,7 @@
 import type {
   DocumentInput,
   EnrichInput,
+  InferenceKind,
   LentJob,
   LentJobIo,
   LentJobResult,
@@ -12,7 +13,7 @@ import type {
 import { LaneClosedError } from '@shared/contracts';
 
 import type { Admission } from './admission';
-import type { EngineDeps } from './engine/engine';
+import type { InferencePlane } from './inference';
 
 /** Whole jobs on a helping device (spec 2026-11-23, lend whole jobs).
  *
@@ -44,7 +45,12 @@ export interface LentWork {
 }
 
 export function createLentWork(deps: {
-  inference: EngineDeps['inference'];
+  /** This device's plane. Model calls of a lent job go through `runLent`:
+   *  the first ready LOCAL provider, never a task route (a helper's route
+   *  would send the leader's content to a provider the leader never chose)
+   *  and never a lender. */
+  inference: Pick<InferencePlane, 'runLent'> &
+    Partial<Pick<InferencePlane, 'mayBecomeReady' | 'hasProvider'>>;
   admission?: Pick<Admission, 'acquire'>;
   /** This device's own background lane. */
   laneOpen(): boolean;
@@ -82,35 +88,50 @@ export function createLentWork(deps: {
       if (!deps.laneOpen()) throw new LaneClosedError();
       const scope = `worker:${worker.name}`;
       const { signal } = io;
+      const local = (kind: InferenceKind, payload: unknown) =>
+        deps.inference.runLent({ kind, payload, signal });
       const docs: DocumentInput[] = [];
       const enrich: EnrichInput[] = [];
       const session: WorkerSession = {
         signal,
-        inference: (prompt, opts) =>
-          deps.inference.complete(prompt, {
-            ...opts,
-            lane: 'background',
-            signal,
-          }),
-        see: (image, prompt, opts) =>
-          deps.inference.see(image, prompt, {
-            ...opts,
-            lane: 'background',
-            signal,
-          }),
-        seeWithMeta(image, prompt, opts) {
-          if (!deps.inference.seeWithMeta)
-            throw new Error('inference.seeWithMeta is not wired');
-          return deps.inference.seeWithMeta(image, prompt, {
-            ...opts,
-            lane: 'background',
-            signal,
+        async inference(prompt, opts) {
+          const { value } = await local('complete', {
+            prompt,
+            maxTokens: opts?.maxTokens,
+            profile: 'default',
           });
+          return typeof value === 'string'
+            ? value
+            : String((value as { text?: unknown } | null)?.text ?? '');
         },
-        read: (image, opts) =>
-          deps.inference.read(image, { ...opts, lane: 'background', signal }),
-        hear: (audio, opts) =>
-          deps.inference.hear(audio, { ...opts, lane: 'background', signal }),
+        async see(image, prompt, opts) {
+          return String(
+            (await local('see', { image, prompt, mime: opts?.mime })).value,
+          );
+        },
+        async seeWithMeta(image, prompt, opts) {
+          const r = await local('see', {
+            image,
+            prompt,
+            mime: opts?.mime,
+            task: opts?.task,
+          });
+          return {
+            text: String(r.value),
+            providerId: r.providerId,
+            modelId: r.modelId,
+          };
+        },
+        async read(image, opts) {
+          return String(
+            (await local('read', { image, mime: opts?.mime })).value,
+          );
+        },
+        async hear(audio, opts) {
+          return String(
+            (await local('hear', { audio, format: opts?.format })).value,
+          );
+        },
         // Only the job's own document: the leader serves nothing else.
         fetchBytes: (doc) =>
           doc.id === change.document.id

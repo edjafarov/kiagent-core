@@ -918,9 +918,12 @@ export function createEngine(deps: EngineDeps): Engine & {
           logs.log(scope, level, msg);
         },
       };
+      // Decided once for the attempt: a job that went to a helper is never
+      // also run here because the answer to "lend?" changed while it ran.
+      const lent = lendsJob(worker, change);
       try {
         let outcome: WorkOutcome;
-        if (lendsJob(worker, change)) {
+        if (lent) {
           // Another device runs the whole job; this one only serves it the
           // bytes and writes what comes back.
           if (!workLender!.ready(worker.name)) {
@@ -964,12 +967,11 @@ export function createEngine(deps: EngineDeps): Engine & {
         };
       } catch (err) {
         if (signal.aborted) throw err;
-        if (
-          (err as Error)?.name === 'LaneClosedError' &&
-          lendsJob(worker, change)
-        ) {
-          // The helper cannot take it now (its lane closed, or it went away):
-          // park, like a closed lane here. The next re-drive hands it out.
+        if (lent && (err as Error)?.name === 'LaneClosedError') {
+          // The helper cannot take it, or stopped answering. It may still be
+          // working on it, so the change is parked: nothing is retried in
+          // this pass, here or on another device. (A failure the helper
+          // reports is different: it has finished, and counts as an attempt.)
           logs.log(scope, 'info', `deferred seq ${change.seq}: ${String(err)}`);
           return { docs: [], enrich: [], attempts: 0, outcome: 'deferred' };
         }

@@ -13,13 +13,17 @@ const document = {
 } as unknown as Document;
 const change: Change = { seq: 5, kind: 'document', document };
 
+const localCalls: string[] = [];
+
 function setup(laneOpen = true) {
+  localCalls.length = 0;
   const lent = createLentWork({
     inference: {
-      complete: async () => 'completed here',
-      see: async () => 'seen here',
-      read: async () => 'read here',
-      hear: async () => 'heard here',
+      // The local-only path: no task route, no lender.
+      runLent: async (call) => {
+        localCalls.push(call.kind);
+        return { value: `${call.kind} here`, providerId: 'p', modelId: 'm' };
+      },
     },
     laneOpen: () => laneOpen,
     log: () => {},
@@ -86,6 +90,8 @@ describe('answering a lent job', () => {
     expect(r.docs.map((d) => d.externalId)).toEqual(['child']);
     // Only the job's own document is ever asked of the leader.
     expect(asked).toEqual(['bytes:d1', 'bump:ocr']);
+    // Its model call ran on this device's own provider.
+    expect(localCalls).toEqual(['read']);
   });
 
   it('refuses a worker it does not have at that version', async () => {
