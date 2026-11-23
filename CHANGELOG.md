@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.136.0](https://github.com/edjafarov/kiagent-core/compare/v0.135.0...v0.136.0) (2026-11-23)
+
+### Features
+
+* **workers:** every device lists `decode` in what the audio worker `can` do and only macOS lists it in `now`, so a device that decodes only wav and mp3 hands audio to one that decodes every format, and never to another that does not ([c6f580bb](https://github.com/edjafarov/kiagent-core/commit/c6f580bb))
+
+### Bug Fixes
+
+* **vision:** an attachment with an image mime that neither text recognition nor the vision model can open (SVG, DjVu, Photoshop, icons, vector metafiles) is no longer visual work; it was retried into failed work ([c6f580bb](https://github.com/edjafarov/kiagent-core/commit/c6f580bb))
+* **vision:** a text-recognition error that leads to a retry is logged with its reason
+* **workers:** a lent job's model calls carry every option the worker set ([c703b777](https://github.com/edjafarov/kiagent-core/commit/c703b777))
+
 ## [0.135.0](https://github.com/edjafarov/kiagent-core/compare/v0.134.0...v0.135.0) (2026-11-23)
 
 ### Features
