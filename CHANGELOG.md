@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.135.0](https://github.com/edjafarov/kiagent-core/compare/v0.134.0...v0.135.0) (2026-11-23)
+
+### Features
+
+* **workers:** a whole job of the convert, vision and audio workers can run on a helping device. A worker marked `lendable` is run there unchanged against a session whose file bytes and attempt counter come from the leader; its documents and enrichments travel back and the leader's engine writes them, so the leader stays the only writer ([f615df32](https://github.com/edjafarov/kiagent-core/commit/f615df32))
+* **sync:** `setWorkLender` and `runLentWork` on the sync surface; `AiFitness.work` lists each lendable worker with its version and what it can do on this device (`can`, `now`); new `core/lent-work`
+* **engine:** a change whose job is lent and has no helper ready is deferred without spending an attempt, and wakes when a helper appears. A worker whose model task is routed to another provider is not lent as a job
+
+### Bug Fixes
+
+* **workers:** a lent job answers with this device's local models only, never a task route or another lender, and is never also run on the leader in the same attempt ([49dfc03f](https://github.com/edjafarov/kiagent-core/commit/49dfc03f))
+
 ## [0.134.0](https://github.com/edjafarov/kiagent-core/compare/v0.133.0...v0.134.0) (2026-11-23)
 
 ### Features
