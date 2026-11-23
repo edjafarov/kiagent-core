@@ -95,6 +95,7 @@ export function createAudioWorker(deps: {
 
   return {
     name: 'audio',
+    lendable: true,
     // v3 (spec 2026-10-14): VAD + -mc 0 + loop cleanup. The new consumer's
     // seed re-admits legacy junk transcripts (classify.ts).
     version: 3,

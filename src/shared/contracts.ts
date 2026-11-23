@@ -1431,6 +1431,52 @@ export interface AiFitness {
    *  than `disabled`. */
   lane?: LaneState;
   kinds: InferenceFitness[];
+  /** The whole-job workers of this device. Absent on an older core. */
+  work?: WorkFitness[];
+}
+
+/** One lendable worker as this device can run it. */
+export interface WorkFitness {
+  worker: string;
+  version: number;
+  /** It can run here now. */
+  ready: boolean;
+  /** What it is able to do here now, or once a model on its way arrives. */
+  can: string[];
+  /** What it is able to do here at this moment. */
+  now: string[];
+}
+
+/** One job handed to a helping device: this worker, on this change. */
+export interface LentJob {
+  worker: string;
+  version: number;
+  change: Change;
+}
+
+/** What a lent job reaches back to the leader for. */
+export interface LentJobIo {
+  /** Bytes of the job's own document, from the leader's source. */
+  fetchBytes(documentId: DocumentId): Promise<Uint8Array | null>;
+  /** The leader's durable attempt counter for this document. */
+  bump(key: string): Promise<number>;
+  signal: AbortSignal;
+}
+
+/** What a lent job returns. The leader's engine writes it. */
+export interface LentJobResult {
+  outcome: WorkOutcome;
+  docs: DocumentInput[];
+  enrich: EnrichInput[];
+}
+
+/** Another device runs whole jobs of the workers it takes. */
+export interface WorkLender {
+  takes(worker: string): boolean;
+  /** A helper is there for it right now. */
+  ready(worker: string): boolean;
+  run(job: LentJob, io: LentJobIo): Promise<LentJobResult>;
+  onChange(fn: () => void): () => void;
 }
 
 /** What this device can run itself, per kind. */
@@ -1656,6 +1702,12 @@ export interface Worker {
   readonly review?: 'auto' | 'propose';
   /** Bounded retries for thrown errors (default 3). */
   readonly maxAttempts?: number;
+  /** Bundled workers only: the whole job may run on a helping device, which
+   *  has the same worker and reaches this one for bytes and attempt counts. */
+  readonly lendable?: true;
+  /** The inference tasks this worker names. A lendable worker is not lent
+   *  while one of them is routed to another provider on this device. */
+  readonly tasks?: readonly string[];
   matches(change: Change): boolean; // PURE
   work(change: Change, session: WorkerSession): Promise<WorkOutcome | void>;
 }
@@ -2257,6 +2309,12 @@ export interface CapSurfaces {
       /** In-process only (it takes functions): another device of the account
        *  answers this one's background AI calls. Null removes it. */
       setAiLender(l: InferenceLender | null): Promise<void>;
+      /** In-process only: another device runs whole jobs of this one's
+       *  lendable workers. Null removes it. */
+      setWorkLender(l: WorkLender | null): Promise<void>;
+      /** In-process only: runs one job lent by the leader on this device's
+       *  own worker; nothing is written here. */
+      runLentWork(job: LentJob, io: LentJobIo): Promise<LentJobResult>;
       /** In-process only (it takes a function): how core asks for a pull from
        *  the leader now, after a change this copy relayed. Null removes it. */
       setPuller(f: (() => Promise<void>) | null): Promise<void>;
@@ -2326,6 +2384,8 @@ export const SYNC_SURFACE_METHODS = [
   'queuedSettings',
   'discardQueued',
   'setAiLender',
+  'setWorkLender',
+  'runLentWork',
   'setPuller',
   'aiFitness',
   'runAiCall',

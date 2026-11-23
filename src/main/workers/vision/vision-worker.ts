@@ -227,6 +227,8 @@ export function createVisionWorker(deps: {
   return {
     name: VISION_WORKER.name,
     version: VISION_WORKER.version,
+    lendable: true,
+    tasks: ['vision.describe'],
     schedule: { every: '5m' }, // durable retry and repair cadence; the live tail always runs
     matches: (change: Change) =>
       change.kind === 'document' &&
