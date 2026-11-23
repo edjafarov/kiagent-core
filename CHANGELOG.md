@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.133.0](https://github.com/edjafarov/kiagent-core/compare/v0.132.0...v0.133.0) (2026-11-23)
+
+### Features
+
+* **main:** one runtime builds every service: `createRuntime(host)` in `src/main/runtime.ts` (`ready`, `start`, `stop`) holds what `main.ts` assembled inside `whenReady`; `main.ts` keeps the window, tray, updater, the handler map and the quit shell. No behaviour change for the desktop app ([5b9942a8](https://github.com/edjafarov/kiagent-core/commit/5b9942a8))
+* **product:** `headless` in `product.json` runs the same runtime with no window, tray or dialogs ([5b9942a8](https://github.com/edjafarov/kiagent-core/commit/5b9942a8))
+
 ## [0.132.0](https://github.com/edjafarov/kiagent-core/compare/v0.131.0...v0.132.0) (2026-11-23)
 
 ### Features
