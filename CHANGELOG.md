@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.134.0](https://github.com/edjafarov/kiagent-core/compare/v0.133.0...v0.134.0) (2026-11-23)
+
+### Features
+
+* **inference:** a leader whose background lane is closed for a reason about the device (on battery, in use, outside its hours) hands its background AI calls to a helper: the gate knows the kind, and a call the lender takes skips this device's lane and foreground wait ([1a32d71c](https://github.com/edjafarov/kiagent-core/commit/1a32d71c))
+* **inference:** `setLendingAllowed` and `lent(kind)` on the inference plane; `AiFitness.lane` reports why the lane is closed; `backgroundAdmits` and `effectiveLaneState` in `core/boot`. The vision worker and its re-drive start work a helper will answer, extensions read a lane that is open while a helper answers, and a lender change wakes parked work
+
+### Bug Fixes
+
+* **inference:** nothing is lent while background processing is turned off, also by a leader that cannot run the work itself
+* **inference:** a background call on a closed lane with no provider for its kind fails with `NoProviderError`, so OCR-first vision can fall through to a lent vision model
+
 ## [0.133.0](https://github.com/edjafarov/kiagent-core/compare/v0.132.0...v0.133.0) (2026-11-23)
 
 ### Features
