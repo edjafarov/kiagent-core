@@ -1,6 +1,10 @@
 import type { Handle, Worker } from '@shared/contracts';
 
-import { attachWorker, backgroundLaneOpen } from '../core/boot';
+import {
+  attachWorker,
+  backgroundAdmits,
+  backgroundLaneOpen,
+} from '../core/boot';
 import type { CorePlatform } from '../core/boot';
 import { workerConsumerName } from '../core/engine/engine';
 import type { VisionHelper } from '../providers/apple-vision/vision-helper';
@@ -42,7 +46,8 @@ export function attachBundledWorkers(
       process.platform,
       platform.converter,
     ),
-    laneOpen: () => backgroundLaneOpen(platform),
+    // A busy device still starts vision work a helper will answer.
+    laneOpen: () => backgroundAdmits(platform, VISION_KINDS),
     downscale: deps.downscale,
     parsePdfPages: (bytes, signal) =>
       platform.converter.parsePdfPages(bytes, signal),
@@ -89,6 +94,8 @@ export function attachBundledWorkers(
  *  Gemma installs warm (demand-only downloading, spec §5). The consumer is
  *  DERIVED from the worker (worker:<name>:v<version>) so a version bump can
  *  never desynchronise the gate from the engine's ledger. Exported for tests. */
+const VISION_KINDS = ['see', 'read'] as const;
+
 export function registerRedrive(
   platform: CorePlatform,
   worker: Worker,
@@ -98,7 +105,12 @@ export function registerRedrive(
     `worker:${worker.name}`,
     worker.schedule as { every: string },
     async () => {
-      if (!backgroundLaneOpen(platform)) return;
+      // Audio runs its model here, never on a helper: the plain lane.
+      const admitted =
+        worker.name === 'vision'
+          ? backgroundAdmits(platform, VISION_KINDS)
+          : backgroundLaneOpen(platform);
+      if (!admitted) return;
       const consumer = workerConsumerName(worker);
       // Existence probe, NOT a fetch: this gate used to pull every deferred
       // seq across the DB worker boundary — 2.1M rows in one structured-clone

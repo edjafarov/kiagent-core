@@ -263,7 +263,7 @@ describe('convert worker wiring', () => {
           reran.push(w.name);
         },
       },
-      inference: { providers: () => [] },
+      inference: { providers: () => [], lent: () => false },
       host: { totalMemBytes: 16 * 1024 ** 3 },
     };
     (platform as Record<string, unknown>).admission = createAdmission({

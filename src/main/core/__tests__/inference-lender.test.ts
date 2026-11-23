@@ -4,7 +4,11 @@ import type {
   InferenceProvider,
 } from '@shared/contracts';
 
-import { createInference, LaneClosedError } from '../inference';
+import {
+  createInference,
+  LaneClosedError,
+  NoProviderError,
+} from '../inference';
 
 const logs = { log: () => {} };
 
@@ -227,6 +231,62 @@ describe('a lender answers background calls', () => {
     const g3 = p.generation();
     l.fire();
     expect(p.generation()).toBe(g3);
+  });
+});
+
+describe('a busy leader: its own lane is closed', () => {
+  it('a kind the lender takes is answered by the helper, not held by this lane', async () => {
+    const { p, llm } = plane();
+    p.setLanePolicy(() => false);
+    const l = fakeLender();
+    p.setLender(l.lender);
+    expect(p.lent('complete')).toBe(true);
+    expect(await p.complete('hi', { lane: 'background' })).toBe(
+      'helper:complete',
+    );
+    expect((await p.embed(['a'])).modelId).toBe('answered-model');
+    expect(llm.calls).toHaveLength(0);
+  });
+
+  it('a kind the lender does not take stays closed and never runs here', async () => {
+    const { p, ocr } = plane();
+    p.setLanePolicy(() => false);
+    const l = fakeLender();
+    l.state.takes.delete('read');
+    p.setLender(l.lender);
+    expect(p.lent('read')).toBe(false);
+    await expect(
+      p.read(new Uint8Array([1]), { lane: 'background' }),
+    ).rejects.toBeInstanceOf(LaneClosedError);
+    expect(ocr.calls).toHaveLength(0);
+  });
+
+  it('with processing turned off nothing is lent, whatever the lender says', async () => {
+    const { p } = plane();
+    p.setLanePolicy(() => false);
+    p.setLendingAllowed(() => false);
+    const l = fakeLender();
+    p.setLender(l.lender);
+    expect(p.lent('complete')).toBe(false);
+    await expect(
+      p.complete('hi', { lane: 'background' }),
+    ).rejects.toBeInstanceOf(LaneClosedError);
+    expect(l.calls).toHaveLength(0);
+  });
+
+  it('a kind with no provider here says so, so the caller can take another path', async () => {
+    const p = createInference(logs, { generationSeed: 1 });
+    p.setLanePolicy(() => false);
+    p.register(local('local-llm', ['complete', 'see']));
+    const l = fakeLender();
+    l.state.takes = new Set(['see']);
+    p.setLender(l.lender);
+    await expect(
+      p.read(new Uint8Array([1]), { lane: 'background' }),
+    ).rejects.toBeInstanceOf(NoProviderError);
+    expect(
+      await p.see(new Uint8Array([1]), 'what', { lane: 'background' }),
+    ).toBe('helper:see');
   });
 });
 

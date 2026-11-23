@@ -179,6 +179,13 @@ export interface InferencePlane extends Inference {
    *  `gate()` calls it on every background request — no cached boolean, so
    *  admission is never staler than the policy's inputs. Unbound = closed. */
   setLanePolicy(fn: () => boolean): void;
+  /** Bind whether background work may be lent at all: false while the user
+   *  has background processing turned off. Read on every call, like the lane
+   *  policy. Unbound = allowed. */
+  setLendingAllowed(fn: () => boolean): void;
+  /** A helper answers background calls of this kind right now: lending is
+   *  allowed, the lender takes the kind and has a helper ready. */
+  lent(kind: InferenceKind): boolean;
   /** Bind the foreground wait (#147 §2 rule 1): every background request
    *  awaits it after the lane check — a bounded WAIT (admission caps it at
    *  MAX_FOREGROUND_WAIT_MS), never a throw, so a foreground burst never
@@ -288,6 +295,7 @@ export function createInference(
   };
   const routeTable = new Map<string, string>();
   let lanePolicy: () => boolean = () => false;
+  let lendingAllowed: () => boolean = () => true;
   let foregroundIdle: (signal?: AbortSignal) => Promise<void> = () =>
     Promise.resolve();
 
@@ -351,8 +359,11 @@ export function createInference(
   /** Providers standing in for a lender's helper: their identity is the one
    *  that answered, known only after the call. */
   const lentProviders = new WeakSet<InferenceProvider>();
+  /** The lender takes the kind, and the user has not turned processing off. */
+  const taken = (kind: InferenceKind): boolean =>
+    lender !== null && lendingAllowed() && lender.takes(kind);
   const lends = (kind: InferenceKind, lane: Lane | undefined): boolean =>
-    lane === 'background' && lender !== null && lender.takes(kind);
+    lane === 'background' && taken(kind);
   /** One per call: it carries the caller's signal in and the answering
    *  identity out. */
   const lentProvider = (
@@ -408,13 +419,43 @@ export function createInference(
    *  bounded and cancellable foreground wait, then the lane and the signal
    *  re-checked, since either may have changed during the (≤ 10 s) wait. */
   const gate = (
+    kind: InferenceKind,
     lane: Lane,
     signal?: AbortSignal,
   ): Promise<void> | undefined => {
     if (lane === 'interactive') return undefined;
+    // Another device answers: its own lane and foreground apply, not ours.
+    // This is what lets a leader on battery, or in use, keep its work going.
+    if (lends(kind, lane)) {
+      if (signal?.aborted) throw abortError();
+      return undefined;
+    }
+    return localGate(kind, signal);
+  };
+
+  /** The gate for work this device runs itself. */
+  const localGate = (
+    kind: InferenceKind,
+    signal?: AbortSignal,
+  ): Promise<void> => {
     // Lane first: a closed lane fails fast (LaneClosedError's memory
     // rationale above) and never waits.
-    if (!lanePolicy()) throw new LaneClosedError();
+    if (!lanePolicy()) {
+      // Nothing here could ever answer: say so, so a caller with another
+      // path (the vision worker's OCR-first step) takes it instead of parking.
+      const any = providers.some((x) => {
+        if (x.remote || !x.supports.includes(kind)) return false;
+        const st = x.status();
+        return (
+          st === 'ready' ||
+          st === 'standby' ||
+          (typeof st === 'object' && 'downloading' in st) ||
+          x.mayBecomeReady?.() === true
+        );
+      });
+      if (!any) throw new NoProviderError(kind);
+      throw new LaneClosedError();
+    }
     if (signal?.aborted) throw abortError();
     return (async () => {
       await foregroundIdle(signal);
@@ -521,7 +562,7 @@ export function createInference(
       ) {
         throw err;
       }
-      const waited = gate(lane, signal);
+      const waited = gate(kind, lane, signal);
       if (waited) await waited;
       logs.log(
         'inference',
@@ -537,7 +578,7 @@ export function createInference(
     opts,
   ) => {
     const lane = opts?.lane ?? 'interactive';
-    const waited = gate(lane, opts?.signal);
+    const waited = gate('complete', lane, opts?.signal);
     if (waited) await waited;
     const profile: CompletionProfile = opts?.profile ?? 'default';
     return withLocalFallback(
@@ -614,7 +655,7 @@ export function createInference(
     opts,
   ) => {
     const lane = opts?.lane ?? 'interactive';
-    const waited = gate(lane, opts?.signal);
+    const waited = gate('see', lane, opts?.signal);
     if (waited) await waited;
     return withLocalFallback(
       'see',
@@ -684,7 +725,7 @@ export function createInference(
     seeWithMeta,
     async read(image, opts) {
       const lane = opts?.lane ?? 'interactive';
-      const waited = gate(lane, opts?.signal);
+      const waited = gate('read', lane, opts?.signal);
       if (waited) await waited;
       const p = pick('read', undefined, lane, opts?.signal);
       const out = await tracked(p, 'read', undefined, () =>
@@ -697,7 +738,7 @@ export function createInference(
       return String(out);
     },
     async embed(texts, opts) {
-      const waited = gate('background', opts?.signal);
+      const waited = gate('embed', 'background', opts?.signal);
       if (waited) await waited;
       const p = pick('embed', undefined, 'background', opts?.signal);
       const out = await tracked(p, 'embed', opts?.task, () =>
@@ -707,7 +748,7 @@ export function createInference(
     },
     async hear(audio, opts) {
       const lane = opts?.lane ?? 'interactive';
-      const waited = gate(lane, opts?.signal);
+      const waited = gate('hear', lane, opts?.signal);
       if (waited) await waited;
       const p = pick('hear', undefined, lane, opts?.signal);
       const out = await p.handle({
@@ -728,13 +769,13 @@ export function createInference(
     hasProvider(kind) {
       // Lent: the provider exists, on another device (never "none": the
       // vision worker would take its OCR-less path).
-      if (lender?.takes(kind)) return true;
+      if (taken(kind)) return true;
       return providers.some(
         (p) => !p.remote && p.supports.includes(kind) && p.status() === 'ready',
       );
     },
     mayBecomeReady(kind) {
-      if (lender?.takes(kind)) return true;
+      if (taken(kind)) return true;
       return providers.some((p) => {
         if (p.remote || !p.supports.includes(kind)) return false;
         const st = p.status();
@@ -773,7 +814,7 @@ export function createInference(
       bump();
     },
     async runLent(call) {
-      const waited = gate('background', call.signal);
+      const waited = localGate(call.kind, call.signal);
       if (waited) await waited;
       const p = pickLocal(call.kind);
       const task = (call.payload as { task?: unknown } | null)?.task;
@@ -847,6 +888,10 @@ export function createInference(
     setLanePolicy(fn) {
       lanePolicy = fn;
     },
+    setLendingAllowed(fn) {
+      lendingAllowed = fn;
+    },
+    lent: (kind) => taken(kind) && lender !== null && lender.ready(kind),
     setForegroundIdle(fn) {
       foregroundIdle = fn;
     },

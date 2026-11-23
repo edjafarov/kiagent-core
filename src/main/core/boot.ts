@@ -7,6 +7,7 @@ import type {
   Credentials,
   DocumentInput,
   Handle,
+  InferenceKind,
   LaneState,
   LogStore,
   Prefs,
@@ -358,6 +359,7 @@ export function enrichmentInputsFor(
 export async function bootCore(deps: BootDeps): Promise<CorePlatform> {
   const { store: logStore, sink } = createLogs(path.join(deps.dataDir, 'logs'));
   let platform!: CorePlatform;
+  let offLenderWake: (() => void) | null = null;
   const host = readHostFacts();
   // accel is detected lazily by the local-llm provider; unknown at boot.
   sink.log('host', 'info', describeHost(host, null));
@@ -499,8 +501,15 @@ export async function bootCore(deps: BootDeps): Promise<CorePlatform> {
       await platform.promote();
     },
     ai: {
-      setLender: (l) => inference.setLender(l),
+      setLender: (l) => {
+        offLenderWake?.();
+        // A helper arriving or leaving changes what may run: wake parked work.
+        offLenderWake = l ? l.onChange(() => requestLaneWake(platform)) : null;
+        inference.setLender(l);
+        requestLaneWake(platform);
+      },
       fitness: () => ({
+        lane: backgroundLaneState(platform),
         weak: hostBudget(platform.host, platform.llmAccel()).weak,
         onPower: !platform.scheduler.env.onBattery,
         busy:
@@ -557,7 +566,10 @@ export async function bootCore(deps: BootDeps): Promise<CorePlatform> {
     async (ref, fn) =>
       accountOps.serial(
         'accountId' in ref
-          ? await accountKeyOf((id) => store.account(id as AccountId), ref.accountId)
+          ? await accountKeyOf(
+              (id) => store.account(id as AccountId),
+              ref.accountId,
+            )
           : accountKey(ref.source, ref.identifier),
         fn,
       ),
@@ -654,6 +666,10 @@ export async function bootCore(deps: BootDeps): Promise<CorePlatform> {
   // Bound synchronously before anything can call: production never sees the
   // plane's closed default.
   inference.setLanePolicy(() => backgroundLaneOpen(platform));
+  // Processing turned off is the user's word on the work, not on this device.
+  inference.setLendingAllowed(
+    () => backgroundLaneState(platform) !== 'disabled',
+  );
   return platform;
 }
 
@@ -915,6 +931,38 @@ export function backgroundLaneOpen(
   const open = backgroundLaneState(platform, now) === 'open';
   if (!open) pendingWake.add(platform);
   return open;
+}
+
+/** May background AI work of one of these kinds start now? The lane is open,
+ *  or a helper answers the kind while this device is busy. */
+export function backgroundAdmits(
+  platform: CorePlatform,
+  kinds: readonly InferenceKind[],
+  now = new Date(),
+): boolean {
+  if (backgroundLaneOpen(platform, now)) return true;
+  return kinds.some((k) => platform.inference.lent(k));
+}
+
+const AI_KINDS: readonly InferenceKind[] = [
+  'complete',
+  'see',
+  'read',
+  'embed',
+  'hear',
+];
+
+/** The lane as callers that only ask "may I call inference" should see it:
+ *  the real state, except that a busy device reads `open` while a helper
+ *  answers at least one kind. A kind no helper takes still fails at the call
+ *  with LaneClosedError. `disabled` is never overridden. */
+export function effectiveLaneState(
+  platform: CorePlatform,
+  now = new Date(),
+): LaneState {
+  const state = backgroundLaneState(platform, now);
+  if (state === 'open' || state === 'disabled') return state;
+  return AI_KINDS.some((k) => platform.inference.lent(k)) ? 'open' : state;
 }
 
 /** Consume the pending wake (the 5 s publisher calls this only while open). */

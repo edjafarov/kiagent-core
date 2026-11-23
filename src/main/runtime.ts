@@ -35,6 +35,7 @@ import { createConnectBroker } from './auth/connect-broker';
 import type { ConnectBroker } from './auth/connect-broker';
 import {
   backgroundLaneState,
+  effectiveLaneState,
   bootCore,
   takeLaneWake,
   resumeAccounts,
@@ -895,7 +896,8 @@ export function createRuntime(host: RuntimeHost): Runtime {
       // platform.lane event resolve through this SAME function, so they
       // can never disagree about why the background lane is (or isn't)
       // open right now.
-      laneState: () => backgroundLaneState(p),
+      // The effective lane: a busy device reads open while a helper answers.
+      laneState: () => effectiveLaneState(p),
       logSink: p.logSink,
       notify: (msg) => {
         host.notify(msg);
@@ -1028,7 +1030,9 @@ export function createRuntime(host: RuntimeHost): Runtime {
         const lane = backgroundLaneState(p);
         // The wake is consumed ONCE and shared, so extensions and workers
         // both hear about a reopening that happened between two ticks.
-        const wake = lane === 'open' && takeLaneWake(p);
+        // What may run now: also open while a helper answers for a busy
+        // device. The status row below keeps the real reason.
+        const wake = effectiveLaneState(p) === 'open' && takeLaneWake(p);
         extensionsPlatform?.refreshLane(wake);
         processingStatus.tick(lane, wake);
         // #139: no ledger read at idle — only after something moved it.
