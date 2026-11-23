@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.132.0](https://github.com/edjafarov/kiagent-core/compare/v0.131.0...v0.132.0) (2026-11-23)
+
+### Features
+
+* **composition:** a product composes itself through two replaceable files with empty defaults, `src/shared/composition.ts` and `src/renderer/composition.tsx`: its routes, screens, first view, attention allow-list and Sources policy ([cc74a210](https://github.com/edjafarov/kiagent-core/commit/cc74a210))
+* **composition:** a product supplies its sign-in screen, sidebar, window gate and root hook through `PRODUCT_SHELL`; the shell waits for a ready state and restarts its view for another account ([519e7bd4](https://github.com/edjafarov/kiagent-core/commit/519e7bd4))
+* **composition:** a product declares the IPC channels its extensions answer (`ProductInvokes`, `ProductPushes`); main registers no handler for them ([ef55fbdf](https://github.com/edjafarov/kiagent-core/commit/ef55fbdf))
+* **main-api:** account seeding, message drafts, the identity broadcast and terminal quit signals are core's own ([c24f920a](https://github.com/edjafarov/kiagent-core/commit/c24f920a))
+* **inference:** one classifier for lane-closed, model-changed and no-provider ([5be6e319](https://github.com/edjafarov/kiagent-core/commit/5be6e319))
+
+### Bug Fixes
+
+* **vision:** durable retries for visual documents are core's own, and a document whose download could not happen (offline, signed out, source not registered yet) is re-driven without backoff instead of being hidden for minutes or parked for good ([609067fa](https://github.com/edjafarov/kiagent-core/commit/609067fa))
+
 ## [0.131.0](https://github.com/edjafarov/kiagent-core/compare/v0.130.0...v0.131.0) (2026-11-22)
 
 ### Features
