@@ -152,6 +152,7 @@ export function createConvertWorker(
     ) => converter.parseDetailed(bytes, mime, filename, signal));
   return {
     name: 'convert',
+    lendable: true,
     // bump = one full feed replay: re-admits too-large rows (large-file),
     // .msg attachments, garbled PDFs. The ONLY convert bump this release.
     version: 2,

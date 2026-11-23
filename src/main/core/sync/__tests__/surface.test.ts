@@ -66,6 +66,8 @@ it('the AI methods delegate to the inference side', async () => {
       log: () => undefined,
       ai: {
         setLender,
+        setWorkLender: () => undefined,
+        runWork: async () => ({ outcome: 'done', docs: [], enrich: [] }),
         fitness: () => fit,
         run: async (call) => ({
           value: call.kind,

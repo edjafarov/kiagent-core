@@ -7,6 +7,10 @@ import type {
   AiFitness,
   InferenceKind,
   InferenceLender,
+  LentJob,
+  LentJobIo,
+  LentJobResult,
+  WorkLender,
   ForwardRequestWire,
   ForwardResultWire,
   OfferedSettingsWire,
@@ -168,6 +172,10 @@ export interface SyncService {
   setRunners(r: ForwardRunners | null): void;
   /** Another device answers this one's background AI calls (null: none). */
   setAiLender(l: InferenceLender | null): Promise<void>;
+  /** Another device runs whole jobs of this one's lendable workers. */
+  setWorkLender(l: WorkLender | null): Promise<void>;
+  /** Runs one job lent by the leader on this device's own worker. */
+  runLentWork(job: LentJob, io: LentJobIo): Promise<LentJobResult>;
   setPuller(f: (() => Promise<void>) | null): Promise<void>;
   /** Asks for a pull from the leader now and waits for it; with no puller
    *  installed, or one that fails, it resolves and the next pull brings it. */
@@ -332,6 +340,8 @@ export interface SyncServiceDeps {
   /** The inference plane's lending side; absent in a build without one. */
   ai?: {
     setLender(l: InferenceLender | null): void;
+    setWorkLender(l: WorkLender | null): void;
+    runWork(job: LentJob, io: LentJobIo): Promise<LentJobResult>;
     fitness(): AiFitness;
     run(call: {
       kind: InferenceKind;
@@ -753,6 +763,13 @@ export function createSyncService(deps: SyncServiceDeps): SyncService {
     },
     setAiLender: async (l) => {
       deps.ai?.setLender(l);
+    },
+    setWorkLender: async (l) => {
+      deps.ai?.setWorkLender(l);
+    },
+    runLentWork: async (job, io) => {
+      if (!deps.ai) throw new Error('inference is not wired');
+      return deps.ai.runWork(job, io);
     },
     setPuller: async (f) => {
       puller = f;

@@ -42,6 +42,7 @@ import type { RunnerChild, SqlRunnerDiagnostics } from './mcp/sql-runner';
 import { createEngine } from './engine/engine';
 import type { LogSink } from './engine/engine';
 import { createInference } from './inference';
+import { createLentWork, type LentWork } from './lent-work';
 import type { InferencePlane } from './inference';
 import { detectLanguages } from './language';
 import { setChildPriorityLog } from './child-priority';
@@ -223,6 +224,8 @@ export interface CorePlatform {
   engine: ReturnType<typeof createEngine>;
   scheduler: CoreScheduler;
   inference: InferencePlane;
+  /** The lendable workers of this device, and the runner for a lent job. */
+  lentWork: LentWork;
   prefs: CorePrefs;
   logs: LogStore;
   logSink: LogSink;
@@ -360,6 +363,7 @@ export async function bootCore(deps: BootDeps): Promise<CorePlatform> {
   const { store: logStore, sink } = createLogs(path.join(deps.dataDir, 'logs'));
   let platform!: CorePlatform;
   let offLenderWake: (() => void) | null = null;
+  let offWorkWake: (() => void) | null = null;
   const host = readHostFacts();
   // accel is detected lazily by the local-llm provider; unknown at boot.
   sink.log('host', 'info', describeHost(host, null));
@@ -442,6 +446,12 @@ export async function bootCore(deps: BootDeps): Promise<CorePlatform> {
     string,
     (creds: Credentials) => Promise<Credentials | null>
   >();
+  const lentWork = createLentWork({
+    inference,
+    admission,
+    laneOpen: () => backgroundLaneOpen(platform),
+    log: (scope, level, msg) => sink.log(scope, level, msg),
+  });
   const engine = createEngine({
     store,
     sources,
@@ -450,6 +460,8 @@ export async function bootCore(deps: BootDeps): Promise<CorePlatform> {
     logs: sink,
     refreshers,
     admission,
+    lendingAllowed: () => backgroundLaneState(platform) !== 'disabled',
+    routedTasks: () => inference.routes().map((r) => r.task),
     // #59 §3a: seed pages run on the read worker, never behind ingest.
     reads: readPlane.readsFor('other'),
   });
@@ -508,7 +520,15 @@ export async function bootCore(deps: BootDeps): Promise<CorePlatform> {
         inference.setLender(l);
         requestLaneWake(platform);
       },
+      setWorkLender: (l) => {
+        offWorkWake?.();
+        offWorkWake = l ? l.onChange(() => requestLaneWake(platform)) : null;
+        engine.setWorkLender(l);
+        requestLaneWake(platform);
+      },
+      runWork: (job, io) => lentWork.run(job, io),
       fitness: () => ({
+        work: lentWork.fitness(),
         lane: backgroundLaneState(platform),
         weak: hostBudget(platform.host, platform.llmAccel()).weak,
         onPower: !platform.scheduler.env.onBattery,
@@ -628,6 +648,7 @@ export async function bootCore(deps: BootDeps): Promise<CorePlatform> {
     engine,
     scheduler,
     inference,
+    lentWork,
     prefs,
     logs: logStore,
     logSink: sink,

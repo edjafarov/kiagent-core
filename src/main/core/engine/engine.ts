@@ -25,6 +25,8 @@ import type {
   SyncStatus,
   Worker,
   WorkerSession,
+  WorkLender,
+  WorkOutcome,
   MessageEvidenceReadInput,
   Connected,
 } from '@shared/contracts';
@@ -91,6 +93,12 @@ export interface EngineDeps {
   convert(input: DocumentInput, signal?: AbortSignal): Promise<DocumentInput>;
   /** #147 background admission. Optional: absent = admit at once. */
   admission?: Pick<Admission, 'acquire'>;
+  /** May work leave this device at all? False while the user has background
+   *  processing turned off. Absent = yes. */
+  lendingAllowed?: () => boolean;
+  /** The inference tasks routed to another provider here: a worker naming
+   *  one of them is not lent as a whole job. Absent = none. */
+  routedTasks?: () => string[];
   logs: LogSink;
   /** Per-source OAuth refreshers. The PLATFORM refreshes tokens before a
    *  session hands them out — no refresh logic in any source. */
@@ -463,6 +471,10 @@ export function createEngine(deps: EngineDeps): Engine & {
    *  table also keeps rows of retired workers (e.g. an old version), whose
    *  frozen cursors must not count as pending work. */
   activeConsumers(): string[];
+  /** Another device runs whole jobs of the lendable workers it takes. */
+  setWorkLender(l: WorkLender | null): void;
+  /** A helper runs this worker's jobs right now. */
+  lendsWork(worker: Worker): boolean;
   /** Re-drive a worker's deferred changes (scheduler calls this on cadence). */
   rerunDeferred(worker: Worker): Promise<RedriveResult>;
   rerunMissingVision(worker: Worker): Promise<RedriveResult>;
@@ -769,6 +781,20 @@ export function createEngine(deps: EngineDeps): Engine & {
    *  CALLER records them, so it can order that write against its commit of
    *  the output (the re-drive has no cursor: its ledger row is its only
    *  driver, and must not say 'done' before the output is durable). */
+  let workLender: WorkLender | null = null;
+  /** This attempt runs on a helping device: a lendable worker the lender
+   *  takes, a document change, processing not turned off, and none of the
+   *  worker's tasks routed elsewhere on this device (a helper would answer
+   *  with its own model instead of the routed one). */
+  const lendsJob = (worker: Worker, change: Change): boolean => {
+    if (!workLender || worker.lendable !== true) return false;
+    if (change.kind !== 'document') return false;
+    if (deps.lendingAllowed && !deps.lendingAllowed()) return false;
+    if (!workLender.takes(worker.name)) return false;
+    const routed = deps.routedTasks?.() ?? [];
+    return !(worker.tasks ?? []).some((t) => routed.includes(t));
+  };
+
   const workOne = async (
     worker: Worker,
     change: Change,
@@ -892,8 +918,34 @@ export function createEngine(deps: EngineDeps): Engine & {
           logs.log(scope, level, msg);
         },
       };
+      // Decided once for the attempt: a job that went to a helper is never
+      // also run here because the answer to "lend?" changed while it ran.
+      const lent = lendsJob(worker, change);
       try {
-        const outcome = (await worker.work(change, session)) ?? 'done';
+        let outcome: WorkOutcome;
+        if (lent) {
+          // Another device runs the whole job; this one only serves it the
+          // bytes and writes what comes back.
+          if (!workLender!.ready(worker.name)) {
+            return { docs: [], enrich: [], attempts: 0, outcome: 'deferred' };
+          }
+          const r = await workLender!.run(
+            { worker: worker.name, version: worker.version, change },
+            {
+              fetchBytes: (id) =>
+                change.kind === 'document' && id === change.document.id
+                  ? session.fetchBytes(change.document)
+                  : Promise.resolve(null),
+              bump: (key) => session.bump(key),
+              signal,
+            },
+          );
+          emitted.push(...r.docs);
+          enriched.push(...r.enrich);
+          outcome = r.outcome;
+        } else {
+          outcome = (await worker.work(change, session)) ?? 'done';
+        }
         if (outcome === 'retry') {
           const retried = await store.ledgerRetry(
             workerConsumerName(worker),
@@ -915,10 +967,25 @@ export function createEngine(deps: EngineDeps): Engine & {
         };
       } catch (err) {
         if (signal.aborted) throw err;
-        if (err instanceof FetchDeferredError) {
+        if (lent && (err as Error)?.name === 'LaneClosedError') {
+          // The helper cannot take it, or stopped answering. It may still be
+          // working on it, so the change is parked: nothing is retried in
+          // this pass, here or on another device. (A failure the helper
+          // reports is different: it has finished, and counts as an attempt.)
+          logs.log(scope, 'info', `deferred seq ${change.seq}: ${String(err)}`);
+          return { docs: [], enrich: [], attempts: 0, outcome: 'deferred' };
+        }
+        if (
+          err instanceof FetchDeferredError ||
+          (err as Error)?.name === 'FetchDeferredError'
+        ) {
           // Bytes unavailable right now — park for the re-drive rather than
           // burn retries into a terminal 'failed' (see fetch-deferred.ts).
-          logs.log(scope, 'warn', `deferred seq ${change.seq}: ${err.message}`);
+          logs.log(
+            scope,
+            'warn',
+            `deferred seq ${change.seq}: ${(err as Error).message}`,
+          );
           // attempts 0, like a worker's own 'defer': the re-drive's backoff
           // is for 'retry' rows only, and would hide this one for minutes
           // (or for good, past its third step).
@@ -2208,6 +2275,23 @@ export function createEngine(deps: EngineDeps): Engine & {
       if (!running.has(`account:${accountId}`)) return;
       const fresh = await store.account(accountId);
       if (fresh && !isResting(fresh.status)) engine.run(fresh);
+    },
+
+    setWorkLender(l: WorkLender | null): void {
+      workLender = l;
+    },
+    /** A helper runs this worker's jobs right now. */
+    lendsWork(worker: Worker): boolean {
+      return (
+        !!workLender &&
+        worker.lendable === true &&
+        !(deps.lendingAllowed && !deps.lendingAllowed()) &&
+        workLender.takes(worker.name) &&
+        workLender.ready(worker.name) &&
+        !(worker.tasks ?? []).some((t) =>
+          (deps.routedTasks?.() ?? []).includes(t),
+        )
+      );
     },
 
     attach(worker: Worker): Handle {

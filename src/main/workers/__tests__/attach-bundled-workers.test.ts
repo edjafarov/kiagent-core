@@ -70,8 +70,10 @@ function makePlatform(
         return { stop: () => {} };
       },
       rerunDeferred: async () => {},
+      lendsWork: () => false,
     },
-    inference: { providers: () => providers },
+    inference: { providers: () => providers, fitness: () => [] },
+    lentWork: { register: () => {} },
   };
   (platform as Record<string, unknown>).admission = createAdmission({
     slots: 1,
@@ -262,8 +264,10 @@ describe('convert worker wiring', () => {
         rerunDeferred: async (w: Worker) => {
           reran.push(w.name);
         },
+        lendsWork: () => false,
       },
-      inference: { providers: () => [], lent: () => false },
+      inference: { providers: () => [], lent: () => false, fitness: () => [] },
+      lentWork: { register: () => {} },
       host: { totalMemBytes: 16 * 1024 ** 3 },
     };
     (platform as Record<string, unknown>).admission = createAdmission({

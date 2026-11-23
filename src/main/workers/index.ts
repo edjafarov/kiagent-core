@@ -35,10 +35,14 @@ export function attachBundledWorkers(
   // local files get at commit time. Plain attachWorker — its re-drive only
   // retries docs whose source was still registering, and parsing needs no
   // inference, so it is not held to the processing window.
-  attachWorker(
-    platform,
-    createConvertWorker({ converter: platform.converter }),
-  );
+  const convertWorker = createConvertWorker({ converter: platform.converter });
+  attachWorker(platform, convertWorker);
+  // The parser is the same on every device.
+  platform.lentWork.register(convertWorker, () => ({
+    ready: true,
+    can: [],
+    now: [],
+  }));
 
   const worker = createVisionWorker({
     rasterizer: pickRasterizer(
@@ -54,6 +58,16 @@ export function attachBundledWorkers(
     foregroundIdle: (signal) => platform.admission.foregroundIdle(signal),
   });
   const handle = platform.engine.attach(worker);
+  platform.lentWork.register(worker, () => {
+    const now: string[] = [];
+    const can: string[] = [];
+    for (const f of platform.inference.fitness()) {
+      if (f.kind !== 'read' && f.kind !== 'see') continue;
+      if (f.local === 'ready') now.push(f.kind);
+      if (f.local !== 'none') can.push(f.kind);
+    }
+    return { ready: now.length > 0, can, now };
+  });
   // NOT boot.attachWorker: the re-drive job additionally (1) skips outside
   // the processing window and (2) triggers the model auto-install when
   // deferred vision work exists — the user-approved auto-download path.
@@ -82,6 +96,21 @@ export function attachBundledWorkers(
     transcribeFile: (p, o) => deps.localAsr.transcribeFile(p, o),
   });
   platform.engine.attach(audioWorker);
+  platform.lentWork.register(audioWorker, () => {
+    const hear = platform.inference.fitness().find((f) => f.kind === 'hear');
+    const ready =
+      deps.localAsr.vadAvailable() &&
+      hear !== undefined &&
+      hear.local === 'ready';
+    const now = ready ? ['hear'] : [];
+    const can = hear && hear.local !== 'none' ? ['hear'] : [];
+    // Only macOS decodes every format (transcode.ts); elsewhere wav and mp3.
+    if (process.platform === 'darwin') {
+      now.push('decode');
+      can.push('decode');
+    }
+    return { ready, can, now };
+  });
   registerRedrive(platform, audioWorker, [deps.localAsr]);
 
   return handle;
@@ -110,7 +139,8 @@ export function registerRedrive(
         worker.name === 'vision'
           ? backgroundAdmits(platform, VISION_KINDS)
           : backgroundLaneOpen(platform);
-      if (!admitted) return;
+      // Or a helper runs this worker's whole jobs while this device may not.
+      if (!admitted && !platform.engine.lendsWork(worker)) return;
       const consumer = workerConsumerName(worker);
       // Existence probe, NOT a fetch: this gate used to pull every deferred
       // seq across the DB worker boundary — 2.1M rows in one structured-clone

@@ -147,6 +147,8 @@ describe('through an in-memory extension host (messages cloned across the hop)',
         setPuller: note('setPuller', undefined),
         aiFitness: note('aiFitness', { weak: false }),
         runAiCall: note('runAiCall', { value: 'x' }),
+        setWorkLender: note('setWorkLender', undefined),
+        runLentWork: note('runLentWork', { outcome: 'done', docs: [], enrich: [] }),
         close: async () => undefined,
       } as never,
       sources: {
