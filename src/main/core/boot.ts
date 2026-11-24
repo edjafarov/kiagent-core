@@ -70,6 +70,7 @@ import {
   createAccountOps,
   type AccountOps,
 } from './sync/account-ops';
+import { sweepPassedOverArchives } from './sync/status';
 import { applyPendingSwap } from './sync/swap';
 import { isResting } from './engine/resting';
 import type { BusyRegistry } from './busy';
@@ -383,6 +384,11 @@ export async function bootCore(deps: BootDeps): Promise<CorePlatform> {
       'error',
       'could not apply the snapshot; kept this device as it was',
     );
+  }
+  // Earlier versions kept a set-aside device's old database; nothing reads it.
+  const sweptArchives = sweepPassedOverArchives(dbPath);
+  if (sweptArchives > 0) {
+    sink.log('sync', 'info', `removed ${sweptArchives} old recovery archive(s)`);
   }
   const db = await openDbInWorker(dbPath, deps.dbWorkerFile);
   // Read once, before anything starts: only the boot swap changes it. A

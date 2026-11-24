@@ -111,7 +111,7 @@ export const swapOutcomePath = (dbPath: string): string =>
   `${dbPath}.swap-outcome`;
 
 /** The swap's recorded result. `markId` and `attempt` are set only by a
- *  keep-archive swap; a legacy bare-string file reads as both null. */
+ *  recovery swap; a legacy bare-string file reads as both null. */
 export interface SwapRecord {
   outcome: 'swapped' | 'abandoned';
   markId: string | null;
@@ -147,16 +147,66 @@ export function readSwapOutcome(
   return readSwapRecord(dbPath)?.outcome ?? null;
 }
 
-/** The old database a join set aside, with its WAL and SHM files. */
-export function archiveFiles(dbPath: string): string[] {
+/** Earlier versions tagged a set-aside device's archive with this file. */
+export const PASSED_OVER_SUFFIX = '.passed-over.json';
+
+/** Every `<db>.archive-*` name in the database's directory. */
+function archiveNames(dbPath: string): { dir: string; names: string[] } {
   const dir = path.dirname(dbPath);
   const prefix = `${path.basename(dbPath)}.archive-`;
   try {
-    return fs
-      .readdirSync(dir)
-      .filter((n) => n.startsWith(prefix))
-      .map((n) => path.join(dir, n));
+    return {
+      dir,
+      names: fs.readdirSync(dir).filter((n) => n.startsWith(prefix)),
+    };
   } catch {
-    return [];
+    return { dir, names: [] };
   }
+}
+
+/** The archive a file belongs to: itself, or the one its `-wal`/`-shm` is of. */
+const archiveBase = (name: string): string => name.replace(/-(wal|shm)$/, '');
+
+/** The old database a join set aside, with its WAL and SHM files. A leftover
+ *  tagged archive (and its tag) is not one: it is never listed here, so it is
+ *  neither counted as old data nor deleted as it. */
+export function archiveFiles(dbPath: string): string[] {
+  const { dir, names } = archiveNames(dbPath);
+  const all = new Set(names);
+  return names
+    .filter(
+      (n) =>
+        !n.endsWith(PASSED_OVER_SUFFIX) &&
+        !n.endsWith(`${PASSED_OVER_SUFFIX}.tmp`) &&
+        !all.has(`${archiveBase(n)}${PASSED_OVER_SUFFIX}`),
+    )
+    .map((n) => path.join(dir, n));
+}
+
+/** Removes the archives earlier versions kept for a set-aside device: the
+ *  archive and its WAL and SHM first, its tag last, so a failure leaves it
+ *  tagged and the next boot tries again. Never throws; returns how many
+ *  archives went. A join archive (no tag) is never touched. */
+export function sweepPassedOverArchives(
+  dbPath: string,
+  rm: (file: string) => void = (f) => fs.rmSync(f, { force: true }),
+): number {
+  const { dir, names } = archiveNames(dbPath);
+  let swept = 0;
+  for (const n of names) {
+    try {
+      if (n.endsWith(`${PASSED_OVER_SUFFIX}.tmp`)) {
+        rm(path.join(dir, n));
+        continue;
+      }
+      if (!n.endsWith(PASSED_OVER_SUFFIX)) continue;
+      const archive = path.join(dir, n.slice(0, -PASSED_OVER_SUFFIX.length));
+      for (const ext of ['', '-wal', '-shm']) rm(`${archive}${ext}`);
+      rm(path.join(dir, n));
+      swept += 1;
+    } catch {
+      /* stays tagged; the next boot tries again */
+    }
+  }
+  return swept;
 }
