@@ -111,7 +111,7 @@ export const swapOutcomePath = (dbPath: string): string =>
   `${dbPath}.swap-outcome`;
 
 /** The swap's recorded result. `markId` and `attempt` are set only by a
- *  keep-archive swap; a legacy bare-string file reads as both null. */
+ *  recovery swap; a legacy bare-string file reads as both null. */
 export interface SwapRecord {
   outcome: 'swapped' | 'abandoned';
   markId: string | null;

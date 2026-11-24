@@ -137,7 +137,7 @@ describe('recovery swap', () => {
     d.close();
   });
 
-  it.each([...SWAP_STEPS, 'incoming-renamed' as const, 'journaled' as const])(
+  it.each([...SWAP_STEPS, 'incoming-renamed' as const])(
     'a crash after %s resumes to the same result with no archive',
     async (step) => {
       await prepare();
@@ -169,13 +169,11 @@ describe('recovery swap', () => {
         if (s === 'replaced') throw new Error('crash');
       }),
     ).toThrow('crash');
-    const installed = sha(receiver);
     expect(applyPendingSwap(receiver)).toBe('swapped');
     expect(fs.existsSync(receiver)).toBe(true);
     const d = open();
     expect(d.prepare(`SELECT master_device_id m FROM sync_state`).get()).toEqual({ m: MASTER });
     d.close();
-    expect(installed).toBeTruthy();
   });
 
   it('an orphan .swap-incoming with no journal is dropped by dropOrphanIncoming', () => {

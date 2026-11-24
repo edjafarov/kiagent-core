@@ -24,7 +24,6 @@ export const SWAP_STEPS = ['committed', 'merged', 'archived', 'replaced', 'outco
 type SwapStep =
   | (typeof SWAP_STEPS)[number]
   | 'incoming-renamed'
-  | 'journaled'
   | 'abandon-outcome'
   | 'abandon-journal'
   | 'abandon-cleaned'
@@ -38,13 +37,12 @@ interface Journal {
   /** The snapshot's hash: the merge writes it into the merged file as proof. */
   sha256?: string;
   replacesCopy?: boolean;
-  archive: string;
+  /** Where the old file goes; absent when it is deleted instead. */
+  archive?: string;
   /** Set by a set-aside device's recovery swap: the old file is deleted, and
    *  the outcome carries both. */
   markId?: string;
   attempt?: number;
-  /** When the swap was prepared. */
-  at?: string;
 }
 
 /** A set-aside device's recovery swap, named by its mark and attempt. */
@@ -165,8 +163,12 @@ export function prepareSwap(
   if (freeBytes() < needed) return 'no-disk';
   fs.renameSync(file, incomingPath(dbPath));
   fs.rmSync(swapOutcomePath(dbPath), { force: true });
-  const now = new Date();
-  const stamp = now.toISOString().replace(/\D/g, '').slice(0, 14);
+  if (opts) {
+    // A recovery swap deletes the old file: no archive is named.
+    writeJournal(dbPath, { masterDeviceId, merged: false, sha256, markId: opts.markId, attempt: opts.attempt });
+    return 'ready';
+  }
+  const stamp = new Date().toISOString().replace(/\D/g, '').slice(0, 14);
   // A second archive within the same second must not replace the first.
   let archive = `${dbPath}.archive-${stamp}`;
   for (let i = 1; fs.existsSync(archive) || fs.existsSync(sidecarPath(archive)); i++) {
@@ -176,9 +178,8 @@ export function prepareSwap(
     masterDeviceId,
     merged: false,
     sha256,
-    replacesCopy: opts ? false : roleOf(dbPath) === 'follower',
+    replacesCopy: roleOf(dbPath) === 'follower',
     archive,
-    ...(opts ? { markId: opts.markId, attempt: opts.attempt, at: now.toISOString() } : {}),
   });
   return 'ready';
 }
@@ -614,7 +615,6 @@ export function applyPendingSwap(
     }
     crashAt('committed');
     writeJournal(dbPath, { ...j, merged: true });
-    crashAt('journaled');
     crashAt('merged');
   }
   // Each step is checked, so a retry after a crash skips what already happened.
@@ -626,7 +626,7 @@ export function applyPendingSwap(
     // delete the installed database.
     for (const ext of ['', '-wal', '-shm']) fs.rmSync(`${dbPath}${ext}`, { force: true });
     crashAt('archived');
-  } else if (!deletesOld && !fs.existsSync(j.archive)) {
+  } else if (!deletesOld && j.archive && !fs.existsSync(j.archive)) {
     moveIfThere(dbPath, j.archive);
     moveIfThere(`${dbPath}-wal`, `${j.archive}-wal`);
     moveIfThere(`${dbPath}-shm`, `${j.archive}-shm`);
