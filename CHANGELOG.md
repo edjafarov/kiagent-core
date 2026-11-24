@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.137.0](https://github.com/edjafarov/kiagent-core/compare/v0.136.0...v0.137.0) (2026-11-24)
+
+### ⚠ BREAKING CHANGES
+
+* **sync:** `prepareSwap` takes `{ markId, attempt }` for a set-aside device's recovery swap (the `keepArchive` flag is gone), and `findPassedOverArchive` is removed from `SyncSurface` and `host.sync`
+
+### Features
+
+* **sync:** a set-aside device keeps no archive of its old database: the recovery swap deletes the old file when the leader's copy takes its place, and writes no `.passed-over.json` tag ([5407b288](https://github.com/edjafarov/kiagent-core/commit/5407b288))
+* **sync:** at boot, recovery archives that earlier versions left on disk are deleted; a plain archive from before joining is never touched, and `archiveBytes` and `deleteArchive` see only those ([5407b288](https://github.com/edjafarov/kiagent-core/commit/5407b288))
+
 ## [0.136.0](https://github.com/edjafarov/kiagent-core/compare/v0.135.0...v0.136.0) (2026-11-23)
 
 ### Features
