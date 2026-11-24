@@ -60,7 +60,6 @@ import {
   clearSwapStatus,
   discardForeignPending,
   dropPendingSwap,
-  findPassedOverArchive,
   swapStatus,
 } from './swap';
 
@@ -126,13 +125,13 @@ export interface SyncService {
    *  search index (minutes on a large corpus), at most once a day. The caller
    *  (the app's follower) shows that it is repairing. */
   repairSearchIndex(): Promise<'repaired' | 'skipped'>;
-  /** `opts.keepArchive`: the old file always becomes a tagged archive (never
-   *  restorable) and the outcome carries `markId` and `attempt`. */
+  /** `opts`: a set-aside device's recovery swap. The old file is deleted, not
+   *  archived, and the outcome carries `markId` and `attempt`. */
   prepareSwap(
     file: string,
     sha256: string,
     masterDeviceId: string,
-    opts?: { keepArchive: true; markId: string; attempt: number },
+    opts?: { markId: string; attempt: number },
   ): Promise<'ready' | 'no-disk' | 'invalid' | 'pending'>;
   /** Drops a pending ordinary swap or restore that is not this `markId` and
    *  `attempt`'s own journal (`'own'`: nothing touched). Never touches an
@@ -150,8 +149,6 @@ export interface SyncService {
   }>;
   /** Clears the swap outcome only when it is for this `markId` and `attempt`. */
   clearSwapStatus(markId: string, attempt: number): Promise<void>;
-  /** True when an archive's sidecar names this `markId` and `attempt`. */
-  findPassedOverArchive(markId: string, attempt: number): Promise<boolean>;
   /** Next boot, this device goes back to its archived data. */
   prepareRestore(): Promise<'ready' | 'no-archive'>;
   /** Hands a write to the leader through the forwarder `remote-mcp` installed.
@@ -716,8 +713,6 @@ export function createSyncService(deps: SyncServiceDeps): SyncService {
       discardForeignPending(deps.dbPath, markId, attempt),
     clearSwapStatus: (markId, attempt) =>
       clearSwapStatus(deps.dbPath, markId, attempt),
-    findPassedOverArchive: (markId, attempt) =>
-      findPassedOverArchive(deps.dbPath, markId, attempt),
     prepareRestore: () => onWorker('prepareRestore'),
     forward,
     setForwarder: (f) => {

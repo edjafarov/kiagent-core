@@ -1,5 +1,6 @@
-/** Keep-archive swap (vanished-leader D4): the old file always becomes an
- *  archive tagged with a sidecar, and the outcome is durable and attempt-tagged. */
+/** A set-aside device's recovery swap (vanished-leader D4; no-recovery-archives
+ *  spec): the old file is deleted, never archived, and the outcome is durable
+ *  and attempt-tagged. */
 import { createHash } from 'crypto';
 import fs from 'fs';
 import os from 'os';
@@ -20,7 +21,6 @@ import {
   clearSwapStatus,
   discardForeignPending,
   dropOrphanIncoming,
-  findPassedOverArchive,
   prepareRestore,
   prepareSwap,
   SWAP_STEPS,
@@ -42,7 +42,7 @@ const doc = (externalId: string): DocumentInput => ({
   createdAt: null,
 });
 const MASTER = 'master-device';
-const KEEP = { keepArchive: true as const, markId: 'mark-1', attempt: 2 };
+const KEEP = { markId: 'mark-1', attempt: 2 };
 
 let n = 0;
 let dir: string;
@@ -57,8 +57,8 @@ const archives = () =>
     .readdirSync(path.dirname(receiver))
     .filter((f) => f.includes('.archive-') && /\d$/.test(f))
     .sort();
-const sidecar = (archive: string) =>
-  JSON.parse(fs.readFileSync(path.join(path.dirname(receiver), `${archive}.passed-over.json`), 'utf8'));
+const sidecars = () =>
+  fs.readdirSync(path.dirname(receiver)).filter((f) => f.includes('.passed-over.json'));
 
 /** A follower of an earlier master that also holds queued work and a row (X2)
  *  that only its own file ever published. */
@@ -86,7 +86,7 @@ function makeNormalReceiver(file: string): void {
   d.close();
 }
 
-const prepare = async (opts: { keepArchive: true; markId: string; attempt: number } | null = KEEP) => {
+const prepare = async (opts: { markId: string; attempt: number } | null = KEEP) => {
   const a = await store.createAccount({ source: 'test', identifier: `a${n++}@b` });
   await store.commit({ account: a.id as never, documents: [doc(`d${n}`)], cursor: null });
   const r = buildSnapshot(path.join(dir, 'master.db'), snap);
@@ -109,25 +109,36 @@ afterEach(async () => {
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
-describe('keep-archive swap', () => {
-  it('moves a follower file to a tagged archive with a sidecar', async () => {
+describe('recovery swap', () => {
+  it('deletes the old file and leaves no archive and no sidecar', async () => {
+    const before = sha(receiver);
     expect(await prepare()).toBe('ready');
     expect(applyPendingSwap(receiver)).toBe('swapped');
-    const [a] = archives();
-    expect(archives()).toHaveLength(1);
-    expect(sidecar(a)).toEqual({
-      markId: 'mark-1',
-      holder: MASTER,
-      at: expect.any(String),
-      attempt: 2,
-    });
-    const arch = new Database(path.join(path.dirname(receiver), a), { readonly: true });
-    expect(arch.prepare(`SELECT account_id FROM vault`).all()).toEqual([{ account_id: 'mine' }]);
-    arch.close();
+    expect(archives()).toEqual([]);
+    expect(sidecars()).toEqual([]);
+    expect(sha(receiver)).not.toBe(before);
+    expect(swapStatus(receiver)).toEqual({ pending: null, outcome: 'ok', markId: 'mark-1', attempt: 2 });
+    // The device's own local tables are carried into the new file.
+    const d = open();
+    expect(d.prepare(`SELECT account_id FROM vault`).all()).toEqual([{ account_id: 'mine' }]);
+    d.close();
   });
 
-  it.each([...SWAP_STEPS, 'incoming-renamed' as const])(
-    'a crash after %s resumes to the same result with the sidecar in place',
+  it('a journal in the shape earlier versions wrote takes the same path', async () => {
+    await prepare();
+    const jp = `${receiver}.swap.json`;
+    fs.writeFileSync(jp, JSON.stringify({ ...JSON.parse(fs.readFileSync(jp, 'utf8')), keepArchive: true }));
+    expect(applyPendingSwap(receiver)).toBe('swapped');
+    expect(archives()).toEqual([]);
+    expect(sidecars()).toEqual([]);
+    const d = open();
+    expect(d.prepare(`SELECT joined FROM sync_state`).get()).toEqual({ joined: 1 });
+    expect(d.prepare(`SELECT * FROM sync_rows`).all()).toEqual([]);
+    d.close();
+  });
+
+  it.each([...SWAP_STEPS, 'incoming-renamed' as const, 'journaled' as const])(
+    'a crash after %s resumes to the same result with no archive',
     async (step) => {
       await prepare();
       expect(() =>
@@ -135,16 +146,9 @@ describe('keep-archive swap', () => {
           if (s === (step as string)) throw new Error('crash');
         }),
       ).toThrow('crash');
-      const reached = SWAP_STEPS.indexOf(step as never);
-      if (step === 'merged' || reached > SWAP_STEPS.indexOf('merged')) {
-        const a = fs
-          .readdirSync(path.dirname(receiver))
-          .filter((f) => f.endsWith('.passed-over.json'));
-        expect(a).toHaveLength(1);
-      }
       expect(applyPendingSwap(receiver)).toBe('swapped');
-      expect(archives()).toHaveLength(1);
-      expect(sidecar(archives()[0]).markId).toBe('mark-1');
+      expect(archives()).toEqual([]);
+      expect(sidecars()).toEqual([]);
       expect(swapStatus(receiver)).toEqual({
         pending: null,
         outcome: 'ok',
@@ -153,9 +157,26 @@ describe('keep-archive swap', () => {
       });
       const d = open();
       expect(d.prepare(`SELECT account_id FROM vault`).all()).toEqual([{ account_id: 'mine' }]);
+      expect(d.prepare(`SELECT master_device_id m FROM sync_state`).get()).toEqual({ m: MASTER });
       d.close();
     },
   );
+
+  it('a replay after the install does not delete the installed database', async () => {
+    await prepare();
+    expect(() =>
+      applyPendingSwap(receiver, (s) => {
+        if (s === 'replaced') throw new Error('crash');
+      }),
+    ).toThrow('crash');
+    const installed = sha(receiver);
+    expect(applyPendingSwap(receiver)).toBe('swapped');
+    expect(fs.existsSync(receiver)).toBe(true);
+    const d = open();
+    expect(d.prepare(`SELECT master_device_id m FROM sync_state`).get()).toEqual({ m: MASTER });
+    d.close();
+    expect(installed).toBeTruthy();
+  });
 
   it('an orphan .swap-incoming with no journal is dropped by dropOrphanIncoming', () => {
     fs.writeFileSync(`${receiver}.swap-incoming`, 'x');
@@ -194,24 +215,25 @@ describe('keep-archive swap', () => {
     d.close();
   });
 
-  it('records replacesCopy false even for a follower with no earlier archive, and never deletes the file', async () => {
-    await prepare();
-    applyPendingSwap(receiver);
-    expect(archives()).toHaveLength(1);
-  });
-
-  it('two archives made in the same second do not overwrite each other', async () => {
+  it('a join archive made earlier is untouched and still restorable', async () => {
     makeNormalReceiver(receiver);
     await prepare(null);
     applyPendingSwap(receiver);
+    const [plain] = archives();
+    const h = sha(path.join(path.dirname(receiver), plain));
     await prepare();
-    applyPendingSwap(receiver);
-    expect(archives()).toHaveLength(2);
+    expect(applyPendingSwap(receiver)).toBe('swapped');
+    expect(archives()).toEqual([plain]);
+    expect(sidecars()).toEqual([]);
+    expect(sha(path.join(path.dirname(receiver), plain))).toBe(h);
+    expect(prepareRestore(receiver)).toBe('ready');
+    const j = JSON.parse(fs.readFileSync(`${receiver}.restore.json`, 'utf8'));
+    expect(path.basename(j.archive)).toBe(plain);
   });
 });
 
 describe('swap outcome', () => {
-  it('is JSON with markId and attempt for a keep-archive swap, and survives repeated reads', async () => {
+  it('is JSON with markId and attempt for a recovery swap, and survives repeated reads', async () => {
     await prepare();
     applyPendingSwap(receiver);
     const raw = () => JSON.parse(fs.readFileSync(`${receiver}.swap-outcome`, 'utf8'));
@@ -279,33 +301,36 @@ describe('swap outcome', () => {
   });
 });
 
-describe('passed-over archives', () => {
-  it('findPassedOverArchive matches the sidecar markId and attempt', async () => {
-    await prepare();
-    applyPendingSwap(receiver);
-    expect(await findPassedOverArchive(receiver, 'mark-1', 2)).toBe(true);
-    expect(await findPassedOverArchive(receiver, 'mark-1', 3)).toBe(false);
-    expect(await findPassedOverArchive(receiver, 'mark-2', 2)).toBe(false);
-  });
+describe('archives left by earlier versions', () => {
+  /** What an earlier version left: an archive with its tag beside it. */
+  const leaveTagged = (stamp: string): string => {
+    const a = `${receiver}.archive-${stamp}`;
+    fs.copyFileSync(receiver, a);
+    fs.writeFileSync(`${a}.passed-over.json`, JSON.stringify({ markId: 'old', attempt: 1 }));
+    return a;
+  };
 
-  it('prepareRestore picks the newest archive without a sidecar', async () => {
+  it('prepareRestore never picks a tagged archive, even a newer one', async () => {
     makeNormalReceiver(receiver);
     await prepare(null);
     applyPendingSwap(receiver);
     const [plain] = archives();
-    await prepare();
-    applyPendingSwap(receiver);
-    expect(archives()).toHaveLength(2);
+    leaveTagged('99991231235959');
     expect(prepareRestore(receiver)).toBe('ready');
     const j = JSON.parse(fs.readFileSync(`${receiver}.restore.json`, 'utf8'));
     expect(path.basename(j.archive)).toBe(plain);
   });
 
-  it('with only sidecar archives prepareRestore says no-archive and writes nothing', async () => {
+  it('with only a tagged archive prepareRestore says no-archive and writes nothing', () => {
+    leaveTagged('20260101000000');
+    expect(prepareRestore(receiver)).toBe('no-archive');
+    expect(fs.existsSync(`${receiver}.restore.json`)).toBe(false);
+  });
+
+  it('a recovery swap leaves a former leader with nothing to go back to', async () => {
     await prepare();
     applyPendingSwap(receiver);
     expect(prepareRestore(receiver)).toBe('no-archive');
-    expect(fs.existsSync(`${receiver}.restore.json`)).toBe(false);
   });
 });
 
@@ -323,26 +348,11 @@ describe('swapStatus while pending', () => {
   });
 });
 
-describe('a crash between the journal write and the sidecar write', () => {
-  it('resumes and the sidecar is written before the archive moves', async () => {
-    await prepare();
-    expect(() =>
-      applyPendingSwap(receiver, (s) => {
-        if (s === 'journaled') throw new Error('crash');
-      }),
-    ).toThrow('crash');
-    expect(fs.readdirSync(path.dirname(receiver)).filter((f) => f.endsWith('.passed-over.json'))).toEqual([]);
-    expect(applyPendingSwap(receiver)).toBe('swapped');
-    expect(archives()).toHaveLength(1);
-    expect(sidecar(archives()[0]).markId).toBe('mark-1');
-  });
-});
-
 describe('failed-swap cleanup crash safety', () => {
   const CLEANUP = ['abandon-outcome', 'abandon-journal', 'abandon-cleaned'] as const;
-  for (const kind of ['ordinary follower', 'keep-archive'] as const) {
+  for (const kind of ['ordinary follower', 'recovery'] as const) {
     it.each(CLEANUP)(`${kind}: a crash after %s leaves the original database and an abandoned outcome`, async (step) => {
-      await prepare(kind === 'keep-archive' ? KEEP : null);
+      await prepare(kind === 'recovery' ? KEEP : null);
       fs.writeFileSync(`${receiver}.swap-incoming`, 'not a database');
       expect(() =>
         applyPendingSwap(receiver, (s) => {
@@ -377,7 +387,7 @@ describe('failed-swap cleanup crash safety', () => {
 describe('a merged file counts only with positive evidence', () => {
   const kinds = [
     ['ordinary follower', null],
-    ['keep-archive', KEEP],
+    ['recovery', KEEP],
   ] as const;
   const tables = (d: Database.Database) =>
     (d.prepare(`SELECT name FROM sqlite_master WHERE type='table'`).all() as { name: string }[]).map((r) => r.name);
@@ -459,16 +469,16 @@ describe('discardForeignPending', () => {
     expect(swapStatus(receiver).pending).toBeNull();
   });
 
-  it('drops a pending keep-archive swap of another mark or attempt', async () => {
-    await prepare({ keepArchive: true, markId: 'other', attempt: 1 });
+  it('drops a pending recovery swap of another mark or attempt', async () => {
+    await prepare({ markId: 'other', attempt: 1 });
     expect(discardForeignPending(receiver, 'mark-1', 2)).toBe('dropped-swap');
     expect(debris()).toEqual([]);
-    await prepare({ keepArchive: true, markId: 'mark-1', attempt: 1 });
+    await prepare({ markId: 'mark-1', attempt: 1 });
     expect(discardForeignPending(receiver, 'mark-1', 2)).toBe('dropped-swap');
     expect(debris()).toEqual([]);
   });
 
-  it('drops a pending restore journal and its tmp, leaving archives and sidecars', async () => {
+  it('drops a pending restore journal and its tmp, leaving archives', async () => {
     makeNormalReceiver(receiver);
     await prepare(null);
     applyPendingSwap(receiver);
@@ -482,7 +492,7 @@ describe('discardForeignPending', () => {
     expect(swapStatus(receiver).pending).toBeNull();
   });
 
-  it('says none when nothing is pending and touches no archive or sidecar', async () => {
+  it('says none when nothing is pending and touches no file', async () => {
     await prepare();
     applyPendingSwap(receiver);
     const before = files();
@@ -514,7 +524,7 @@ describe('discardForeignPending', () => {
   });
 });
 
-describe('prepareSwap keepArchive over a pending journal', () => {
+describe('a recovery prepareSwap over a pending journal', () => {
   it('refuses over a foreign pending ordinary swap and leaves it intact', async () => {
     await prepare(null);
     const j = fs.readFileSync(`${receiver}.swap.json`, 'utf8');
@@ -533,14 +543,14 @@ describe('prepareSwap keepArchive over a pending journal', () => {
   });
 
   it('refuses over another mark, but retries its own', async () => {
-    await prepare({ keepArchive: true, markId: 'other', attempt: 1 });
+    await prepare({ markId: 'other', attempt: 1 });
     expect(await prepare()).toBe('pending');
     discardForeignPending(receiver, 'mark-1', 2);
     expect(await prepare()).toBe('ready');
     expect(await prepare()).toBe('ready');
   });
 
-  it('after a discard the keep-archive swap archives the current (divergent) database', async () => {
+  it('after a discard the recovery swap replaces the current (divergent) database and keeps no archive', async () => {
     await prepare(null); // a prepared ordinary follower re-copy
     const d = open();
     d.exec(`INSERT INTO vault(account_id, blob) VALUES('divergent', x'01')`);
@@ -549,13 +559,14 @@ describe('prepareSwap keepArchive over a pending journal', () => {
     expect(discardForeignPending(receiver, 'mark-1', 2)).toBe('dropped-swap');
     expect(await prepare()).toBe('ready');
     expect(applyPendingSwap(receiver)).toBe('swapped');
-    expect(archives()).toHaveLength(1);
-    expect(sidecar(archives()[0]).markId).toBe('mark-1');
-    const arch = new Database(path.join(path.dirname(receiver), archives()[0]), { readonly: true });
-    expect(arch.prepare(`SELECT account_id FROM vault ORDER BY 1`).all()).toEqual([
+    expect(archives()).toEqual([]);
+    expect(sidecars()).toEqual([]);
+    // Local tables are this device's own and are carried.
+    const now = open();
+    expect(now.prepare(`SELECT account_id FROM vault ORDER BY 1`).all()).toEqual([
       { account_id: 'divergent' },
       { account_id: 'mine' },
     ]);
-    arch.close();
+    now.close();
   });
 });

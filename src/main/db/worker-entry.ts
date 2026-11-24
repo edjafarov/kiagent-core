@@ -7,7 +7,7 @@
 import { buildDelta, type SyncCursor } from '../core/sync/delta';
 import { buildSnapshot } from '../core/sync/snapshot';
 import { readSyncStatus } from '../core/sync/status';
-import { type KeepArchiveOpts, prepareRestore, prepareSwap } from '../core/sync/swap';
+import { type RecoverySwapOpts, prepareRestore, prepareSwap } from '../core/sync/swap';
 import { demote, lead, promote } from '../core/sync/promote';
 import { bootPhase, gateFrom, readGateSync } from '../core/sync/role';
 import { parentPort, workerData } from 'node:worker_threads';
@@ -128,7 +128,7 @@ async function runSyncRole(): Promise<void> {
         file: string;
         sha256: string;
         masterDeviceId: string;
-        opts?: KeepArchiveOpts;
+        opts?: RecoverySwapOpts;
       };
       return prepareSwap(dbPath, a.file, a.sha256, a.masterDeviceId, a.opts);
     },

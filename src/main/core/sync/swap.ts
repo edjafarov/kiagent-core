@@ -1,7 +1,9 @@
 /** Turns this device into a follower at boot, before the database is opened
- *  (spec 7.5, 7.6 and 14). The snapshot gains this device's own local tables,
- *  the old file is renamed to an archive, and the new one takes its place. A
- *  small journal makes every step safe to die on. */
+ *  (spec 7.5, 7.6 and 14). The snapshot gains this device's own local tables
+ *  and takes the old file's place. A device's own first database is renamed
+ *  to an archive ("Stop copying" restores it); a copy's file, and the file of
+ *  a device that was set aside, is deleted. A small journal makes every step
+ *  safe to die on. */
 import fs from 'node:fs';
 import path from 'node:path';
 
@@ -9,7 +11,7 @@ import Database from 'better-sqlite3';
 
 import { hashFile, SNAPSHOT_META } from './snapshot';
 import { pauseMovedAccounts } from './sources';
-import { readSwapRecord, swapOutcomePath } from './status';
+import { PASSED_OVER_SUFFIX, readSwapRecord, swapOutcomePath } from './status';
 import {
   COPIED_CORE_TABLES,
   isDerivedTable,
@@ -37,19 +39,23 @@ interface Journal {
   sha256?: string;
   replacesCopy?: boolean;
   archive: string;
-  /** Set by a keep-archive swap: the old file always becomes a tagged archive. */
-  keepArchive?: boolean;
+  /** Set by a set-aside device's recovery swap: the old file is deleted, and
+   *  the outcome carries both. */
   markId?: string;
   attempt?: number;
-  /** When the swap was prepared; the sidecar carries it. */
+  /** When the swap was prepared. */
   at?: string;
 }
 
-export interface KeepArchiveOpts {
-  keepArchive: true;
+/** A set-aside device's recovery swap, named by its mark and attempt. */
+export interface RecoverySwapOpts {
   markId: string;
   attempt: number;
 }
+
+/** A journal that carries a mark is a recovery swap (journals written before
+ *  the archive went also carried `keepArchive: true`; the mark is enough). */
+const isRecovery = (j: Partial<Journal>): boolean => typeof j.markId === 'string';
 
 const journalPath = (db: string) => `${db}.swap.json`;
 const incomingPath = (db: string) => `${db}.swap-incoming`;
@@ -108,19 +114,10 @@ const roleOf = (dbPath: string): string | undefined => {
   }
 };
 
-const sidecarPath = (archive: string) => `${archive}.passed-over.json`;
-
-/** Written from the journal, tmp + rename, before the archive moves, so no
- *  crash point leaves a tagged history looking plain. Idempotent. */
-function ensureSidecar(j: Journal): void {
-  if (!j.keepArchive || fs.existsSync(sidecarPath(j.archive))) return;
-  const tmp = `${sidecarPath(j.archive)}.tmp`;
-  fs.writeFileSync(
-    tmp,
-    JSON.stringify({ markId: j.markId, holder: j.masterDeviceId, at: j.at, attempt: j.attempt }),
-  );
-  fs.renameSync(tmp, sidecarPath(j.archive));
-}
+/** Earlier versions kept a set-aside device's old database as an archive
+ *  tagged by this file beside it. Nothing writes one any more; the names are
+ *  still told apart so a leftover is never taken for a join archive. */
+const sidecarPath = (archive: string) => `${archive}${PASSED_OVER_SUFFIX}`;
 
 const defaultFree = (dbPath: string) => () => {
   const s = fs.statfsSync(path.dirname(dbPath));
@@ -137,7 +134,7 @@ const readJournalLoose = (dbPath: string): Partial<Journal> | null => {
 };
 
 const isOwnJournal = (j: Partial<Journal>, markId: string, attempt: number): boolean =>
-  j.keepArchive === true && j.markId === markId && j.attempt === attempt;
+  j.markId === markId && j.attempt === attempt;
 
 /** A pending swap or restore that this mark and attempt did not prepare. */
 const foreignPending = (dbPath: string, markId: string, attempt: number): boolean => {
@@ -152,14 +149,14 @@ export function prepareSwap(
   file: string,
   sha256: string,
   masterDeviceId: string,
-  freeOrOpts?: (() => number) | KeepArchiveOpts,
-  maybeOpts?: KeepArchiveOpts,
+  freeOrOpts?: (() => number) | RecoverySwapOpts,
+  maybeOpts?: RecoverySwapOpts,
 ): 'ready' | 'no-disk' | 'invalid' | 'pending' {
   const freeBytes = typeof freeOrOpts === 'function' ? freeOrOpts : defaultFree(dbPath);
   const opts = typeof freeOrOpts === 'function' || freeOrOpts === undefined ? maybeOpts : freeOrOpts;
-  // A keep-archive swap never replaces a journal that is not its own: that
+  // A recovery swap never replaces a journal that is not its own: that
   // one is another swap (or a restore) the caller must discard on purpose.
-  if (opts?.keepArchive && foreignPending(dbPath, opts.markId, opts.attempt)) return 'pending';
+  if (opts && foreignPending(dbPath, opts.markId, opts.attempt)) return 'pending';
   if (hashFile(file) !== sha256) return 'invalid';
   // The file was already downloaded here, so only the local tables are new.
   // They can't outgrow the database they come from.
@@ -179,11 +176,9 @@ export function prepareSwap(
     masterDeviceId,
     merged: false,
     sha256,
-    replacesCopy: opts?.keepArchive ? false : roleOf(dbPath) === 'follower',
+    replacesCopy: opts ? false : roleOf(dbPath) === 'follower',
     archive,
-    ...(opts?.keepArchive
-      ? { keepArchive: true, markId: opts.markId, attempt: opts.attempt, at: now.toISOString() }
-      : {}),
+    ...(opts ? { markId: opts.markId, attempt: opts.attempt, at: now.toISOString() } : {}),
   });
   return 'ready';
 }
@@ -209,9 +204,7 @@ export function dropOrphanIncoming(dbPath: string): boolean {
 
 /** Whether a swap or a restore is waiting, and what the last swap decided.
  *  While a swap is pending `markId`/`attempt` come from its journal (null for an
- *  ordinary swap). A sidecar archive is proof that a swap completed only when
- *  nothing is pending: while `pending` is set, the archive may belong to an
- *  earlier attempt. */
+ *  ordinary swap). */
 export function swapStatus(dbPath: string): {
   pending: 'swap' | 'restore' | null;
   outcome: 'ok' | 'failed' | null;
@@ -243,36 +236,13 @@ export async function clearSwapStatus(dbPath: string, markId: string, attempt: n
   }
 }
 
-/** Proof that a keep-archive swap for this mark and attempt moved the old file. */
-export async function findPassedOverArchive(
-  dbPath: string,
-  markId: string,
-  attempt: number,
-): Promise<boolean> {
-  const dir = path.dirname(dbPath);
-  const prefix = `${path.basename(dbPath)}.archive-`;
-  for (const f of fs.readdirSync(dir)) {
-    if (!f.startsWith(prefix) || !f.endsWith('.passed-over.json')) continue;
-    try {
-      const s = JSON.parse(fs.readFileSync(path.join(dir, f), 'utf8')) as {
-        markId?: string;
-        attempt?: number;
-      };
-      if (s.markId === markId && s.attempt === attempt) return true;
-    } catch {
-      /* unreadable sidecar: not proof */
-    }
-  }
-  return false;
-}
-
 /** Adds every local table of `old` to the snapshot at `file`. */
 function mergeLocalTables(
   file: string,
   old: string,
   masterDeviceId: string,
   sha256: string,
-  keepArchive = false,
+  recovery = false,
 ): void {
   const db = new Database(file);
   try {
@@ -316,11 +286,11 @@ function mergeLocalTables(
         (d) => d.type === 'table' && !copied(d.name) && !shadow.has(d.name) && d.name !== MERGE_MARKER,
       );
       const isVirtual = (sql: string) => /^CREATE\s+VIRTUAL/i.test(sql);
-      // A keep-archive swap takes the snapshot's join state: the old file's
-      // published rows stay in the archive, so a later promote can't publish
-      // a key or a delete that exists only there.
+      // A recovery swap takes the snapshot's join state: the old file's
+      // published rows go with it, so a later promote can't publish a key or
+      // a delete that existed only there.
       const dropsRows = (name: string) =>
-        keepArchive && (name === 'sync_rows' || name === 'sync_imported');
+        recovery && (name === 'sync_rows' || name === 'sync_imported');
       for (const t of localTables) db.exec(t.sql);
       for (const t of localTables) {
         if (isVirtual(t.sql) || dropsRows(t.name)) continue;
@@ -355,9 +325,9 @@ function mergeLocalTables(
       db.exec(
         `DELETE FROM main.sqlite_sequence;
          INSERT INTO main.sqlite_sequence(name, seq) SELECT name, seq FROM old.sqlite_sequence
-          WHERE ${keepArchive ? `name <> 'sync_rows'` : '1'};`,
+          WHERE ${recovery ? `name <> 'sync_rows'` : '1'};`,
       );
-      if (keepArchive) {
+      if (recovery) {
         db.prepare(`INSERT INTO main.sqlite_sequence(name, seq) VALUES('sync_rows', ?)`).run(
           meta.after_cursor,
         );
@@ -373,7 +343,7 @@ function mergeLocalTables(
       db.prepare(
         `UPDATE main.sync_state SET role = 'follower', tracking = 0, joining = 0,
            after_seq = ?, after_cursor = ?, history_id = ?, master_device_id = ?, epoch = ?,
-           pre_demote_epoch = NULL${keepArchive ? ', joined = 1' : ''}`,
+           pre_demote_epoch = NULL${recovery ? ', joined = 1' : ''}`,
       ).run(meta.after_seq, meta.after_cursor, meta.history_id, masterDeviceId, meta.epoch);
       db.exec(`DROP TABLE main.${SNAPSHOT_META}`);
       db.exec(`CREATE TABLE main.${MERGE_MARKER}(sha256 TEXT NOT NULL)`);
@@ -399,7 +369,8 @@ export function prepareRestore(dbPath: string): 'ready' | 'no-archive' {
   const prefix = `${path.basename(dbPath)}.archive-`;
   const newest = fs
     .readdirSync(dir)
-    // An archive with a sidecar is a history the account abandoned: never restored.
+    // An archive with a sidecar is a leftover from an earlier version, a
+    // history the account abandoned: never restored (the boot sweep removes it).
     .filter((f) => f.startsWith(prefix) && /\d$/.test(f) && !fs.existsSync(sidecarPath(path.join(dir, f))))
     .sort()
     .pop();
@@ -558,7 +529,7 @@ export function dropPendingSwap(dbPath: string): void {
 }
 
 /** Drops a pending swap or restore that recovery did not prepare, so its own
- *  keep-archive swap can take its place. The journal goes first, then the
+ *  swap can take its place. The journal goes first, then the
  *  payload files: a crash between leaves either the journal (applied as
  *  before) or orphan files that boot's `dropOrphanIncoming` removes. It never
  *  touches an archive, a sidecar, the outcome record or the live database.
@@ -617,7 +588,7 @@ export function applyPendingSwap(
         // Merged where it lies, so a crash leaves either an untouched snapshot
         // or one carrying its marker; then a rename.
         if (!hasMergeMarker(incomingPath(dbPath), j.sha256)) {
-          mergeLocalTables(incomingPath(dbPath), dbPath, j.masterDeviceId, j.sha256 ?? '', j.keepArchive === true);
+          mergeLocalTables(incomingPath(dbPath), dbPath, j.masterDeviceId, j.sha256 ?? '', isRecovery(j));
         }
         fs.renameSync(incomingPath(dbPath), merged);
         try {
@@ -644,18 +615,18 @@ export function applyPendingSwap(
     crashAt('committed');
     writeJournal(dbPath, { ...j, merged: true });
     crashAt('journaled');
-    ensureSidecar(j);
     crashAt('merged');
   }
-  // After a crash between the journal and the sidecar, before the archive moves.
-  ensureSidecar(j);
-  // Each rename is checked, so a retry after a crash skips what already moved.
-  if (j.replacesCopy && fs.existsSync(merged)) {
-    // A copy being copied again holds nothing of its own, and the user's real
-    // data is already in an archive.
+  // Each step is checked, so a retry after a crash skips what already happened.
+  const deletesOld = j.replacesCopy || isRecovery(j);
+  if (deletesOld && fs.existsSync(merged)) {
+    // A copy being copied again holds nothing of its own. A set-aside device's
+    // file holds changes the account moved on without: they are not kept.
+    // Only while the merged file waits: a replay after the install must not
+    // delete the installed database.
     for (const ext of ['', '-wal', '-shm']) fs.rmSync(`${dbPath}${ext}`, { force: true });
     crashAt('archived');
-  } else if (!j.replacesCopy && !fs.existsSync(j.archive)) {
+  } else if (!deletesOld && !fs.existsSync(j.archive)) {
     moveIfThere(dbPath, j.archive);
     moveIfThere(`${dbPath}-wal`, `${j.archive}-wal`);
     moveIfThere(`${dbPath}-shm`, `${j.archive}-shm`);
