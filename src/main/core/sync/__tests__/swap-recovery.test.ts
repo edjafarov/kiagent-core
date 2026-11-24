@@ -127,7 +127,17 @@ describe('recovery swap', () => {
   it('a journal in the shape earlier versions wrote takes the same path', async () => {
     await prepare();
     const jp = `${receiver}.swap.json`;
-    fs.writeFileSync(jp, JSON.stringify({ ...JSON.parse(fs.readFileSync(jp, 'utf8')), keepArchive: true }));
+    // The journal as v0.136.0 wrote it: an archive name, the flag and a time.
+    fs.writeFileSync(
+      jp,
+      JSON.stringify({
+        ...JSON.parse(fs.readFileSync(jp, 'utf8')),
+        replacesCopy: false,
+        archive: `${receiver}.archive-20261124120000`,
+        keepArchive: true,
+        at: '2026-11-24T12:00:00.000Z',
+      }),
+    );
     expect(applyPendingSwap(receiver)).toBe('swapped');
     expect(archives()).toEqual([]);
     expect(sidecars()).toEqual([]);
