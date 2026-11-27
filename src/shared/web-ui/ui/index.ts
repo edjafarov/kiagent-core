@@ -42,10 +42,13 @@ export {
   clockTime,
   dayMonth,
   shortDay,
+  shortDate,
+  ago,
   useNow,
   everyWhileVisible,
 } from './time';
 export type { DayGroupName } from './time';
+export { plural, formatBytes } from './text';
 export type { Crumb, TopBarProps } from './layout';
 export {
   sourceBrand,
