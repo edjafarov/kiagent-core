@@ -526,6 +526,38 @@ button.ui-row-main:focus-visible { outline: 2px solid var(--border-focus); outli
 .ui-seg-i.is-on .ui-seg-n { color: #d4c8f5; }
 .ui-seg-n.is-work { color: var(--working-solid); }
 .ui-seg-i.is-on .ui-seg-n.is-work { color: #fcd34d; }
+/* The line look: labels over a rule, the active one underlined. */
+.ui-seg.is-line {
+  display: flex;
+  gap: 20px;
+  padding: 0;
+  background: none;
+  border: 0;
+  box-shadow: inset 0 -1px 0 var(--border-subtle);
+  overflow-x: auto;
+}
+.ui-seg.is-line .ui-seg-i {
+  flex-shrink: 0;
+  align-items: baseline;
+  gap: 6px;
+  height: auto;
+  padding: 10px 0 9px;
+  border-bottom: 2px solid transparent;
+  font-size: 13px;
+  font-weight: 400;
+}
+.ui-seg.is-line .ui-seg-i:hover { background: none; }
+.ui-seg.is-line .ui-seg-i:focus-visible { outline-offset: 1px; }
+.ui-seg.is-line .ui-seg-i.is-on {
+  background: none;
+  border-bottom-color: var(--accent-solid);
+  color: var(--text-primary);
+  font-weight: 600;
+}
+.ui-seg.is-line .ui-seg-n { font-size: 12px; font-weight: 500; }
+.ui-seg.is-line .ui-seg-i.is-on .ui-seg-n { color: var(--accent-text); }
+.ui-seg.is-line .ui-seg-n.is-work,
+.ui-seg.is-line .ui-seg-i.is-on .ui-seg-n.is-work { color: var(--working-solid); }
 
 /* ── Toggle and checkbox ──────────────────────────────────────────── */
 .ui-toggle {
