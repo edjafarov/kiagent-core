@@ -57,7 +57,7 @@ describe('Storage pane', () => {
     render(<Storage />);
     expect(await screen.findByText('335,550')).toBeInTheDocument();
     expect(screen.getByText('13')).toBeInTheDocument();
-    expect(screen.getByText('12.5 GB')).toBeInTheDocument();
+    expect(screen.getByText('13 GB')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Show in Finder' }));
     expect(invoke).toHaveBeenCalledWith('app:open-path', {
       path: STATS.dataDir,

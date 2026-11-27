@@ -21,11 +21,13 @@ import {
   type DataColumn,
   type SegmentedItem,
   type SourceCategory,
+  ago,
+  plural,
 } from '@shared/web-ui/ui';
 import { Icon } from '@shared/web-ui/icon-sprite';
 import { useAppState } from '@renderer/state/app-state';
 import { sourceLabel } from './source-label';
-import { accountLabel, formatRelativeCompact } from './format';
+import { accountLabel } from './format';
 import { GetStartedPanel } from './GetStartedPanel';
 import { SourcePanel } from './SourcePanel';
 import { syncNow } from './source-actions';
@@ -52,10 +54,6 @@ export interface ListSelection {
 export const INITIAL_SELECTION: ListSelection = { filter: 'all', picked: null };
 
 const ADD_MORE_MAX = 5;
-
-function plural(n: number, one: string, many = `${one}s`): string {
-  return `${n.toLocaleString()} ${n === 1 ? one : many}`;
-}
 
 /** "13 sources · 335,550 items · 1 needs you", zero parts dropped. */
 function metaLine(entries: readonly Entry[]): string {
@@ -116,7 +114,7 @@ function LastCell(props: { entry: Entry }): React.ReactElement {
     <Status tone={s.tone}>{s.label}</Status>
   ) : (
     <span className="src-when">
-      {formatRelativeCompact(props.entry.recent[0]?.ts)}
+      {ago(props.entry.recent[0]?.ts, Date.now(), 'short') || '—'}
     </span>
   );
 }

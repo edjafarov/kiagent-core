@@ -14,8 +14,8 @@ import {
   sourceBrand,
   type KeyValueItem,
   type MenuEntry,
+  ago,
 } from '@shared/web-ui/ui';
-import { formatRelativeCompact } from '@renderer/screens/Sources/format';
 import {
   actionFor,
   defaultSendLater,
@@ -37,7 +37,7 @@ export function draftedBy(d: OutboxDraftDetail): string {
       : d.createdBy
         ? clientBrand(d.createdBy).name
         : 'An AI app';
-  return `${who} · ${formatRelativeCompact(d.createdAt)}`;
+  return `${who} · ${ago(d.createdAt, Date.now(), 'short') || '—'}`;
 }
 
 export function fileSize(n: number): string {
@@ -229,7 +229,7 @@ export function ReviewSheet(props: {
   const word =
     d.status === 'sent'
       ? {
-          label: `Sent${d.mirror?.sentElsewhere ? ` from ${d.mirror.provider ?? 'your mail app'}` : ''} ${formatRelativeCompact(d.sentAt)}`,
+          label: `Sent${d.mirror?.sentElsewhere ? ` from ${d.mirror.provider ?? 'your mail app'}` : ''} ${ago(d.sentAt, Date.now(), 'words') || '—'}`,
         }
       : statusWord(d);
 

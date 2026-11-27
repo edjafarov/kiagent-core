@@ -1,8 +1,8 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Button, Card, CardHeader, Select } from '@shared/web-ui/ui';
+import { Button, Card, CardHeader, Select, ago } from '@shared/web-ui/ui';
 import type { Account, Cadence as CadenceValue } from '@shared/contracts';
 import type { ScheduledJob } from '@shared/ipc';
-import { describeCadence, formatRelative, formatUntil } from '../format';
+import { describeCadence, formatUntil } from '../format';
 import { syncNow } from '../source-actions';
 
 interface Preset {
@@ -165,11 +165,11 @@ export function Cadence(props: { account: Account }): React.ReactElement {
               : checking
                 ? 'Checking now…'
                 : [
-                  `Last checked ${formatRelative(later(job?.lastRun, a.lastSyncAt))}`,
-                  job?.nextRun ? `next ${formatUntil(job.nextRun)}` : null,
-                ]
-                  .filter(Boolean)
-                  .join(' · ')}
+                    `Last checked ${ago(later(job?.lastRun, a.lastSyncAt), Date.now(), 'words') || '—'}`,
+                    job?.nextRun ? `next ${formatUntil(job.nextRun)}` : null,
+                  ]
+                    .filter(Boolean)
+                    .join(' · ')}
         </span>
         <Button size="sm" disabled={pending} onAction={runNow} done>
           Run now

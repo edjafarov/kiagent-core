@@ -1,6 +1,5 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { useAppState } from '@renderer/state/app-state';
-import { formatRelative } from '@renderer/screens/Sources/format';
 import {
   AttentionList,
   AttentionRow,
@@ -17,6 +16,7 @@ import {
   Status,
   Toggle,
   computerNoun,
+  ago,
 } from '@shared/web-ui/ui';
 import type { AppPrefs, LaneState, ProviderStatus } from '@shared/contracts';
 import type { Invokes } from '@shared/ipc';
@@ -326,7 +326,7 @@ export function LocalProcessing(): React.ReactElement {
         label="Recently processed"
         summary={
           last
-            ? `last: ${last.title ?? last.filename ?? last.type} · ${formatRelative(last.updatedAt)}`
+            ? `last: ${last.title ?? last.filename ?? last.type} · ${ago(last.updatedAt, Date.now(), 'words') || '—'}`
             : 'nothing yet'
         }
       >
@@ -341,7 +341,7 @@ export function LocalProcessing(): React.ReactElement {
                 trail={
                   <span className="set-note">{engineLabel(r.engine)}</span>
                 }
-                time={formatRelative(r.updatedAt)}
+                time={ago(r.updatedAt, Date.now(), 'words') || '—'}
               />
             ))}
           </Rows>

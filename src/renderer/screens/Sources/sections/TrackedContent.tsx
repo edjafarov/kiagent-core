@@ -1,8 +1,8 @@
 import React, { useEffect, useState } from 'react';
-import { Card, CardHeader } from '@shared/web-ui/ui';
+import { Card, CardHeader, ago } from '@shared/web-ui/ui';
 import type { Account, Document } from '@shared/contracts';
 import { Icon } from '@shared/web-ui/icon-sprite';
-import { formatRelativeCompact, humanizeDocType } from '../format';
+import { humanizeDocType } from '../format';
 
 const PAGE_SIZE = 20;
 
@@ -121,7 +121,7 @@ function DocRow(props: { doc: Document }): React.ReactElement {
         <span className="tc-title">{doc.title?.trim() || '(untitled)'}</span>
         <span className="tc-type">{humanizeDocType(doc.type)}</span>
         <span className="t-meta mono tc-ts">
-          {formatRelativeCompact(doc.updatedAt)}
+          {ago(doc.updatedAt, Date.now(), 'short') || '—'}
         </span>
       </div>
       {expanded && <ChildList docs={children} />}
@@ -148,7 +148,7 @@ function ChildList(props: { docs: Document[] | null }): React.ReactElement {
           <span className="tc-title">{c.title?.trim() || '(untitled)'}</span>
           <span className="tc-type">{humanizeDocType(c.type)}</span>
           <span className="t-meta mono tc-ts">
-            {formatRelativeCompact(c.updatedAt)}
+            {ago(c.updatedAt, Date.now(), 'short') || '—'}
           </span>
         </li>
       ))}

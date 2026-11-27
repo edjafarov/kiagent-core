@@ -8,26 +8,8 @@
 import type { Account, Cadence } from '@shared/contracts';
 import { folderRoots } from './folder-roots';
 
-export function formatRelative(
-  iso: string | null | undefined,
-  now: number = Date.now(),
-): string {
-  if (!iso) return '—';
-  const t = Date.parse(iso);
-  if (!Number.isFinite(t)) return iso;
-  const deltaSec = Math.max(0, Math.round((now - t) / 1000));
-  if (deltaSec < 5) return 'now';
-  if (deltaSec < 60) return `${deltaSec} seconds ago`;
-  const min = Math.round(deltaSec / 60);
-  if (min < 60) return `${min} ${min === 1 ? 'minute' : 'minutes'} ago`;
-  const hr = Math.round(min / 60);
-  if (hr < 24) return `${hr} ${hr === 1 ? 'hour' : 'hours'} ago`;
-  const day = Math.round(hr / 24);
-  if (day < 30) return `${day} ${day === 1 ? 'day' : 'days'} ago`;
-  return new Date(t).toISOString().slice(0, 10);
-}
-
-/** A time ahead, in words ("in 5 minutes"); a past one reads "soon". */
+/** A time ahead, in the words `ago` uses ("in 5 min"); a past one reads
+ *  "soon". */
 export function formatUntil(
   iso: string | null | undefined,
   now: number = Date.now(),
@@ -37,32 +19,11 @@ export function formatUntil(
   if (!Number.isFinite(t)) return '—';
   const min = Math.round((t - now) / 60_000);
   if (min < 1) return 'soon';
-  if (min < 60) return `in ${min} ${min === 1 ? 'minute' : 'minutes'}`;
+  if (min < 60) return `in ${min} min`;
   const hr = Math.round(min / 60);
-  if (hr < 24) return `in ${hr} ${hr === 1 ? 'hour' : 'hours'}`;
+  if (hr < 24) return `in ${hr} h`;
   const day = Math.round(hr / 24);
-  return `in ${day} ${day === 1 ? 'day' : 'days'}`;
-}
-
-/** Compact form for dense table cells ("12s ago", "4h ago"). */
-export function formatRelativeCompact(
-  iso: string | null | undefined,
-  now: number = Date.now(),
-): string {
-  if (!iso) return '—';
-  const t = Date.parse(iso);
-  if (!Number.isFinite(t)) return '—';
-  const delta = now - t;
-  if (delta < 0) return 'now';
-  const sec = Math.round(delta / 1000);
-  if (sec < 5) return 'now';
-  if (sec < 60) return `${sec}s ago`;
-  const min = Math.round(sec / 60);
-  if (min < 60) return `${min}m ago`;
-  const hr = Math.round(min / 60);
-  if (hr < 24) return `${hr}h ago`;
-  const days = Math.round(hr / 24);
-  return `${days}d ago`;
+  return `in ${day} d`;
 }
 
 /** "2026-05-27T10:55:57.286Z" -> "2026-05-27 10:55:57" (local time). */

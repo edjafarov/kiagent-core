@@ -684,7 +684,7 @@ test('review: Open in browser uses the signed page', async () => {
 test('review: a sent message opens read-only', async () => {
   const s = await openReview('sent');
   expect(s).toHaveTextContent('Message');
-  expect(s).toHaveTextContent('Sent 45m ago');
+  expect(s).toHaveTextContent('Sent 45 min ago');
   expect(within(s).queryByRole('button', { name: 'Send' })).toBeNull();
   // The footer's Close beside the sheet's own close control.
   expect(within(s).getAllByRole('button', { name: 'Close' })).toHaveLength(2);
