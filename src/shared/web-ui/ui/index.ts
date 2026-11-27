@@ -29,6 +29,7 @@ export type { SegmentedItem } from './Segmented';
 export { Toggle, Checkbox } from './toggles';
 export type { ToggleProps, CheckboxProps } from './toggles';
 export { Status, ProgressBar } from './status';
+export { Note } from './Note';
 export type { StatusTone } from './status';
 export { Spinner, Busy } from '../components';
 export { Sheet, ConfirmSheet } from './Sheet';

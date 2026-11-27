@@ -559,6 +559,10 @@ button.ui-row-main:focus-visible { outline: 2px solid var(--border-focus); outli
 .ui-seg.is-line .ui-seg-n.is-work,
 .ui-seg.is-line .ui-seg-i.is-on .ui-seg-n.is-work { color: var(--working-solid); }
 
+/* ── Note ─────────────────────────────────────────────────────────── */
+.ui-note { margin: 0; font-size: 12px; line-height: 1.45; color: var(--text-secondary); }
+.ui-note.is-error { color: var(--error-solid); }
+
 /* ── Toggle and checkbox ──────────────────────────────────────────── */
 .ui-toggle {
   all: unset;
