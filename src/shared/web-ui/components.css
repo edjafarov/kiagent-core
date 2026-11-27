@@ -11,6 +11,75 @@
 .num  { font-variant-numeric: tabular-nums; }
 .i    { display: inline-flex; flex-shrink: 0; }
 
+/* ── Buttons ──────────────────────────────────────────────────── */
+/* Only for the served review pages (main/outbound/pages.ts,
+   main/calendar-out/pages.ts). The app uses the kit's Button. */
+.btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 5px;
+  height: 26px; padding: 0 10px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border-subtle);
+  background: #ffffff;
+  color: var(--text-primary);
+  font-family: var(--font-sans); font-size: 12px; font-weight: 500;
+  cursor: pointer;
+  transition: background var(--duration-fast) var(--ease-out), border-color var(--duration-fast) var(--ease-out);
+  white-space: nowrap;
+}
+.btn:hover { background: var(--bg-muted); border-color: var(--border-strong); }
+.btn:focus-visible { outline: none; border-color: var(--border-focus); box-shadow: 0 0 0 3px rgba(167,139,250,0.18); }
+.btn { transition: background-color 80ms, transform 80ms; }
+.btn:active:not(:disabled) { background: var(--border-strong); transform: translateY(1px); }
+.btn.primary {
+  background: var(--accent-solid);
+  border-color: var(--accent-solid);
+  color: var(--accent-contrast);
+  font-weight: 600;
+  box-shadow: var(--shadow-primary);
+}
+.btn.primary:hover { background: var(--accent-solid-hover); border-color: var(--accent-solid-hover); }
+/* Pressed, per variant: after the hover rules, which a mouse press also matches. */
+.btn.primary:active:not(:disabled) { background: var(--accent-solid-hover); border-color: var(--accent-solid-hover); filter: brightness(0.92); }
+.btn svg { flex-shrink: 0; }
+.btn[disabled], .btn.disabled { opacity: 0.4; cursor: not-allowed; }
+@media (prefers-reduced-motion: reduce) {
+  .btn { transition: none; }
+  .btn:active:not(:disabled) { transform: none; }
+}
+
+/* ── Pills ────────────────────────────────────────────────────── */
+.pill {
+  display: inline-flex; align-items: center; gap: 5px;
+  height: 18px; padding: 0 6px;
+  border-radius: var(--radius-sm);
+  font-size: 10.5px; font-weight: 500;
+  font-family: var(--font-sans);
+  white-space: nowrap;
+}
+.pill .dot { width: 5px; height: 5px; flex-shrink: 0; }
+.pill.live    { background: var(--live-subtle);    color: var(--live-solid); }
+.pill.live    .dot { background: var(--live-solid); }
+.pill.working { background: var(--working-subtle); color: var(--working-solid); }
+.pill.working .dot { background: var(--working-solid); }
+.pill.error   { background: var(--error-subtle);   color: var(--error-solid); }
+.pill.error   .dot { background: var(--error-solid); }
+.pill.paused  { background: var(--paused-subtle);  color: var(--paused-solid); }
+.pill.paused  .dot { background: var(--paused-solid); }
+.pill.info    { background: var(--info-subtle);    color: var(--info-solid); }
+.pill.info    .dot { background: var(--info-solid); }
+
+/* ── Cards ────────────────────────────────────────────────────── */
+.card {
+  background: #ffffff;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-xs);
+  position: relative;
+  overflow: hidden;
+}
+.card.danger { border-color: var(--error-solid); }
+
+
 /* ── Pills ────────────────────────────────────────────────────── */
 .pill {
   display: inline-flex; align-items: center; gap: 5px;
