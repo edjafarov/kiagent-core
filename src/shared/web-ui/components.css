@@ -11,50 +11,6 @@
 .num  { font-variant-numeric: tabular-nums; }
 .i    { display: inline-flex; flex-shrink: 0; }
 
-/* ── Buttons ──────────────────────────────────────────────────── */
-.btn {
-  display: inline-flex; align-items: center; justify-content: center; gap: 5px;
-  height: 26px; padding: 0 10px;
-  border-radius: var(--radius-md);
-  border: 1px solid var(--border-subtle);
-  background: #ffffff;
-  color: var(--text-primary);
-  font-family: var(--font-sans); font-size: 12px; font-weight: 500;
-  cursor: pointer;
-  transition: background var(--duration-fast) var(--ease-out), border-color var(--duration-fast) var(--ease-out);
-  white-space: nowrap;
-}
-.btn:hover { background: var(--bg-muted); border-color: var(--border-strong); }
-.btn:focus-visible { outline: none; border-color: var(--border-focus); box-shadow: 0 0 0 3px rgba(167,139,250,0.18); }
-.btn { transition: background-color 80ms, transform 80ms; }
-.btn:active:not(:disabled) { background: var(--border-strong); transform: translateY(1px); }
-.btn.sm { height: 22px; padding: 0 8px; font-size: 11px; gap: 4px; }
-.btn.primary {
-  background: var(--accent-solid);
-  border-color: var(--accent-solid);
-  color: var(--accent-contrast);
-  font-weight: 600;
-  box-shadow: var(--shadow-primary);
-}
-.btn.primary:hover { background: var(--accent-solid-hover); border-color: var(--accent-solid-hover); }
-.btn.ghost { background: transparent; border: none; color: var(--text-primary); padding: 0 8px; }
-.btn.ghost:hover { background: var(--bg-muted); }
-.btn.destructive {
-  background: #ffffff; border-color: #fecaca;
-  color: var(--error-solid);
-}
-.btn.destructive:hover { background: var(--error-subtle); }
-/* Pressed, per variant: after the hover rules, which a mouse press also matches. */
-.btn.primary:active:not(:disabled) { background: var(--accent-solid-hover); border-color: var(--accent-solid-hover); filter: brightness(0.92); }
-.btn.ghost:active:not(:disabled) { background: var(--border-strong); }
-.btn.destructive:active:not(:disabled) { background: var(--error-subtle); filter: brightness(0.96); }
-.btn svg { flex-shrink: 0; }
-.btn[disabled], .btn.disabled { opacity: 0.4; cursor: not-allowed; }
-@media (prefers-reduced-motion: reduce) {
-  .btn { transition: none; }
-  .btn:active:not(:disabled) { transform: none; }
-}
-
 /* ── Pills ────────────────────────────────────────────────────── */
 .pill {
   display: inline-flex; align-items: center; gap: 5px;
@@ -86,21 +42,6 @@
   overflow: hidden;
 }
 .card.danger { border-color: var(--error-solid); }
-
-/* ── Inputs ───────────────────────────────────────────────────── */
-.input {
-  display: flex; align-items: center;
-  height: 26px; padding: 0 10px; gap: 6px;
-  border-radius: var(--radius-md);
-  border: 1px solid var(--border-subtle);
-  background: #ffffff;
-  color: var(--text-primary);
-  font-family: var(--font-sans); font-size: 12px;
-  width: 100%;
-}
-.input:focus, .input:focus-within { outline: none; border-color: var(--border-focus); box-shadow: 0 0 0 3px rgba(167,139,250,0.18); }
-.input.readonly  { background: var(--bg-muted); border-color: var(--border-subtle); color: var(--text-secondary); }
-.input .placeholder { color: var(--text-tertiary); }
 
 /* ── Progress ─────────────────────────────────────────────────── */
 .progress { width: 100%; height: 4px; background: var(--bg-muted); overflow: hidden; }

@@ -643,14 +643,15 @@ export function FolderPickerModal({
     >
       <div className="fp-modeswitch">
         {(dataSource?.modes ?? LOCAL_FS_MODES).map((m) => (
-          <button
+          <Button
             key={m.key}
             type="button"
-            className={`btn sm${mode === m.key ? ' primary' : ''}`}
+            size="sm"
+            variant={mode === m.key ? 'primary' : undefined}
             onClick={() => switchMode(m.key)}
           >
             {m.label}
-          </button>
+          </Button>
         ))}
       </div>
 
@@ -666,13 +667,14 @@ export function FolderPickerModal({
         {rootsFailed && tree.length === 0 && (
           <div className="fp-row failed depth-0">
             <span className="t-meta">Couldn’t list folders.</span>
-            <button
+            <Button
               type="button"
-              className="btn ghost sm"
+              variant="ghost"
+              size="sm"
               onClick={() => void loadRoots(mode)}
             >
               Retry
-            </button>
+            </Button>
           </div>
         )}
         {tree.map((root) => (
@@ -807,13 +809,14 @@ function TreeRow(props: {
       {failedNodes.has(node.path) && !node.loaded && (
         <div className={`fp-row failed depth-${node.depth + 1}`}>
           <span className="t-meta">Couldn’t list this folder.</span>
-          <button
+          <Button
             type="button"
-            className="btn ghost sm"
+            variant="ghost"
+            size="sm"
             onClick={() => onRetry(node)}
           >
             Retry
-          </button>
+          </Button>
         </div>
       )}
       {node.expanded &&

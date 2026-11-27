@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Card, CardHeader, ago } from '@shared/web-ui/ui';
+import { Button, Card, CardHeader, ago } from '@shared/web-ui/ui';
 import type { Account, Document } from '@shared/contracts';
 import { Icon } from '@shared/web-ui/icon-sprite';
 import { humanizeDocType } from '../format';
@@ -63,25 +63,27 @@ export function TrackedContent(props: {
             ))}
           </ul>
           <div className="tc-pager">
-            <button
+            <Button
               type="button"
-              className="btn ghost sm"
+              variant="ghost"
+              size="sm"
               disabled={offset === 0}
               onClick={() => setOffset(Math.max(0, offset - PAGE_SIZE))}
             >
               ← Newer
-            </button>
+            </Button>
             <span className="t-meta">
               {offset + 1}–{offset + docs.length}
             </span>
-            <button
+            <Button
               type="button"
-              className="btn ghost sm"
+              variant="ghost"
+              size="sm"
               disabled={docs.length < PAGE_SIZE}
               onClick={() => setOffset(offset + PAGE_SIZE)}
             >
               Older →
-            </button>
+            </Button>
           </div>
         </>
       )}

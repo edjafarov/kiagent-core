@@ -1,6 +1,7 @@
 import React from 'react';
 import { useAppState } from '@renderer/state/app-state';
 import { Icon } from '@shared/web-ui/icon-sprite';
+import { Button } from '@shared/web-ui/ui';
 import { useVisibleAccounts } from './sources-registry';
 import { deriveOnboarding, step1Meta } from './onboarding-steps';
 
@@ -32,14 +33,14 @@ export function GetStartedPanel(props: {
           </span>
         </div>
         <span style={{ flex: 1 }} />
-        <button
+        <Button
           type="button"
-          className="btn sm"
+          size="sm"
           data-testid="onboarding-skip"
           onClick={dismiss}
         >
           Skip
-        </button>
+        </Button>
       </div>
       <div className="ob-checklist">
         <Step
@@ -59,15 +60,16 @@ export function GetStartedPanel(props: {
           testId="onboarding-step-mcp"
           action={
             d.step2Done ? undefined : (
-              <button
+              <Button
                 type="button"
-                className="btn primary sm"
+                variant="primary"
+                size="sm"
                 data-testid="onboarding-open-connection"
                 onClick={props.onOpenConnection}
               >
                 Open Connection tab
                 <Icon name="arrow-right" size={12} />
-              </button>
+              </Button>
             )
           }
         />

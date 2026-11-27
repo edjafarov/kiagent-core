@@ -17,6 +17,7 @@ import {
   Toggle,
   computerNoun,
   ago,
+  Note,
 } from '@shared/web-ui/ui';
 import type { AppPrefs, LaneState, ProviderStatus } from '@shared/contracts';
 import type { Invokes } from '@shared/ipc';
@@ -331,16 +332,14 @@ export function LocalProcessing(): React.ReactElement {
         }
       >
         {stats == null || stats.recent.length === 0 ? (
-          <div className="set-note">Nothing processed yet.</div>
+          <Note>Nothing processed yet.</Note>
         ) : (
           <Rows aria-label="Recently processed">
             {stats.recent.map((r) => (
               <Row
                 key={r.id}
                 title={r.title ?? r.filename ?? r.type}
-                trail={
-                  <span className="set-note">{engineLabel(r.engine)}</span>
-                }
+                trail={<Note as="span">{engineLabel(r.engine)}</Note>}
                 time={ago(r.updatedAt, Date.now(), 'words') || '—'}
               />
             ))}
@@ -348,10 +347,10 @@ export function LocalProcessing(): React.ReactElement {
         )}
       </Disclosure>
 
-      <div className="set-note">
+      <Note>
         Providers (vision, language, speech) only appear here when one needs
         attention.
-      </div>
+      </Note>
     </>
   );
 }

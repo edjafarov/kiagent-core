@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Card, CardHeader, ConfirmSheet } from '@shared/web-ui/ui';
+import { Button, Card, CardHeader, ConfirmSheet } from '@shared/web-ui/ui';
 import type {
   Account,
   FolderNode,
@@ -316,9 +316,10 @@ export function TrackedFolders(props: {
               <span className="t-meta tf-count">
                 {isLocalPathRoot(r.id) ? countLabel(counts[r.id]) : null}
               </span>
-              <button
+              <Button
                 type="button"
-                className="btn ghost sm"
+                variant="ghost"
+                size="sm"
                 disabled={lastRoot || busy || needsReauth}
                 title={
                   lastRoot
@@ -329,7 +330,7 @@ export function TrackedFolders(props: {
               >
                 <Icon name="trash" size={11} />
                 Remove
-              </button>
+              </Button>
             </li>
           ))}
         </ul>
@@ -340,15 +341,15 @@ export function TrackedFolders(props: {
           Reconnect this source to change its tracked folders.
         </div>
       ) : (
-        <button
+        <Button
           type="button"
-          className="btn sm"
+          size="sm"
           disabled={busy}
           onClick={() => void startManage(null)}
         >
           <Icon name="folder" size={12} />
           Manage folders…
-        </button>
+        </Button>
       )}
 
       {busy && !flow?.picker && (

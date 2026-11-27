@@ -11,6 +11,7 @@ import {
   TextButton,
   clientBrand,
   computerNoun,
+  Note,
 } from '@shared/web-ui/ui';
 import type { ClientInfo } from './use-mcp-clients';
 
@@ -59,9 +60,7 @@ export function AppsOnThisMac(props: {
       {clients === null ? (
         <Busy label="Looking for apps…" />
       ) : clients.length === 0 ? (
-        <p className="conn-note">
-          No supported apps found on this {computerNoun()} yet.
-        </p>
+        <Note>No supported apps found on this {computerNoun()} yet.</Note>
       ) : (
         <Rows aria-label={`Apps on this ${computerNoun()}`}>
           {clients.map((c) => {
@@ -103,10 +102,10 @@ export function AppsOnThisMac(props: {
         </Rows>
       )}
       <CardFooter>
-        <span className="conn-note">
+        <Note as="span">
           One click adds the server to the app’s settings. Another app?{' '}
           <TextButton onClick={props.onManualSetup}>Manual setup</TextButton>
-        </span>
+        </Note>
       </CardFooter>
     </Card>
   );

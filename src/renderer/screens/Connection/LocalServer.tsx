@@ -8,6 +8,7 @@ import {
   Segmented,
   Status,
   computerNoun,
+  Note,
 } from '@shared/web-ui/ui';
 import { buildSnippet, localUrl, type SnippetKind } from './snippets';
 
@@ -52,10 +53,10 @@ export function LocalServer(props: {
             ]}
           />
           <h3 className="conn-sub">Manual setup</h3>
-          <p className="conn-note">
+          <Note className="conn-note">
             For an app that isn’t in the list on Connection. Paste this into its
             MCP settings.
-          </p>
+          </Note>
           <Segmented
             items={KINDS}
             value={kind}
@@ -65,15 +66,15 @@ export function LocalServer(props: {
           <CodeBlock>{buildSnippet(kind, url)}</CodeBlock>
         </>
       ) : (
-        <p className="conn-note">
+        <Note>
           The local server hasn’t reported a port yet — it may still be
           starting, or it failed to bind one. Check Logs for details.
-        </p>
+        </Note>
       )}
-      <p className="conn-note">
+      <Note>
         Claude Desktop and Codex start the server themselves — use Connect on
         Connection for those.
-      </p>
+      </Note>
     </Card>
   );
 }

@@ -160,9 +160,7 @@ describe('AddSourcePanel wizard card', () => {
       screen.getByText('From OAuth & Permissions after installing the app.'),
     ).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Connect' })).toBeInTheDocument();
-    const cancel = screen.getByRole('button', { name: 'Cancel' });
-    expect(cancel).toHaveClass('btn', 'sm');
-    expect(cancel).not.toHaveClass('ghost');
+    expect(screen.getByRole('button', { name: 'Cancel' })).toBeInTheDocument();
   });
 
   test('Connect submits the answers for the prompt requestId', async () => {

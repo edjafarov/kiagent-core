@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
+import { Button } from '@shared/web-ui/ui';
 import type { GuideStep } from './prompt-guidance';
 
 /**
@@ -46,24 +47,24 @@ export function GuidanceSteps(props: {
             <span className="as-step-title">{step.title}</span>
             {step.body && <span className="t-meta">{step.body}</span>}
             {step.link && (
-              <button
+              <Button
                 type="button"
-                className="btn sm"
+                size="sm"
                 onClick={() => window.open(step.link, '_blank')}
               >
                 Open ↗
-              </button>
+              </Button>
             )}
             {step.copy !== undefined && (
               <>
                 <pre className="as-copy">{step.copy}</pre>
-                <button
+                <Button
                   type="button"
-                  className="btn sm"
+                  size="sm"
                   onClick={() => void copy(idx, step.copy as string)}
                 >
                   {copiedIdx === idx ? 'Copied ✓' : 'Copy'}
-                </button>
+                </Button>
               </>
             )}
           </div>

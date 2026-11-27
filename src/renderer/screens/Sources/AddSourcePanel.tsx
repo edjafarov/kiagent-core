@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import type { ConnectEvent } from '@shared/ipc';
 import type { Account, AccountId, FolderNode } from '@shared/contracts';
 import { Icon } from '@shared/web-ui/icon-sprite';
-import { BrandGlyph, Card } from '@shared/web-ui/ui';
+import { BrandGlyph, Button, Card, TextField } from '@shared/web-ui/ui';
 import { useAppState } from '@renderer/state/app-state';
 import { FolderPickerField } from '@renderer/components/FolderPickerField';
 import { FolderPickerModal } from '@renderer/components/folder-picker/FolderPickerModal';
@@ -493,13 +493,14 @@ export function AddSourcePanel(props: {
                 <span className="mono">{props.reconnect?.identifier}</span>
               </div>
               <div className="as-wizard-foot">
-                <button
+                <Button
                   type="button"
-                  className="btn primary sm"
+                  variant="primary"
+                  size="sm"
                   onClick={() => props.onDone(flow.reconnected)}
                 >
                   Done
-                </button>
+                </Button>
               </div>
             </>
           ) : flow.scopeSaved ? (
@@ -514,13 +515,14 @@ export function AddSourcePanel(props: {
                 {flow.scopeSaved.removed} removed.
               </div>
               <div className="as-wizard-foot">
-                <button
+                <Button
                   type="button"
-                  className="btn primary sm"
+                  variant="primary"
+                  size="sm"
                   onClick={() => props.onDone(flow.scopeSaved?.accountId)}
                 >
                   Done
-                </button>
+                </Button>
               </div>
             </>
           ) : flow.done ? (
@@ -534,13 +536,14 @@ export function AddSourcePanel(props: {
                 Connected: <span className="mono">{flow.done.identifier}</span>
               </div>
               <div className="as-wizard-foot">
-                <button
+                <Button
                   type="button"
-                  className="btn primary sm"
+                  variant="primary"
+                  size="sm"
                   onClick={() => props.onDone(flow.done?.id)}
                 >
                   Done
-                </button>
+                </Button>
               </div>
             </>
           ) : flow.error ? (
@@ -550,13 +553,9 @@ export function AddSourcePanel(props: {
                 {flow.error}
               </div>
               <div className="as-wizard-foot">
-                <button
-                  type="button"
-                  className="btn sm"
-                  onClick={() => props.onDone()}
-                >
+                <Button type="button" size="sm" onClick={() => props.onDone()}>
                   Back
-                </button>
+                </Button>
               </div>
             </>
           ) : flow.prompt ? (
@@ -590,8 +589,7 @@ export function AddSourcePanel(props: {
                   ) : (
                     <label key={key} className="as-field">
                       <span className="kg-label">{label}</span>
-                      <input
-                        className="input"
+                      <TextField
                         type={secret ? 'password' : 'text'}
                         placeholder={placeholder}
                         value={answers[key] ?? ''}
@@ -604,16 +602,12 @@ export function AddSourcePanel(props: {
                   ),
               )}
               <div className="as-wizard-foot">
-                <button
-                  type="button"
-                  className="btn sm"
-                  onClick={() => props.onDone()}
-                >
+                <Button type="button" size="sm" onClick={() => props.onDone()}>
                   Cancel
-                </button>
-                <button type="submit" className="btn primary sm">
+                </Button>
+                <Button type="submit" variant="primary" size="sm">
                   Connect
-                </button>
+                </Button>
               </div>
             </form>
           ) : flow.qr ? (
@@ -621,13 +615,9 @@ export function AddSourcePanel(props: {
               <div className="t-meta">Scan this code with your device:</div>
               <QrCode data={flow.qr} />
               <div className="as-wizard-foot">
-                <button
-                  type="button"
-                  className="btn sm"
-                  onClick={() => props.onDone()}
-                >
+                <Button type="button" size="sm" onClick={() => props.onDone()}>
                   Cancel
-                </button>
+                </Button>
               </div>
             </>
           ) : (
@@ -637,13 +627,9 @@ export function AddSourcePanel(props: {
                 {flow.status ?? 'Connecting…'}
               </div>
               <div className="as-wizard-foot">
-                <button
-                  type="button"
-                  className="btn sm"
-                  onClick={() => props.onDone()}
-                >
+                <Button type="button" size="sm" onClick={() => props.onDone()}>
                   Cancel
-                </button>
+                </Button>
               </div>
             </>
           )}
@@ -663,13 +649,9 @@ export function AddSourcePanel(props: {
               {addError}
             </div>
             <div className="as-wizard-foot">
-              <button
-                type="button"
-                className="btn sm"
-                onClick={() => props.onDone()}
-              >
+              <Button type="button" size="sm" onClick={() => props.onDone()}>
                 Back
-              </button>
+              </Button>
             </div>
           </>
         ) : (

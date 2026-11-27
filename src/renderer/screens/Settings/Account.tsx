@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { useAppState } from '@renderer/state/app-state';
-import { Button, TextButton, TextField } from '@shared/web-ui/ui';
+import { Button, TextButton, TextField, Note } from '@shared/web-ui/ui';
 import type { Identity } from '@shared/contracts';
 import { IdentityCard } from './IdentityCard';
 
@@ -12,7 +12,7 @@ import { IdentityCard } from './IdentityCard';
  */
 export function Account(): React.ReactElement {
   const identity = useAppState((s) => s.identity);
-  if (!identity) return <div className="set-note">No identity set.</div>;
+  if (!identity) return <Note>No identity set.</Note>;
   return <EditableIdentity identity={identity} />;
 }
 

@@ -14,6 +14,7 @@ import {
   computerNoun,
   dayGroup,
   dayMonth,
+  Note,
 } from '@shared/web-ui/ui';
 import type { AppPrefs, LogLevel } from '@shared/contracts';
 import type { UpdateState } from '@shared/ipc';
@@ -259,7 +260,7 @@ export function General(): React.ReactElement {
             </Button>
             <TextButton onClick={() => navigate('logs')}>Open logs</TextButton>
           </div>
-          {exportMsg && <div className="set-note">{exportMsg}</div>}
+          {exportMsg && <Note>{exportMsg}</Note>}
         </div>
       </Disclosure>
     </>
