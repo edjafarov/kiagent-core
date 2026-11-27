@@ -79,39 +79,6 @@
 }
 .card.danger { border-color: var(--error-solid); }
 
-
-/* ── Pills ────────────────────────────────────────────────────── */
-.pill {
-  display: inline-flex; align-items: center; gap: 5px;
-  height: 18px; padding: 0 6px;
-  border-radius: var(--radius-sm);
-  font-size: 10.5px; font-weight: 500;
-  font-family: var(--font-sans);
-  white-space: nowrap;
-}
-.pill .dot { width: 5px; height: 5px; flex-shrink: 0; }
-.pill.live    { background: var(--live-subtle);    color: var(--live-solid); }
-.pill.live    .dot { background: var(--live-solid); }
-.pill.working { background: var(--working-subtle); color: var(--working-solid); }
-.pill.working .dot { background: var(--working-solid); }
-.pill.error   { background: var(--error-subtle);   color: var(--error-solid); }
-.pill.error   .dot { background: var(--error-solid); }
-.pill.paused  { background: var(--paused-subtle);  color: var(--paused-solid); }
-.pill.paused  .dot { background: var(--paused-solid); }
-.pill.info    { background: var(--info-subtle);    color: var(--info-solid); }
-.pill.info    .dot { background: var(--info-solid); }
-
-/* ── Cards ────────────────────────────────────────────────────── */
-.card {
-  background: #ffffff;
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-lg);
-  box-shadow: var(--shadow-xs);
-  position: relative;
-  overflow: hidden;
-}
-.card.danger { border-color: var(--error-solid); }
-
 /* ── Progress ─────────────────────────────────────────────────── */
 .progress { width: 100%; height: 4px; background: var(--bg-muted); overflow: hidden; }
 .progress > i {
