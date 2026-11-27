@@ -260,15 +260,6 @@ dl.kv dd {
 }
 
 /* ── Cadence ───────────────────────────────────────────────────────  */
-.cadence-select {
-  height: 26px;
-  padding: 0 8px;
-  border: 1px solid var(--border-subtle);
-  background: #ffffff;
-  color: var(--text-primary);
-  font-family: var(--font-sans);
-  font-size: 12px;
-}
 
 /* ── ConnectorConfig ───────────────────────────────────────────────  */
 
@@ -566,7 +557,7 @@ dl.kv dd {
 .ob-step-icon.done {
   background: var(--accent-solid);
   border-color: var(--accent-solid);
-  color: #fff;
+  color: var(--accent-contrast);
 }
 .ob-step.done .ob-step-label {
   color: var(--text-secondary);
