@@ -403,5 +403,13 @@
       ".erb/dll/**"
     ],
     "logLevel": "quiet"
+  },
+  "allowScripts": {
+    "better-sqlite3": true,
+    "@parcel/watcher": true,
+    "electron-winstaller": true,
+    "core-js": false,
+    "core-js-pure": false,
+    "fsevents": false
   }
 }
