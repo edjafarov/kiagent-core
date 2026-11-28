@@ -115,7 +115,9 @@ describe('a join offer carries user settings (spec 7.9 rule 6)', () => {
     const ext: string[] = [];
     p.onExtChange((k) => ext.push(k));
     let changes = 0;
-    p.onChange(() => (changes += 1));
+    p.onChange(() => {
+      changes += 1;
+    });
     await p.addMissing({ 'a.b': 1, 'core.theme': 'dark' });
     expect(ext).toEqual(['a.b']);
     expect(changes).toBe(1);

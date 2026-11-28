@@ -370,9 +370,9 @@ describe('test loopback allowance (compiled gate)', () => {
   ): Promise<{ port: number }> {
     const server = http.createServer(
       handler ??
-        ((req, res) => {
+        ((req, rsp) => {
           seen.push(`${req.headers.host}${req.url}`);
-          res.end('ok');
+          rsp.end('ok');
         }),
     );
     await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));
@@ -446,9 +446,9 @@ describe('test loopback allowance (compiled gate)', () => {
 
   it('a redirect from the allowed port to another loopback port is refused', async () => {
     const other = await listen();
-    const a = await listen((req, res) => {
-      res.writeHead(302, { location: `http://127.0.0.1:${other.port}/` });
-      res.end();
+    const a = await listen((req, rsp) => {
+      rsp.writeHead(302, { location: `http://127.0.0.1:${other.port}/` });
+      rsp.end();
     });
     const f = createNetFetch({ lookup: noLookup, allowLoopbackPort: a.port });
     await expect(f(`http://127.0.0.1:${a.port}/`)).rejects.toThrow(
@@ -458,9 +458,9 @@ describe('test loopback allowance (compiled gate)', () => {
   });
 
   it('a redirect from the allowed port to a private address is refused', async () => {
-    const a = await listen((req, res) => {
-      res.writeHead(302, { location: 'http://10.0.0.1/' });
-      res.end();
+    const a = await listen((req, rsp) => {
+      rsp.writeHead(302, { location: 'http://10.0.0.1/' });
+      rsp.end();
     });
     const f = createNetFetch({ lookup: noLookup, allowLoopbackPort: a.port });
     await expect(f(`http://127.0.0.1:${a.port}/`)).rejects.toThrow(
@@ -469,11 +469,11 @@ describe('test loopback allowance (compiled gate)', () => {
   });
 
   it('a redirect on the allowed origin itself is followed', async () => {
-    const a = await listen((req, res) => {
+    const a = await listen((req, rsp) => {
       if (req.url === '/start') {
-        res.writeHead(302, { location: '/end' });
-        res.end();
-      } else res.end('landed');
+        rsp.writeHead(302, { location: '/end' });
+        rsp.end();
+      } else rsp.end('landed');
     });
     const f = createNetFetch({ lookup: noLookup, allowLoopbackPort: a.port });
     const r = await f(`http://127.0.0.1:${a.port}/start`);
@@ -501,9 +501,9 @@ describe('test loopback allowance (compiled gate)', () => {
     'a redirect Location spelling the allowed host as %s is refused',
     async (spelling) => {
       const a = await listen();
-      const start = await listen((req, res) => {
-        res.writeHead(302, { location: `http://${spelling}:${a.port}/x` });
-        res.end();
+      const start = await listen((req, rsp) => {
+        rsp.writeHead(302, { location: `http://${spelling}:${a.port}/x` });
+        rsp.end();
       });
       const f = createNetFetch({
         lookup: noLookup,
@@ -518,13 +518,13 @@ describe('test loopback allowance (compiled gate)', () => {
 
   it('the allowance is revoked for good once a hop leaves the allowed origin', async () => {
     // allowed loopback -> public.example -> allowed loopback must be refused.
-    const a = await listen((req, res) => {
+    const a = await listen((req, rsp) => {
       if (req.url === '/start') {
-        res.writeHead(302, { location: 'http://public.example/hop' });
-        res.end();
+        rsp.writeHead(302, { location: 'http://public.example/hop' });
+        rsp.end();
       } else {
         seen.push(`landed${req.url}`);
-        res.end('landed');
+        rsp.end('landed');
       }
     });
     const fetchImpl = jest.fn(
@@ -592,9 +592,9 @@ describe('test loopback allowance (compiled gate)', () => {
       ['decimal host', (p: number) => `http://2130706433:${p}/x`],
     ])('a redirect Location (%s) is refused', async (_n, mk) => {
       const target = await listen();
-      const start = await listen((req, res) => {
-        res.writeHead(302, { location: mk(target.port) });
-        res.end();
+      const start = await listen((req, rsp) => {
+        rsp.writeHead(302, { location: mk(target.port) });
+        rsp.end();
       });
       const f = createNetFetch({
         lookup: noLookup,
@@ -657,13 +657,13 @@ describe('test loopback allowance (compiled gate)', () => {
     ])(
       'loopback -> %s -> loopback is refused (the backslash hop revokes)',
       async (hopLocation) => {
-        const a = await listen((req, res) => {
+        const a = await listen((req, rsp) => {
           if (req.url === '/start') {
-            res.writeHead(302, { location: hopLocation });
-            res.end();
+            rsp.writeHead(302, { location: hopLocation });
+            rsp.end();
           } else {
             seen.push(`landed${req.url}`);
-            res.end('landed');
+            rsp.end('landed');
           }
         });
         const fetchImpl = jest.fn(
@@ -688,11 +688,11 @@ describe('test loopback allowance (compiled gate)', () => {
     it.each(['/end', 'end', './end', '/end?x=1', '?q=1'])(
       'a genuine path-relative redirect (%s) on the allowed origin is followed',
       async (loc) => {
-        const a = await listen((req, res) => {
+        const a = await listen((req, rsp) => {
           if (req.url === '/start') {
-            res.writeHead(302, { location: loc });
-            res.end();
-          } else res.end('landed');
+            rsp.writeHead(302, { location: loc });
+            rsp.end();
+          } else rsp.end('landed');
         });
         const f = createNetFetch({
           lookup: noLookup,
@@ -704,11 +704,11 @@ describe('test loopback allowance (compiled gate)', () => {
     );
 
     it('an exact-literal absolute redirect on the allowed origin is followed', async () => {
-      const a = await listen((req, res) => {
+      const a = await listen((req, rsp) => {
         if (req.url === '/start') {
-          res.writeHead(302, { location: `http://127.0.0.1:${a.port}/end` });
-          res.end();
-        } else res.end('landed');
+          rsp.writeHead(302, { location: `http://127.0.0.1:${a.port}/end` });
+          rsp.end();
+        } else rsp.end('landed');
       });
       const f = createNetFetch({ lookup: noLookup, allowLoopbackPort: a.port });
       expect(text((await f(`http://127.0.0.1:${a.port}/start`)).body)).toBe(

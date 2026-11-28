@@ -587,7 +587,12 @@ describe('importSources', () => {
       store: { read: { accounts: async () => [acct] } },
       sources: { get: () => ({ descriptor: { id: 'local-folder' } }) },
       logSink: { log: () => undefined },
-      engine: { run: (a: Account) => (runs.push(a.id), {}) },
+      engine: {
+        run: (a: Account) => {
+          runs.push(a.id);
+          return {};
+        },
+      },
       scheduler: { register: jest.fn() },
     } as unknown as CorePlatform;
     await resumeAccounts(p);
@@ -773,7 +778,12 @@ describe('importSources', () => {
       store: { read: { accounts: async () => [acct] } },
       sources: { get: () => undefined },
       logSink: { log: () => undefined },
-      engine: { run: (a: Account) => (runs.push(a.id), {}) },
+      engine: {
+        run: (a: Account) => {
+          runs.push(a.id);
+          return {};
+        },
+      },
       scheduler: { register: jest.fn() },
     } as unknown as CorePlatform;
     await resumeAccounts(p);
@@ -801,7 +811,12 @@ describe('importSources', () => {
           id === 'notion' ? { descriptor: { id } } : undefined,
       },
       logSink: { log: () => undefined },
-      engine: { run: (a: Account) => (runs.push(`${a.id}:${a.status}`), {}) },
+      engine: {
+        run: (a: Account) => {
+          runs.push(`${a.id}:${a.status}`);
+          return {};
+        },
+      },
       scheduler: { register: jest.fn() },
     } as unknown as CorePlatform;
     await startWhenInstalled(p, 'gmail');
@@ -917,7 +932,7 @@ describe('the archive a join leaves behind', () => {
 
 describe('the join journal', () => {
   const SEED = 'seedseed-9999';
-  const ME = 'abcdefgh-0000-1111';
+  const JOINER_ID = 'abcdefgh-0000-1111';
   let sync: SyncService;
   let busyReason: string | null;
   beforeEach(() => {
@@ -927,7 +942,7 @@ describe('the join journal', () => {
       store,
       dbPath: conn().name,
       workerFile: '',
-      deviceId: () => ME,
+      deviceId: () => JOINER_ID,
       busy: () => busyReason,
     });
   });
@@ -963,7 +978,7 @@ describe('the join journal', () => {
       .prepare(
         `UPDATE accounts SET owner_device_id = ?, status = 'paused', last_error = 'Owned by abcdefgh' WHERE id = ?`,
       )
-      .run(ME, mine.id);
+      .run(JOINER_ID, mine.id);
     conn()
       .prepare(
         `UPDATE accounts SET owner_device_id = 'zzzz', status = 'paused' WHERE id = ?`,

@@ -109,6 +109,7 @@ export function heldByAnotherProgram(absPath: string): boolean {
 export function startWatcher(
   rootPaths: string[],
   signal: AbortSignal,
+  // eslint-disable-next-line default-param-last -- public signature: callers pass positionally, so the order cannot change
   busy: BusyRecheck = BUSY_RECHECK,
   /** The shared subtrees, read on every path (they can change while the
    *  watcher runs): another source owns what lies under them. */

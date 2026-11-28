@@ -10,7 +10,6 @@ import {
   extPrefRequest,
   QUEUEABLE_CHANNELS,
   queuedValueOf,
-  REFUSED_WHEN_OFFLINE,
   userPrefKey,
   userPrefRequest,
 } from '../settings-queue';

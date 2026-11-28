@@ -62,9 +62,13 @@ it('a copy does not write the manifest', async () => {
 
 it('a kick during a scan is not lost: a file added meanwhile is listed', async () => {
   let release!: () => void;
-  const gate = new Promise<void>((r) => (release = r));
+  const gate = new Promise<void>((r) => {
+    release = r;
+  });
   let started!: () => void;
-  const running = new Promise<void>((r) => (started = r));
+  const running = new Promise<void>((r) => {
+    started = r;
+  });
   const d = await device('leader', {
     watch: () => ({ close: async () => {} }),
     debounceMs: 0,

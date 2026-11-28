@@ -15,7 +15,9 @@ const write = (file: string, text: string) => {
 };
 const deferred = () => {
   let resolve!: () => void;
-  const promise = new Promise<void>((r) => (resolve = r));
+  const promise = new Promise<void>((r) => {
+    resolve = r;
+  });
   return { promise, resolve };
 };
 const nap = (ms: number) => new Promise((r) => setTimeout(r, ms));

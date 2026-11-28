@@ -4,6 +4,7 @@
  *  changes arrive by the feed; connectors retry; a join's offer carries this
  *  device's settings. Main calls `installSettingsSync` once, after the
  *  preferences, the sync service and the extension platform exist. */
+// eslint-disable-next-line import/no-cycle -- runtime cycle with prefs (forwardOrQueue); both are only called after load, so it is safe
 import { pickUserKeys, type CorePrefs } from '../prefs';
 import type { ExtensionPlatform } from '../../platform/extension-platform';
 import {

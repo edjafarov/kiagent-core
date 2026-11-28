@@ -80,6 +80,7 @@ export function htmlToText(html: string): string {
 function dropPreviewPadding(text: string): string {
   return text
     .replace(
+      // eslint-disable-next-line no-misleading-character-class -- the invisible padding characters are listed on purpose
       /[\u00ad\u034f\u061c\u180e\u200b\u200e\u200f\u2060-\u2064\ufeff]/g,
       '',
     )

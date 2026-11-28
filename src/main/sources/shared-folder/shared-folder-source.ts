@@ -193,11 +193,12 @@ export function createSharedFolderSource(
           wake?.();
         })
       : () => {};
+    let lastCursor = cursor;
     try {
       for (;;) {
         dirty = false;
         const set = rootsSet(h);
-        let cur = cursor;
+        let cur = lastCursor;
         if (cur && (cur.roots ?? []).join() !== set.join()) cur = null; // a root appeared or went: list again
         let rev = cur?.rev ?? 0;
         const total = Number(
@@ -258,7 +259,7 @@ export function createSharedFolderSource(
           };
           if (done) break;
         }
-        cursor = { rev, roots: set };
+        lastCursor = { rev, roots: set };
         if (!live) return;
         if (dirty) continue;
         // Wait for the manifest to change (or the pull to be cancelled).

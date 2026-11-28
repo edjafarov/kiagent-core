@@ -43,14 +43,13 @@ async function device(
     conn()
       .prepare(`UPDATE sync_state SET role = 'follower', joined = ?`)
       .run(opts.joined === false ? 0 : 1);
-  let svc!: SyncService;
   const after: CommitBatch[] = [];
   const store = openStore(db, {
     encrypt: (s: string) => Buffer.from(s, 'utf8'),
     decrypt: (b: Buffer) => b.toString('utf8'),
     detectLanguages: () => ['eng'],
   } as never);
-  svc = createSyncService({
+  const svc: SyncService = createSyncService({
     db,
     store,
     dbPath: path.join(dir, 'a.db'),

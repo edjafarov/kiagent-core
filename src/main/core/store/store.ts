@@ -7,7 +7,6 @@ import type {
   AccountId,
   Cadence,
   Change,
-  CommitBatch,
   ConsentRecord,
   Credentials,
   DocumentId,

@@ -12,6 +12,10 @@ const addAccount = (d: Device, id: string, source = 'local-folder') =>
     [id, source, id],
   );
 let n = 0;
+const nextN = () => {
+  n += 1;
+  return n;
+};
 const addDoc = (
   d: Device,
   account: string,
@@ -22,7 +26,7 @@ const addDoc = (
   d.db.run(
     `INSERT INTO documents(id, account_id, external_id, type, content_hash, ingested_at, updated_at, archived_at)
      VALUES(?, ?, ?, ?, 'h', 'now', 'now', ?)`,
-    [`doc-${(n += 1)}`, account, externalId, type, archived ? 'then' : null],
+    [`doc-${nextN()}`, account, externalId, type, archived ? 'then' : null],
   );
 const live = async (d: Device, account: string) =>
   (

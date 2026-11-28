@@ -5,12 +5,7 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 
-import {
-  createPrefs,
-  type CorePrefs,
-  type OfflineQueue,
-  type UserPrefsStore,
-} from '../prefs';
+import { createPrefs, type OfflineQueue, type UserPrefsStore } from '../prefs';
 import { SyncNoMaster } from '../sync/forward-core';
 import type { ForwardRequest } from '../sync/service';
 import type { QueuedSetting } from '../sync/settings-queue';

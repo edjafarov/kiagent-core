@@ -184,7 +184,9 @@ describe('when another computer joins the account', () => {
     write(path.join(incoming, 'a.pdf'), 'a');
     await settle(d);
     let changes = 0;
-    d.svc.onChange(() => void (changes += 1));
+    d.svc.onChange(() => {
+      changes += 1;
+    });
     d.sync.setPeer(true);
     await d.svc.settled();
     expect(d.svc.enabled()).toBe(true);

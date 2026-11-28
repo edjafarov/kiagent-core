@@ -218,19 +218,19 @@ describe('the leader side', () => {
     const claims = new Map<string, string>();
     const rows: Account[] = [];
     const engine = {
-      adopt: jest.fn(async (c: Connected, started?: (a: Account) => void) => {
+      adopt: jest.fn(async (c: Connected, onStarted?: (a: Account) => void) => {
         const a = account(`acc-${rows.length + 1}`, {
           source: c.sourceId,
           identifier: c.identifier,
         });
         rows.push(a);
-        started?.(a);
+        onStarted?.(a);
         return a;
       }),
       commitReauth: jest.fn(
-        async (r: { accountId: string }, started?: (a: Account) => void) => {
+        async (r: { accountId: string }, onStarted?: (a: Account) => void) => {
           const row = rows.find((x) => x.id === r.accountId);
-          if (row) started?.(row);
+          if (row) onStarted?.(row);
         },
       ),
       applyScope: jest.fn(async () => ({ archived: 1 })),

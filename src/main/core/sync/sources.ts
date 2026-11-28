@@ -153,6 +153,7 @@ async function awaitAdvertised(
 export async function exportSources(
   store: Pick<CoreStore, 'read' | 'vault'>,
   me: string,
+  // eslint-disable-next-line default-param-last -- public signature: callers pass positionally, so the order cannot change
   log: (level: 'info' | 'warn', msg: string) => void = () => undefined,
   sources?: ExportSources,
   opts: { waitMs?: number } = {},

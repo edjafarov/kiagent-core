@@ -103,7 +103,9 @@ it('a kick during a pass queues exactly one more pass', async () => {
   const lead = leaderFolder();
   await rowFor(d, 'a.txt', 'never on the leader'); // every pass asks once and is told 'gone'
   let release!: () => void;
-  const gate = new Promise<void>((r) => (release = r));
+  const gate = new Promise<void>((r) => {
+    release = r;
+  });
   let asked = 0;
   d.svc.setTransport({
     fetch: async () => {

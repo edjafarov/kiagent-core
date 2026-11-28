@@ -72,7 +72,9 @@ it('a pull held open with the old exclusions cannot commit a document under the 
   // The first pull walks with no exclusions, then is held before its first
   // batch is handed to the engine, until the test lets it go (or it is aborted).
   let release!: () => void;
-  const gate = new Promise<void>((r) => (release = r));
+  const gate = new Promise<void>((r) => {
+    release = r;
+  });
   let held = false;
   let pulls = 0;
   const source = {

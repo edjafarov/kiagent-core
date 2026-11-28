@@ -184,10 +184,10 @@ it('never emits a row from a table outside the allowlist', async () => {
 
 it('handles U+2028 in markdown', async () => {
   const a = await account();
-  await commit(a.id, [doc('d1', 'one two\nthree')]);
+  await commit(a.id, [doc('d1', 'one\u2028two\nthree')]);
   build();
   const docs = readStage(out).entries.filter((e) => e.tbl === 'documents');
-  expect(rowOf(docs[0]).markdown).toBe('one two\nthree');
+  expect(rowOf(docs[0]).markdown).toBe('one\u2028two\nthree');
 });
 
 it('readStage refuses a truncated or altered file', async () => {

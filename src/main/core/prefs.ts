@@ -11,6 +11,7 @@ import type {
 import { USER_PREF_KEYS, type UserPrefKey } from '@shared/user-pref-keys';
 import type { AppDb } from '../db/app-db';
 import { SyncNoMaster } from './sync/forward-core';
+// eslint-disable-next-line import/no-cycle -- runtime cycle with settings-sync (pickUserKeys); both are only called after load, so it is safe
 import { forwardOrQueue } from './sync/settings-sync';
 import type { ForwardRequest } from './sync/service';
 import {
@@ -532,7 +533,10 @@ export function createPrefs(dir: string, user?: UserPrefsStore): CorePrefs {
               keys: [...byKey.keys()],
               isHeld: (k) => overlay.has(k),
               // A refusal throws out of forwardCore; reaching here is the leader's yes.
-              forward: async () => (await forwardUser!(userPart), { ok: true }),
+              forward: async () => {
+                await forwardUser!(userPart);
+                return { ok: true };
+              },
               enqueue: (key) => {
                 const k = byKey.get(key)!;
                 return queue!.enqueue(userPrefRequest(k, next[k]), {
@@ -676,9 +680,10 @@ export function createPrefs(dir: string, user?: UserPrefsStore): CorePrefs {
             await forwardOrQueue({
               keys: [key],
               isHeld: (k) => overlay.has(k),
-              forward: async () => (
-                await forwardExt!(key, stored), { ok: true }
-              ),
+              forward: async () => {
+                await forwardExt!(key, stored);
+                return { ok: true };
+              },
               enqueue: (k) =>
                 queue!.enqueue(extPrefRequest(k, stored), { coalesceKey: k }),
               apply: {

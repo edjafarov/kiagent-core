@@ -152,7 +152,7 @@ describe('the marker', () => {
       code: 'SHARED_ROOT_PAUSED',
     });
     expect(fs.readdirSync(sorted)).toEqual([]);
-    const { c, sorted: cs, run } = await agreed();
+    const { sorted: cs, run } = await agreed();
     unmount(cs);
     await run();
     await run();

@@ -146,7 +146,9 @@ describe('forwardOrQueue', () => {
         return id;
       },
       apply: {
-        forwarded: () => void (calls.forwarded += 1),
+        forwarded: () => {
+          calls.forwarded += 1;
+        },
         queued: (k) => void calls.queued.push(k),
       },
       ...over,
@@ -210,7 +212,9 @@ describe('settings on a copy through the real prefs', () => {
     const rows: Record<string, unknown> = {};
     const store: UserPrefsStore = {
       all: async () => JSON.parse(JSON.stringify(rows)),
-      set: async (k, v) => void (rows[k] = v),
+      set: async (k, v) => {
+        rows[k] = v;
+      },
       canWrite: () => false,
     };
     const queued: { key: string; payload: unknown }[] = [];

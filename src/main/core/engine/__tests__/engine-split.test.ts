@@ -44,6 +44,7 @@ function source(
     async reauthenticate(_account, auth) {
       await auth.oauth(['read']);
     },
+    // eslint-disable-next-line require-yield -- an async generator that never yields: it parks forever so the pull never completes
     async *pull() {
       await new Promise<never>(() => {});
     },

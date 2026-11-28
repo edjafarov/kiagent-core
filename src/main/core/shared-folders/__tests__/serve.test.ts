@@ -64,8 +64,7 @@ const missingRow = (d: Device, root: string, rel: string, text: string) =>
 describe('serve.remove', () => {
   it('records that it removes the file before the file goes, so a crash in between explains the gap', async () => {
     const seen: number[] = [];
-    let dev!: Device;
-    dev = await device('leader', {
+    const dev: Device = await device('leader', {
       trash: async (p) => {
         seen.push(
           (
@@ -560,7 +559,7 @@ describe('serve.offer, what it refuses', () => {
   });
 });
 
-describe('serve.remove', () => {
+describe('serve.remove, against the manifest and the Trash', () => {
   it('moves the file to the Trash when it still has that hash, and the manifest follows', async () => {
     const { d, sorted } = await leader();
     write(path.join(sorted, 'a.txt'), 'one');

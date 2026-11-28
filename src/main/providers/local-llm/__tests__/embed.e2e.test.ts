@@ -28,6 +28,7 @@ const enabled =
   fs.existsSync(binary) &&
   fs.existsSync(gguf);
 
+/* eslint-disable jest/no-standalone-expect -- the test is chosen as it or it.skip at runtime, which the rule cannot see */
 (enabled ? it : it.skip)(
   'embeds 768-d vectors, identical for the same text',
   async () => {
@@ -69,3 +70,4 @@ const enabled =
   },
   120_000,
 );
+/* eslint-enable jest/no-standalone-expect */

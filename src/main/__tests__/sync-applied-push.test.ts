@@ -6,7 +6,11 @@ const setup = () => {
   const sent: string[] = [];
   const hint = jest.fn();
   wireSyncAppliedPush(
-    { onApplied: (c) => void (cb = c) },
+    {
+      onApplied: (c) => {
+        cb = c;
+      },
+    },
     { attentionHint: hint, broadcast: (channel) => void sent.push(channel) },
   );
   return { fire: (t: string[]) => cb(t), sent, hint };
@@ -56,7 +60,11 @@ describe('a delta that touches accounts or documents reads the app state again',
     const timers: (() => void)[] = [];
     const reproject = jest.fn();
     wireSyncAppliedPush(
-      { onApplied: (c) => void (cb = c) },
+      {
+        onApplied: (c) => {
+          cb = c;
+        },
+      },
       { attentionHint: () => undefined, broadcast: () => undefined, reproject },
       { setTimeout: (fn) => void timers.push(fn) },
     );

@@ -47,7 +47,9 @@ const open = async () => {
     workerFile: entry,
     execArgv,
     bootGate: await readSyncGate(db),
-    onOpen: async () => void (promoted += 1),
+    onOpen: async () => {
+      promoted += 1;
+    },
     holdWork: () => (holdWork ? holdWork() : Promise.resolve()),
     resumeWork: () => (resumeWork ? resumeWork() : Promise.resolve()),
   });
@@ -87,8 +89,10 @@ afterEach(async () => {
 });
 
 let n = 0;
-const write = () =>
-  store.createAccount({ source: 's', identifier: `i${(n += 1)}` });
+const write = () => {
+  n += 1;
+  return store.createAccount({ source: 's', identifier: `i${n}` });
+};
 const lease = (o: Partial<LeaseSnapshot> = {}): LeaseSnapshot => ({
   isMaster: true,
   reason: 'solo',
@@ -219,14 +223,21 @@ describe('one order for the held work', () => {
       sources: { get: (id: string) => ({ descriptor: { id } }) },
       logSink: { log: () => undefined },
       engine: {
-        run: (a: Account) => (runs.push(a.id), {}),
+        run: (a: Account) => {
+          runs.push(a.id);
+          return {};
+        },
         isRunning: () => false,
       },
       scheduler: { register: jest.fn() },
       sync: { deviceId: () => 'me-device' },
     } as unknown as CorePlatform;
     resumeWork = () =>
-      resumeHeld(p, { attachHeld: async () => void (attached += 1) });
+      resumeHeld(p, {
+        attachHeld: async () => {
+          attached += 1;
+        },
+      });
     await sync.beginJoin();
     await sync.leaveJoin();
     expect(attached).toBe(1);
@@ -241,7 +252,9 @@ describe('one order for the held work', () => {
     holdWork = async () => {
       holds += 1;
       holding = true;
-      await new Promise<void>((r) => (release = r));
+      await new Promise<void>((r) => {
+        release = r;
+      });
     };
     resumeWork = async () => {
       resumes += 1;
@@ -263,7 +276,10 @@ describe('one order for the held work', () => {
 
   it('a join begun after a cancelled one still joins', async () => {
     let release!: () => void;
-    holdWork = () => new Promise<void>((r) => (release = r));
+    holdWork = () =>
+      new Promise<void>((r) => {
+        release = r;
+      });
     const first = sync.beginJoin();
     await sync.leaveJoin();
     const firstRelease = release;
@@ -277,7 +293,9 @@ describe('one order for the held work', () => {
 
   it('open() does not resume the work', async () => {
     let resumed = 0;
-    resumeWork = async () => void (resumed += 1);
+    resumeWork = async () => {
+      resumed += 1;
+    };
     await sync.lead({ epoch: 1 });
     await sync.open('head-acked');
     expect(resumed).toBe(0);
@@ -330,7 +348,10 @@ describe('what promotion starts', () => {
       sources: { get: (id: string) => ({ descriptor: { id } }) },
       logSink: { log: () => undefined },
       engine: {
-        run: (a: Account) => (runs.push(a), {}),
+        run: (a: Account) => {
+          runs.push(a);
+          return {};
+        },
         isRunning: () => false,
       },
       scheduler: { register: jest.fn() },
@@ -372,7 +393,13 @@ describe('what promotion starts', () => {
     const p = {
       ...platform([account({})], []),
       sync: { deviceId: () => 'me-device' },
-      engine: { run: () => (order.push('resume'), {}), isRunning: () => false },
+      engine: {
+        run: () => {
+          order.push('resume');
+          return {};
+        },
+        isRunning: () => false,
+      },
     } as unknown as CorePlatform;
     await promoteCore(p, {
       archiveSweep: () => void order.push('sweep'),
@@ -384,11 +411,10 @@ describe('what promotion starts', () => {
   });
   it('promoteCore releases the hold before it re-runs accounts, through the real gate', async () => {
     const order: string[] = [];
-    const run = jest.fn(
-      () => (
-        order.push('resume'), { stop: async () => undefined, status: 'running' }
-      ),
-    );
+    const run = jest.fn(() => {
+      order.push('resume');
+      return { stop: async () => undefined, status: 'running' };
+    });
     const eng = {
       run,
       attach: jest.fn(() => ({

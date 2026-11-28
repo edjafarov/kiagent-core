@@ -345,7 +345,9 @@ describe('closeWriter', () => {
     eng(e).attach({ id: 'a1' });
     const c1 = g.closeWriter();
     let released = false;
-    const rel = g.release().then(() => (released = true));
+    const rel = g.release().then(() => {
+      released = true;
+    });
     const c2 = g.closeWriter();
     stops[0]();
     await c1;
@@ -509,9 +511,10 @@ describe('a device-owned sender (step 4)', () => {
     get: (id: string) =>
       id === 'whatsapp' || id === 'gmail'
         ? {
-            send: async (i: { accountId: string }) => (
-              sent.push(`${id}:${i.accountId}`), { externalMessageId: 'm' }
-            ),
+            send: async (i: { accountId: string }) => {
+              sent.push(`${id}:${i.accountId}`);
+              return { externalMessageId: 'm' };
+            },
           }
         : undefined,
     ids: () => ['whatsapp', 'gmail'],

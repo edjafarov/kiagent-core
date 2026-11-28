@@ -130,8 +130,8 @@ async function shaAt(
 
 /** ` (from <device>)` made safe for a file name on every platform. */
 export const safeDeviceName = (name: string): string =>
-  // eslint-disable-next-line no-control-regex
   name
+    // eslint-disable-next-line no-control-regex -- file names must lose C0 control characters
     .replace(/[\u0000-\u001f\\/:*?"<>|]/g, ' ')
     .replace(/\s+/g, ' ')
     .replace(/^[\s.]+|[\s.]+$/g, '')

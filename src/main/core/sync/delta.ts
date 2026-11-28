@@ -89,8 +89,9 @@ export function buildDelta(
   let bytes = 0;
   let rows = 0;
   const write = (e: StageEntry): void => {
-    if (e.op === 'upsert') e = { ...e, row: encodeRow(e.row) };
-    const line = Buffer.from(`${JSON.stringify(e)}\n`);
+    const staged: StageEntry =
+      e.op === 'upsert' ? { ...e, row: encodeRow(e.row) } : e;
+    const line = Buffer.from(`${JSON.stringify(staged)}\n`);
     bytes += line.length;
     if (bytes > capBytes) throw new TooLarge();
     hash.update(line);

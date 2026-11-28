@@ -207,14 +207,18 @@ describe('host.secrets in the extension process', () => {
     const mainEp = createRpcEndpoint(main);
     const calls: Array<[string, string, unknown[]]> = [];
     let unwatchedResolve!: () => void;
-    const unwatched = new Promise<void>((r) => (unwatchedResolve = r));
+    const unwatched = new Promise<void>((r) => {
+      unwatchedResolve = r;
+    });
     mainEp.onCall(async (ns, method, args) => {
       calls.push([ns, method, args]);
       if (method === 'unwatch') unwatchedResolve();
       return method === 'get' ? 'v1' : undefined;
     });
     let seenResolve!: () => void;
-    const seenAll = new Promise<void>((r) => (seenResolve = r));
+    const seenAll = new Promise<void>((r) => {
+      seenResolve = r;
+    });
     const seen: string[] = [];
     let off: (() => void) | undefined;
     let got: unknown;

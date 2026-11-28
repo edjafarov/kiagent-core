@@ -10,7 +10,6 @@ import type {
   InferenceKind,
   LaneState,
   LogStore,
-  Prefs,
   Query,
   SchedulerEnv,
   Sender,

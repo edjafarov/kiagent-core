@@ -34,8 +34,10 @@ afterEach(async () => {
 });
 
 let n = 0;
-const write = () =>
-  store.createAccount({ source: 's', identifier: `i${(n += 1)}` });
+const write = () => {
+  n += 1;
+  return store.createAccount({ source: 's', identifier: `i${n}` });
+};
 const state = () =>
   conn().prepare(`SELECT * FROM sync_state`).get() as Record<
     string,

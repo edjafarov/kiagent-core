@@ -232,7 +232,9 @@ describe('onChange', () => {
   it('fires after a pass that changed the manifest, not after one that did not', async () => {
     const { d, sorted } = await leader();
     let n = 0;
-    d.svc.onChange(() => void (n += 1));
+    d.svc.onChange(() => {
+      n += 1;
+    });
     await scan(d);
     expect(n).toBe(0);
     write(path.join(sorted, 'a.pdf'), 'x');
@@ -246,7 +248,9 @@ describe('onChange', () => {
     const d = await device('copy');
     await withRoots(d);
     let n = 0;
-    const off = d.svc.onChange(() => void (n += 1));
+    const off = d.svc.onChange(() => {
+      n += 1;
+    });
     d.sync.set('leader');
     await new Promise((r) => setTimeout(r, 20));
     await d.svc.settled();
@@ -265,7 +269,9 @@ describe('onChange', () => {
     d.svc.onChange(() => {
       throw new Error('boom');
     });
-    d.svc.onChange(() => void (ok += 1));
+    d.svc.onChange(() => {
+      ok += 1;
+    });
     write(path.join(sorted, 'a.pdf'), 'x');
     await scan(d);
     expect(ok).toBe(1);

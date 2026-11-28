@@ -65,11 +65,11 @@ async function open(
   return { db, svc };
 }
 
-async function wire(follower = true, existingDir?: string): Promise<Wired> {
+async function wire(follower?: boolean, existingDir?: string): Promise<Wired> {
   const dir =
     existingDir ?? fs.mkdtempSync(path.join(os.tmpdir(), 'offline-wiring-'));
   if (!existingDir) dirs.push(dir);
-  const { db, svc } = await open(dir, follower);
+  const { db, svc } = await open(dir, follower ?? true);
   const prefs = createPrefs(
     path.join(dir, 'prefs'),
     createDbUserPrefsStore(db, () => !svc.readOnly()),

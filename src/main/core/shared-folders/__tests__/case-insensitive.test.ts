@@ -119,7 +119,7 @@ describe('the copy (macOS and Windows match names without regard to case)', () =
     const rename = jest.spyOn(fs.promises, 'rename');
     try {
       await run();
-      expect(rename.mock.calls.map((c) => c[1])).toEqual([
+      expect(rename.mock.calls.map((call) => call[1])).toEqual([
         path.join(sorted, 'taxes', 'a.pdf'),
       ]); // its own spelling
     } finally {

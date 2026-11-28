@@ -852,12 +852,12 @@ export function createWriteTx(
       switch (w.op) {
         case 'create': {
           const named = ownedName(w.source, w.identifier);
-          w = { ...w, identifier: named.identifier };
+          const nw = { ...w, identifier: named.identifier };
           const prior = conn
             .prepare(
               `SELECT config FROM accounts WHERE source = ? AND identifier = ?`,
             )
-            .get(w.source, w.identifier) as { config: string } | undefined;
+            .get(nw.source, nw.identifier) as { config: string } | undefined;
           const row = conn
             .prepare(
               `INSERT INTO accounts(id, source, identifier, config, status, cadence, created_at, owner_device_id)
@@ -868,12 +868,12 @@ export function createWriteTx(
                RETURNING id`,
             )
             .get(
-              hashedId<'account'>('account', [w.source, w.identifier]),
-              w.source,
-              w.identifier,
-              JSON.stringify(keepOptions(prior?.config, w.config ?? {})),
-              w.status ?? 'connecting',
-              w.cadence ? JSON.stringify(w.cadence) : null,
+              hashedId<'account'>('account', [nw.source, nw.identifier]),
+              nw.source,
+              nw.identifier,
+              JSON.stringify(keepOptions(prior?.config, nw.config ?? {})),
+              nw.status ?? 'connecting',
+              nw.cadence ? JSON.stringify(nw.cadence) : null,
               deps.now(),
               named.owner,
             ) as { id: AccountId };
@@ -882,20 +882,20 @@ export function createWriteTx(
         }
         case 'getOrCreate': {
           const named = ownedName(w.source, w.identifier);
-          w = { ...w, identifier: named.identifier };
+          const nw = { ...w, identifier: named.identifier };
           const found = conn
             .prepare(
               `SELECT id FROM accounts WHERE source = ? AND identifier = ?`,
             )
-            .get(w.source, w.identifier) as { id: AccountId } | undefined;
+            .get(nw.source, nw.identifier) as { id: AccountId } | undefined;
           if (found) return { id: found.id, logged: false };
-          const id = hashedId<'account'>('account', [w.source, w.identifier]);
+          const id = hashedId<'account'>('account', [nw.source, nw.identifier]);
           conn
             .prepare(
               `INSERT INTO accounts(id, source, identifier, config, status, created_at, owner_device_id)
                VALUES(?, ?, ?, '{}', 'live', ?, ?)`,
             )
-            .run(id, w.source, w.identifier, deps.now(), named.owner);
+            .run(id, nw.source, nw.identifier, deps.now(), named.owner);
           appendChange('account', id);
           return { id, logged: true };
         }

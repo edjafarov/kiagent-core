@@ -116,7 +116,8 @@ export async function device(
     clock,
     restart: async () => {
       await d.svc.close();
-      return (d.svc = await createSharedFolders(deps()));
+      d.svc = await createSharedFolders(deps());
+      return d.svc;
     },
     close: async () => {
       await d.svc.close();

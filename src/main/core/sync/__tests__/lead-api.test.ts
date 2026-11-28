@@ -31,14 +31,14 @@ interface Device {
 const devices: Device[] = [];
 
 async function device(
-  setup: (c: import('better-sqlite3').Database) => void = () => undefined,
+  setup?: (c: import('better-sqlite3').Database) => void,
   existingDir?: string,
 ): Promise<Device> {
   const dir =
     existingDir ?? fs.mkdtempSync(path.join(os.tmpdir(), 'lead-api-'));
   const db = await openDb(path.join(dir, 'a.db'));
   migrate(db._conn!);
-  setup(db._conn!);
+  setup?.(db._conn!);
   const conn = () => db._conn!;
   (db as unknown as { proc: unknown }).proc = leadProc(conn);
   const onOpen = jest.fn(async () => undefined);
@@ -84,7 +84,9 @@ const lease = (o: Partial<LeaseSnapshot> = {}): LeaseSnapshot => ({
 const runnerCount = (d: Device): (() => number) => {
   let n = 0;
   d.svc.setRunners({
-    ui: async () => void (n += 1),
+    ui: async () => {
+      n += 1;
+    },
     core: jest.fn(),
     commit: jest.fn(),
   });
@@ -236,7 +238,9 @@ describe('lead', () => {
       d.db as unknown as { proc: (n: string, a: unknown) => Promise<unknown> }
     ).proc;
     let release!: () => void;
-    const held = new Promise<void>((r) => (release = r));
+    const held = new Promise<void>((r) => {
+      release = r;
+    });
     (d.db as unknown as { proc: unknown }).proc = async (
       n: string,
       a: unknown,
@@ -266,7 +270,9 @@ describe('lead', () => {
       d.db as unknown as { proc: (n: string, a: unknown) => Promise<unknown> }
     ).proc;
     let release!: () => void;
-    const held = new Promise<void>((r) => (release = r));
+    const held = new Promise<void>((r) => {
+      release = r;
+    });
     (d.db as unknown as { proc: unknown }).proc = async (
       n: string,
       a: unknown,
@@ -303,7 +309,9 @@ describe('lead', () => {
       d.db as unknown as { proc: (n: string, a: unknown) => Promise<unknown> }
     ).proc;
     let release!: () => void;
-    const held = new Promise<void>((r) => (release = r));
+    const held = new Promise<void>((r) => {
+      release = r;
+    });
     (d.db as unknown as { proc: unknown }).proc = async (
       n: string,
       a: unknown,
@@ -345,7 +353,9 @@ describe('lead', () => {
       d.db as unknown as { proc: (n: string, a: unknown) => Promise<unknown> }
     ).proc;
     let release!: () => void;
-    const held = new Promise<void>((r) => (release = r));
+    const held = new Promise<void>((r) => {
+      release = r;
+    });
     (d.db as unknown as { proc: unknown }).proc = async (
       n: string,
       a: unknown,
@@ -490,7 +500,9 @@ it("a lease loss during open('head-acked') leaves the device fenced and never ru
     d.db as unknown as { proc: (n: string, a: unknown) => Promise<unknown> }
   ).proc;
   let release: () => void = () => undefined;
-  const gate = new Promise<void>((r) => (release = r));
+  const gate = new Promise<void>((r) => {
+    release = r;
+  });
   let entered = false;
   const ran = runnerCount(d);
   await d.svc.enqueue({ kind: 'ui', extensionId: 'x', name: 'n', payload: {} });
