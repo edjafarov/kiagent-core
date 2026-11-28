@@ -7,10 +7,11 @@ import {
   TextButton,
   sourceBrand,
   type KeyValueItem,
+  ago,
 } from '@shared/web-ui/ui';
 import { sourceLabel } from './source-label';
 import { folderRoots } from './folder-roots';
-import { accountLabel, describeCadence, formatRelative } from './format';
+import { accountLabel, describeCadence } from './format';
 import { sourceStatus } from './source-status';
 import { useSourceDescriptors } from './sources-registry';
 import { FixButtons, SourceMenu, type SourceEntry } from './source-actions';
@@ -67,7 +68,10 @@ export function SourcePanel(props: {
           ? `${entry.docCount.toLocaleString()} · importing, ${status.importPercent}%`
           : entry.docCount.toLocaleString(),
     },
-    { label: 'Last item', value: formatRelative(entry.recent[0]?.ts) },
+    {
+      label: 'Last item',
+      value: ago(entry.recent[0]?.ts, Date.now(), 'words') || '—',
+    },
     {
       label: 'Checks',
       value: describeCadence(a.cadence ?? descriptor?.cadence),

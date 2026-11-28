@@ -5,8 +5,8 @@ import {
   AttentionRow,
   Button,
   sourceCategory,
+  ago,
 } from '@shared/web-ui/ui';
-import { formatRelativeCompact } from '@renderer/screens/Sources/format';
 import { quoted, scheduledFor, suggestedFor } from './outbox-rows';
 import type { OutboxData } from './use-outbox';
 
@@ -49,7 +49,8 @@ export function WaitingDrafts(props: {
                       : r.suggestedSendAt &&
                           Date.parse(r.suggestedSendAt) > Date.now()
                         ? suggestedFor(r.suggestedSendAt, Date.now())
-                        : (r.note ?? formatRelativeCompact(r.createdAt))
+                        : (r.note ??
+                          (ago(r.createdAt, Date.now(), 'short') || '—'))
                   }`
             }
             action={

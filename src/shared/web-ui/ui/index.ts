@@ -29,6 +29,7 @@ export type { SegmentedItem } from './Segmented';
 export { Toggle, Checkbox } from './toggles';
 export type { ToggleProps, CheckboxProps } from './toggles';
 export { Status, ProgressBar } from './status';
+export { Note } from './Note';
 export type { StatusTone } from './status';
 export { Spinner, Busy } from '../components';
 export { Sheet, ConfirmSheet } from './Sheet';
@@ -42,10 +43,13 @@ export {
   clockTime,
   dayMonth,
   shortDay,
+  shortDate,
+  ago,
   useNow,
   everyWhileVisible,
 } from './time';
 export type { DayGroupName } from './time';
+export { plural, formatBytes } from './text';
 export type { Crumb, TopBarProps } from './layout';
 export {
   sourceBrand,

@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from 'react';
+import { Button, TextField } from '@shared/web-ui/ui';
 import { FolderPickerModal } from './folder-picker/FolderPickerModal';
 import { formatCount } from './folder-picker/format-count';
 
@@ -69,19 +70,15 @@ export function FolderPickerField(
   return (
     <div>
       <div className="row-flex">
-        <input
-          className="input"
+        <TextField
+          className="field-grow"
           type="text"
           value={value}
           onChange={(e) => onChange(e.target.value)}
         />
-        <button
-          type="button"
-          className="btn sm"
-          onClick={() => setPickerOpen(true)}
-        >
+        <Button type="button" size="sm" onClick={() => setPickerOpen(true)}>
           Choose…
-        </button>
+        </Button>
       </div>
       {countState.kind === 'pending' && <div className="t-meta">counting…</div>}
       {countState.kind === 'result' && (

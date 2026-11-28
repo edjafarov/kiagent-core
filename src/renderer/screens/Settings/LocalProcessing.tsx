@@ -1,6 +1,5 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { useAppState } from '@renderer/state/app-state';
-import { formatRelative } from '@renderer/screens/Sources/format';
 import {
   AttentionList,
   AttentionRow,
@@ -17,6 +16,8 @@ import {
   Status,
   Toggle,
   computerNoun,
+  ago,
+  Note,
 } from '@shared/web-ui/ui';
 import type { AppPrefs, LaneState, ProviderStatus } from '@shared/contracts';
 import type { Invokes } from '@shared/ipc';
@@ -326,32 +327,30 @@ export function LocalProcessing(): React.ReactElement {
         label="Recently processed"
         summary={
           last
-            ? `last: ${last.title ?? last.filename ?? last.type} · ${formatRelative(last.updatedAt)}`
+            ? `last: ${last.title ?? last.filename ?? last.type} · ${ago(last.updatedAt, Date.now(), 'words') || '—'}`
             : 'nothing yet'
         }
       >
         {stats == null || stats.recent.length === 0 ? (
-          <div className="set-note">Nothing processed yet.</div>
+          <Note>Nothing processed yet.</Note>
         ) : (
           <Rows aria-label="Recently processed">
             {stats.recent.map((r) => (
               <Row
                 key={r.id}
                 title={r.title ?? r.filename ?? r.type}
-                trail={
-                  <span className="set-note">{engineLabel(r.engine)}</span>
-                }
-                time={formatRelative(r.updatedAt)}
+                trail={<Note as="span">{engineLabel(r.engine)}</Note>}
+                time={ago(r.updatedAt, Date.now(), 'words') || '—'}
               />
             ))}
           </Rows>
         )}
       </Disclosure>
 
-      <div className="set-note">
+      <Note>
         Providers (vision, language, speech) only appear here when one needs
         attention.
-      </div>
+      </Note>
     </>
   );
 }

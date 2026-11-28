@@ -4,7 +4,9 @@
    @import here — webpack-dev-server HMR misses CSS-side @import
    changes, which leaves stale styles in the renderer window. */
 
-html, body, #root {
+html,
+body,
+#root {
   height: 100%;
   margin: 0;
   padding: 0;
@@ -79,6 +81,11 @@ body {
   background: var(--bg-app);
 }
 
+/* A kit field inside a flex row fills what the siblings leave. */
+.field-grow {
+  flex: 1;
+  min-width: 0;
+}
 .row-flex {
   display: flex;
   align-items: center;

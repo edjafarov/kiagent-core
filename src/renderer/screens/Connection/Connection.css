@@ -2,11 +2,6 @@
 .conn-mono {
   font-family: var(--font-mono);
 }
-.conn-note {
-  margin: 0;
-  font-size: 12px;
-  color: var(--text-secondary);
-}
 .conn-sub {
   margin: 16px 0 4px;
   font-size: 13px;

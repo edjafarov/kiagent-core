@@ -1,5 +1,5 @@
 import React from 'react';
-import { Card, CardHeader } from '@shared/web-ui/ui';
+import { Card, CardHeader, Select, TextField } from '@shared/web-ui/ui';
 import type { Account, ConfirmMode } from '@shared/contracts';
 
 /**
@@ -32,9 +32,9 @@ export function Outbound(props: { account: Account }): React.ReactElement {
         <label htmlFor="outbound-from" className="lbl">
           From address
         </label>
-        <input
+        <TextField
+          className="field-grow"
           id="outbound-from"
-          className="input"
           placeholder="defaults to the account's login email"
           defaultValue={cfg.fromAddress ?? ''}
           onBlur={(e) =>
@@ -47,9 +47,8 @@ export function Outbound(props: { account: Account }): React.ReactElement {
         <label htmlFor="outbound-mode" className="lbl">
           Send confirmation
         </label>
-        <select
+        <Select
           id="outbound-mode"
-          className="cadence-select"
           value={cfg.mode ?? ''}
           onChange={(e) =>
             update({
@@ -64,16 +63,16 @@ export function Outbound(props: { account: Account }): React.ReactElement {
           <option value="">App default</option>
           <option value="review">Review page</option>
           <option value="link">One-click confirm link</option>
-        </select>
+        </Select>
       </div>
       <div className="field-row">
         {/* eslint-disable-next-line jsx-a11y/label-has-associated-control */}
         <label htmlFor="outbound-smtp-host" className="lbl">
           SMTP host (optional)
         </label>
-        <input
+        <TextField
+          className="field-grow"
           id="outbound-smtp-host"
-          className="input"
           placeholder="derived from IMAP host"
           defaultValue={cfg.smtp?.host ?? ''}
           onBlur={(e) =>
@@ -89,9 +88,9 @@ export function Outbound(props: { account: Account }): React.ReactElement {
         <label htmlFor="outbound-smtp-port" className="lbl">
           SMTP port (optional)
         </label>
-        <input
+        <TextField
+          className="field-grow"
           id="outbound-smtp-port"
-          className="input"
           placeholder="465"
           defaultValue={cfg.smtp?.port ?? ''}
           onBlur={(e) =>

@@ -10,11 +10,14 @@ const items: SegmentedItem<K>[] = [
   { key: 'done', label: 'Done' },
 ];
 
+let look: 'box' | 'line' = 'box';
+
 function Harness(props: { onChange?: (k: K) => void }) {
   const [value, setValue] = React.useState<K>('all');
   return (
     <Segmented
       aria-label="Filter"
+      look={look}
       items={items}
       value={value}
       onChange={(k) => {
@@ -25,7 +28,24 @@ function Harness(props: { onChange?: (k: K) => void }) {
   );
 }
 
-describe('Segmented', () => {
+describe.each(['box', 'line'] as const)('Segmented, %s look', (which) => {
+  beforeEach(() => {
+    look = which;
+  });
+
+  it('writes a large count with separators', () => {
+    render(
+      <Segmented
+        aria-label="Show"
+        look={which}
+        items={[{ key: 'all', label: 'All', count: 1204 }]}
+        value="all"
+        onChange={() => {}}
+      />,
+    );
+    expect(screen.getByRole('tab')).toHaveTextContent('All1,204');
+  });
+
   it('is a named tablist with one selected, focusable tab', () => {
     render(<Harness />);
     expect(screen.getByRole('tablist', { name: 'Filter' })).toBeInTheDocument();
@@ -70,6 +90,7 @@ describe('Segmented', () => {
     render(
       <Segmented
         aria-label="When"
+        look={which}
         items={items}
         value="all"
         onChange={onChange}

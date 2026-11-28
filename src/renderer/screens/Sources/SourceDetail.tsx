@@ -15,10 +15,11 @@ import {
   Stack,
   TextButton,
   sourceBrand,
+  ago,
 } from '@shared/web-ui/ui';
 import { AddSourcePanel } from './AddSourcePanel';
 import { sourceLabel } from './source-label';
-import { accountLabel, formatRelative } from './format';
+import { accountLabel } from './format';
 import {
   FixButtons,
   RemoveSourceSheet,
@@ -178,7 +179,7 @@ export function SourceDetail(props: {
     `${entry.docCount.toLocaleString()} items`,
     status.label
       ? status.label.toLowerCase()
-      : `last item ${formatRelative(entry.recent[0]?.ts)}`,
+      : `last item ${ago(entry.recent[0]?.ts, Date.now(), 'words') || '—'}`,
   ].join(' · ');
 
   return (

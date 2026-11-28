@@ -11,21 +11,11 @@ import {
   SettingsRow,
   TextButton,
   computerNoun,
+  formatBytes,
+  Note,
 } from '@shared/web-ui/ui';
 import type { StorageStats } from '@shared/ipc';
 import { describeResetOutcome } from '@shared/reset-outcome';
-
-function formatBytes(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`;
-  const units = ['KB', 'MB', 'GB', 'TB'];
-  let value = bytes / 1024;
-  let unit = 0;
-  while (value >= 1024 && unit < units.length - 1) {
-    value /= 1024;
-    unit += 1;
-  }
-  return `${value.toFixed(1)} ${units[unit]}`;
-}
 
 function failure(e: unknown): string {
   return `Failed: ${e instanceof Error ? e.message : 'unknown error'}`;
@@ -128,7 +118,7 @@ export function Storage(props: {
 
   if (stats == null)
     return error ? (
-      <div className="set-note">Couldn’t load storage stats.</div>
+      <Note>Couldn’t load storage stats.</Note>
     ) : (
       <Busy label="Loading storage stats…" />
     );
@@ -192,7 +182,7 @@ export function Storage(props: {
         />
       </Disclosure>
 
-      {note && <div className="set-note">{note}</div>}
+      {note && <Note>{note}</Note>}
 
       <SettingsGroup title="Reset">
         <SettingsRow

@@ -53,6 +53,45 @@ export function shortDay(ms: number, now: number): string {
   return dayMonth(ms);
 }
 
+type When = number | string | null | undefined;
+
+/** Epoch ms from epoch ms or an ISO string; NaN when there is none. */
+function toMs(at: When): number {
+  if (typeof at === 'number') return at;
+  return at ? Date.parse(at) : NaN;
+}
+
+/** "2 Oct", with the year once it is not the current one; empty when
+ *  there is no date. */
+export function shortDate(at: When, now: number): string {
+  const ms = toMs(at);
+  if (!Number.isFinite(ms)) return '';
+  const year = new Date(ms).getFullYear();
+  return year === new Date(now).getFullYear()
+    ? dayMonth(ms)
+    : `${dayMonth(ms)} ${year}`;
+}
+
+/** How long ago, floored. 'words' is for a sentence ("12 min ago"),
+ *  'short' for a column ("12m"). Old enough, both give the date: from a
+ *  week on in 'short', from 30 days on in 'words'. A time ahead reads as
+ *  now. Empty when there is no time: the caller owns its placeholder. */
+export function ago(at: When, now: number, form: 'words' | 'short'): string {
+  const ms = toMs(at);
+  if (!Number.isFinite(ms)) return '';
+  const age = Math.max(0, now - ms);
+  const words = form === 'words';
+  if (age >= (words ? 30 : 7) * DAY_MS) return shortDate(ms, now);
+  if (age < 60_000) return words ? 'just now' : 'now';
+  const [n, unit] =
+    age < 3_600_000
+      ? [Math.floor(age / 60_000), words ? ' min' : 'm']
+      : age < DAY_MS
+        ? [Math.floor(age / 3_600_000), words ? ' h' : 'h']
+        : [Math.floor(age / DAY_MS), words ? ' d' : 'd'];
+  return words ? `${n}${unit} ago` : `${n}${unit}`;
+}
+
 const isHidden = (): boolean =>
   typeof document !== 'undefined' && document.visibilityState === 'hidden';
 

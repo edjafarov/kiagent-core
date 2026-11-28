@@ -37,7 +37,7 @@ beforeEach(() => {
 test('says when it last checked and when it checks next', async () => {
   render(<Cadence account={account} />);
   expect(
-    await screen.findByText('Last checked 5 minutes ago · next in 10 minutes'),
+    await screen.findByText('Last checked 5 min ago · next in 10 min'),
   ).toBeInTheDocument();
 });
 
@@ -81,7 +81,7 @@ test('Run now stays busy saying Checking now until the sync lands, then shows it
       jest.advanceTimersByTime(1_500);
     });
     expect(screen.queryByText('Checking now…')).toBeNull();
-    expect(screen.getByText(/^Last checked (now|\d+ seconds ago)/)).toBeInTheDocument();
+    expect(screen.getByText(/^Last checked just now/)).toBeInTheDocument();
   } finally {
     jest.useRealTimers();
   }

@@ -9,12 +9,15 @@ export interface SegmentedItem<K extends string> {
   countTone?: 'work';
 }
 
-/** Square tabs in a bordered strip; the active tab is filled deep violet. */
+/** One choice among a few. 'box' (the default) is square tabs in a bordered
+ *  strip, the active one filled deep violet; 'line' is plain labels over a
+ *  rule, the active one underlined, for the tabs at the top of a list. */
 export function Segmented<K extends string>(props: {
   items: readonly SegmentedItem<K>[];
   value: K;
   onChange: (key: K) => void;
   'aria-label': string;
+  look?: 'box' | 'line';
   disabled?: boolean;
 }): React.ReactElement {
   const { items, value, onChange, disabled } = props;
@@ -37,7 +40,11 @@ export function Segmented<K extends string>(props: {
   };
 
   return (
-    <div className="ui-seg" role="tablist" aria-label={props['aria-label']}>
+    <div
+      className={cx('ui-seg', props.look === 'line' && 'is-line')}
+      role="tablist"
+      aria-label={props['aria-label']}
+    >
       {items.map((item, i) => {
         const active = item.key === value;
         return (
@@ -63,7 +70,7 @@ export function Segmented<K extends string>(props: {
                   item.countTone === 'work' && 'is-work',
                 )}
               >
-                {item.count}
+                {item.count.toLocaleString('en-US')}
               </b>
             )}
           </button>

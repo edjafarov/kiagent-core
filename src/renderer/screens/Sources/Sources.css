@@ -106,7 +106,7 @@
   gap: 4px;
   min-width: 0;
 }
-.as-step-body .btn {
+.as-step-body .ui-btn {
   align-self: flex-start;
 }
 .as-step-title {
@@ -166,7 +166,9 @@ dl.kv dd {
   display: flex;
   flex-direction: column;
 }
-.tc-row + .tc-row { border-top: 1px solid var(--border-subtle); }
+.tc-row + .tc-row {
+  border-top: 1px solid var(--border-subtle);
+}
 .tc-row-main {
   display: flex;
   align-items: center;
@@ -174,7 +176,9 @@ dl.kv dd {
   padding: 6px 2px;
   cursor: pointer;
 }
-.tc-row-main:hover { background: var(--bg-muted); }
+.tc-row-main:hover {
+  background: var(--bg-muted);
+}
 .tc-title {
   flex: 1;
   min-width: 0;
@@ -189,7 +193,10 @@ dl.kv dd {
   text-transform: uppercase;
   letter-spacing: 0.04em;
 }
-.tc-ts { min-width: 70px; text-align: right; }
+.tc-ts {
+  min-width: 70px;
+  text-align: right;
+}
 .tc-children {
   list-style: none;
   margin: 0 0 4px 28px;
@@ -224,7 +231,9 @@ dl.kv dd {
   display: flex;
   flex-direction: column;
 }
-.tf-row + .tf-row { border-top: 1px solid var(--border-subtle); }
+.tf-row + .tf-row {
+  border-top: 1px solid var(--border-subtle);
+}
 .tf-row {
   display: flex;
   align-items: center;
@@ -251,15 +260,6 @@ dl.kv dd {
 }
 
 /* ── Cadence ───────────────────────────────────────────────────────  */
-.cadence-select {
-  height: 26px;
-  padding: 0 8px;
-  border: 1px solid var(--border-subtle);
-  background: #ffffff;
-  color: var(--text-primary);
-  font-family: var(--font-sans);
-  font-size: 12px;
-}
 
 /* ── ConnectorConfig ───────────────────────────────────────────────  */
 
@@ -291,8 +291,12 @@ dl.kv dd {
   gap: 10px;
   font-size: 12px;
 }
-.ra-row.ra-error { color: var(--error-solid); }
-.ra-ts { min-width: 140px; }
+.ra-row.ra-error {
+  color: var(--error-solid);
+}
+.ra-ts {
+  min-width: 140px;
+}
 
 /* ── DangerZone ────────────────────────────────────────────────────  */
 
@@ -325,19 +329,39 @@ dl.kv dd {
   cursor: pointer;
   user-select: none;
 }
-.fp-row:hover { background: var(--bg-muted); }
-.fp-row.selected { background: var(--accent-subtle); }
+.fp-row:hover {
+  background: var(--bg-muted);
+}
+.fp-row.selected {
+  background: var(--accent-subtle);
+}
 /* Already tracked by an existing account — inert to clicks (see
    FolderPickerModal's `existingPaths`/`isTracked`), so drop the hover
    affordance a clickable row would otherwise show. */
-.fp-row.tracked { cursor: default; }
-.fp-row.tracked:hover { background: transparent; }
-.fp-row.depth-1 { padding-left: 34px; }
-.fp-row.depth-2 { padding-left: 54px; }
-.fp-row.depth-3 { padding-left: 74px; }
-.fp-row.depth-4 { padding-left: 94px; }
-.fp-row.depth-5 { padding-left: 114px; }
-.fp-row.depth-6 { padding-left: 134px; }
+.fp-row.tracked {
+  cursor: default;
+}
+.fp-row.tracked:hover {
+  background: transparent;
+}
+.fp-row.depth-1 {
+  padding-left: 34px;
+}
+.fp-row.depth-2 {
+  padding-left: 54px;
+}
+.fp-row.depth-3 {
+  padding-left: 74px;
+}
+.fp-row.depth-4 {
+  padding-left: 94px;
+}
+.fp-row.depth-5 {
+  padding-left: 114px;
+}
+.fp-row.depth-6 {
+  padding-left: 134px;
+}
 .fp-chev {
   background: transparent;
   border: 0;
@@ -351,8 +375,12 @@ dl.kv dd {
   color: var(--text-secondary);
   cursor: pointer;
 }
-.fp-chev:hover { color: var(--text-primary); }
-.fp-chev[disabled] { cursor: default; }
+.fp-chev:hover {
+  color: var(--text-primary);
+}
+.fp-chev[disabled] {
+  cursor: default;
+}
 .fp-cb {
   width: 14px;
   height: 14px;
@@ -437,7 +465,9 @@ dl.kv dd {
   display: inline-flex;
   opacity: 0.7;
 }
-.fp-chip .x:hover { opacity: 1; }
+.fp-chip .x:hover {
+  opacity: 1;
+}
 
 .fp-note {
   margin: 0 16px 8px;
@@ -454,8 +484,12 @@ dl.kv dd {
 /* A listing that FAILED — an inline retry row, never a silently empty folder
    (see FolderPickerModal's `failedNodes`/`rootsFailed`). Not selectable, so
    drop the pointer affordance `.fp-row` gives every other row. */
-.fp-row.failed { cursor: default; }
-.fp-row.failed:hover { background: transparent; }
+.fp-row.failed {
+  cursor: default;
+}
+.fp-row.failed:hover {
+  background: transparent;
+}
 
 /* A Save the owner rejected (validation, stale scope, commit failure),
    rendered above the footer with the selection left intact. */
@@ -467,23 +501,79 @@ dl.kv dd {
 
 /* ── Get-started onboarding checklist (GetStartedPanel.tsx) ───────── */
 
-.ob-panel { display: flex; flex-direction: column; gap: 12px; margin-bottom: 16px; }
-.ob-head { display: flex; align-items: flex-end; gap: 10px; }
-.ob-head-text { display: flex; flex-direction: column; gap: 2px; }
-.ob-title { font-size: var(--text-base); font-weight: 600; color: var(--text-primary); }
-.ob-sub { font-size: var(--text-xs); color: var(--text-tertiary); }
-.ob-checklist { background: var(--bg-surface); border: 1px solid var(--border-subtle); box-shadow: var(--shadow-xs); }
-.ob-step { display: flex; align-items: center; gap: 10px; padding: 10px 14px; }
-.ob-step + .ob-step { border-top: 1px solid var(--border-subtle); }
-.ob-step-icon {
-  flex-shrink: 0; width: 16px; height: 16px;
-  display: flex; align-items: center; justify-content: center;
-  border: 1.5px solid var(--text-tertiary); border-radius: 50%;
-  background: transparent; color: transparent;
-  font-size: 10px; line-height: 1;
+.ob-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-bottom: 16px;
 }
-.ob-step-icon.done { background: var(--accent-solid); border-color: var(--accent-solid); color: #fff; }
-.ob-step.done .ob-step-label { color: var(--text-secondary); }
-.ob-step-body { flex: 1; display: flex; flex-direction: column; gap: 1px; min-width: 0; }
-.ob-step-label { font-size: var(--text-base); color: var(--text-primary); }
-.ob-step-meta { font-size: var(--text-xs); color: var(--text-tertiary); }
+.ob-head {
+  display: flex;
+  align-items: flex-end;
+  gap: 10px;
+}
+.ob-head-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.ob-title {
+  font-size: var(--text-base);
+  font-weight: 600;
+  color: var(--text-primary);
+}
+.ob-sub {
+  font-size: var(--text-xs);
+  color: var(--text-tertiary);
+}
+.ob-checklist {
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  box-shadow: var(--shadow-xs);
+}
+.ob-step {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+}
+.ob-step + .ob-step {
+  border-top: 1px solid var(--border-subtle);
+}
+.ob-step-icon {
+  flex-shrink: 0;
+  width: 16px;
+  height: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1.5px solid var(--text-tertiary);
+  border-radius: 50%;
+  background: transparent;
+  color: transparent;
+  font-size: 10px;
+  line-height: 1;
+}
+.ob-step-icon.done {
+  background: var(--accent-solid);
+  border-color: var(--accent-solid);
+  color: var(--accent-contrast);
+}
+.ob-step.done .ob-step-label {
+  color: var(--text-secondary);
+}
+.ob-step-body {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+.ob-step-label {
+  font-size: var(--text-base);
+  color: var(--text-primary);
+}
+.ob-step-meta {
+  font-size: var(--text-xs);
+  color: var(--text-tertiary);
+}

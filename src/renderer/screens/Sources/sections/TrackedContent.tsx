@@ -1,8 +1,8 @@
 import React, { useEffect, useState } from 'react';
-import { Card, CardHeader } from '@shared/web-ui/ui';
+import { Button, Card, CardHeader, ago } from '@shared/web-ui/ui';
 import type { Account, Document } from '@shared/contracts';
 import { Icon } from '@shared/web-ui/icon-sprite';
-import { formatRelativeCompact, humanizeDocType } from '../format';
+import { humanizeDocType } from '../format';
 
 const PAGE_SIZE = 20;
 
@@ -63,25 +63,27 @@ export function TrackedContent(props: {
             ))}
           </ul>
           <div className="tc-pager">
-            <button
+            <Button
               type="button"
-              className="btn ghost sm"
+              variant="ghost"
+              size="sm"
               disabled={offset === 0}
               onClick={() => setOffset(Math.max(0, offset - PAGE_SIZE))}
             >
               ← Newer
-            </button>
+            </Button>
             <span className="t-meta">
               {offset + 1}–{offset + docs.length}
             </span>
-            <button
+            <Button
               type="button"
-              className="btn ghost sm"
+              variant="ghost"
+              size="sm"
               disabled={docs.length < PAGE_SIZE}
               onClick={() => setOffset(offset + PAGE_SIZE)}
             >
               Older →
-            </button>
+            </Button>
           </div>
         </>
       )}
@@ -121,7 +123,7 @@ function DocRow(props: { doc: Document }): React.ReactElement {
         <span className="tc-title">{doc.title?.trim() || '(untitled)'}</span>
         <span className="tc-type">{humanizeDocType(doc.type)}</span>
         <span className="t-meta mono tc-ts">
-          {formatRelativeCompact(doc.updatedAt)}
+          {ago(doc.updatedAt, Date.now(), 'short') || '—'}
         </span>
       </div>
       {expanded && <ChildList docs={children} />}
@@ -148,7 +150,7 @@ function ChildList(props: { docs: Document[] | null }): React.ReactElement {
           <span className="tc-title">{c.title?.trim() || '(untitled)'}</span>
           <span className="tc-type">{humanizeDocType(c.type)}</span>
           <span className="t-meta mono tc-ts">
-            {formatRelativeCompact(c.updatedAt)}
+            {ago(c.updatedAt, Date.now(), 'short') || '—'}
           </span>
         </li>
       ))}

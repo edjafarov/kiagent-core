@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { Spark } from '@shared/web-ui/Spark';
 import { Icon } from '@shared/web-ui/icon-sprite';
-import { Button, Card, KeyValue } from '@shared/web-ui/ui';
+import { Button, Card, KeyValue, Note } from '@shared/web-ui/ui';
 import { DEFAULT_PRODUCT_NAME } from '@shared/product';
 
 const REPO_URL = 'https://github.com/edjafarov/kiagent-core';
@@ -85,10 +85,10 @@ export function About(): React.ReactElement {
           <Icon name="external" size={12} /> Release notes
         </Button>
       </div>
-      <div className="set-note">
+      <Note>
         © 2026 {productName} contributors. Made with care for offline-first
         knowledge work.
-      </div>
+      </Note>
     </>
   );
 }
