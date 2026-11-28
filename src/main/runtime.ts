@@ -185,7 +185,12 @@ export interface RuntimeHandles {
   platform: CorePlatform;
   lastPush(): AppStatePush;
   patchState(partial: Partial<AppState>): void;
-  bundled: { localLlm: LocalLlmProvider; localAsr: LocalAsrProvider };
+  bundled: {
+    localLlm: LocalLlmProvider;
+    localAsr: LocalAsrProvider;
+    /** Provider ids whose bundled program is not on disk. */
+    missingBinaries: readonly string[];
+  };
   extensions: ExtensionPlatform;
   catalog: MarketplaceCatalog;
   broker: ConnectBroker;

@@ -315,6 +315,44 @@ describe('LocalProcessing: providers only when one needs the user', () => {
     ).toBeInTheDocument();
   });
 
+  function notInstalled(id: string, devBuild: boolean): ProviderRow {
+    return {
+      id,
+      supports: [],
+      status: 'unsupported',
+      remote: false,
+      installable: id === 'local-llm' || id === 'local-asr',
+      notInstalled: { devBuild },
+    };
+  }
+
+  test('a development build without its local AI programs says which are missing and the command that fetches them', async () => {
+    mockInvoke({
+      providers: [
+        notInstalled('local-llm', true),
+        notInstalled('local-asr', true),
+      ],
+    });
+    render(<LocalProcessing />);
+    const list = await screen.findByRole('list', {
+      name: 'Providers that need you',
+    });
+    expect(list).toHaveTextContent('Local AI isn’t installed in this build');
+    expect(list).toHaveTextContent('Language model, Speech model');
+    expect(list).toHaveTextContent('npm run vendor:inference:prebuilt');
+  });
+
+  test('a packaged build without its local AI programs asks for a reinstall, not a command', async () => {
+    mockInvoke({ providers: [notInstalled('local-llm', false)] });
+    render(<LocalProcessing />);
+    const list = await screen.findByRole('list', {
+      name: 'Providers that need you',
+    });
+    expect(list).toHaveTextContent('Local AI isn’t installed in this build');
+    expect(list).toHaveTextContent('Reinstall');
+    expect(list).not.toHaveTextContent('npm');
+  });
+
   test('a standby model with automatic download off offers Download now for THAT provider', async () => {
     mockPrefs.models = { override: 'auto', autoInstall: false };
     mockInvoke({

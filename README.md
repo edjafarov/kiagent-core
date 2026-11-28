@@ -131,12 +131,13 @@ Other useful scripts:
 npm test                 # jest test suites
 npm run lint             # eslint + prettier
 npm run typecheck        # tsc, no emit
-npm run vendor:inference # fetch llama.cpp + whisper.cpp, build the vision helper
+npm run vendor:inference:prebuilt # download the prebuilt local AI programs (llama.cpp, whisper.cpp, VAD model)
+npm run vendor:inference # the same, plus the macOS builds (whisper-cli, vision helper) — needs Xcode CLT and cmake
 npm run package          # build a distributable
 npm run package:oss      # build an unbranded kiagent-core distributable
 ```
 
-Without `npm run vendor:inference` the app runs, but local AI (OCR, image description, speech-to-text) stays unavailable.
+The app runs without these, but local AI stays off and Settings → Local AI lists what is missing. `vendor:inference:prebuilt` needs no compiler. On macOS, speech-to-text and the vision helper come only from `vendor:inference`, which builds them from source.
 
 ## Repository layout
 

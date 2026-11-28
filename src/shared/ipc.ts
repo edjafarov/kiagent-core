@@ -735,6 +735,10 @@ export interface Invokes extends ProductInvokes {
        *  this, NOT on status (apple-vision reports non-ready statuses but has
        *  nothing to install). */
       installable: boolean;
+      /** Present when the provider's bundled program is not on disk: a
+       *  development build that never ran `npm run vendor:inference:prebuilt`
+       *  (`devBuild`), or a package missing its assets. */
+      notInstalled?: { devBuild: boolean };
       /** Selectable model variants beyond the provider's default — present
        *  only for local-asr. */
       variants?: Array<{
