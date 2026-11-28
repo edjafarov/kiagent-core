@@ -67,7 +67,9 @@ export function htmlToText(html: string): string {
   } catch {
     text = bareText(html);
   }
-  return dropPreviewPadding(text).replace(/\n{3,}/g, '\n\n').trim();
+  return dropPreviewPadding(text)
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
 }
 
 /** Newsletters pad their hidden inbox-preview line with invisible characters
@@ -77,7 +79,11 @@ export function htmlToText(html: string): string {
  *  zero-width joiner between two emoji, where it builds one glyph. */
 function dropPreviewPadding(text: string): string {
   return text
-    .replace(/[\u00ad\u034f\u061c\u180e\u200b\u200e\u200f\u2060-\u2064\ufeff]/g, '')
+    .replace(
+      // eslint-disable-next-line no-misleading-character-class -- the invisible padding characters are listed on purpose
+      /[\u00ad\u034f\u061c\u180e\u200b\u200e\u200f\u2060-\u2064\ufeff]/g,
+      '',
+    )
     .replace(/\u200c(?!\p{L})|(?<!\p{L})\u200c/gu, '')
     .replace(
       /\u200d(?!\p{Extended_Pictographic})|(?<!\p{Extended_Pictographic}\ufe0f?)\u200d/gu,

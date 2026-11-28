@@ -2,7 +2,12 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 
-import type { Batch, Document, DocumentInput, Session } from '@shared/contracts';
+import type {
+  Batch,
+  Document,
+  DocumentInput,
+  Session,
+} from '@shared/contracts';
 
 import {
   closeDevices,
@@ -10,13 +15,23 @@ import {
   withRoots,
   type Device,
 } from '../../../core/shared-folders/__tests__/helpers/device';
-import { copyRows, sha } from '../../../core/shared-folders/__tests__/helpers/fake-transport';
-import { createSharedFolderSource, type SharedFolderCursor } from '../shared-folder-source';
+import {
+  copyRows,
+  sha,
+} from '../../../core/shared-folders/__tests__/helpers/fake-transport';
+import {
+  createSharedFolderSource,
+  type SharedFolderCursor,
+} from '../shared-folder-source';
 import type { SharedFileItem } from '../to-document';
 
 afterEach(closeDevices);
 
-const write = (file: string, text: string, mtime = new Date('2026-03-04T05:06:07Z')) => {
+const write = (
+  file: string,
+  text: string,
+  mtime = new Date('2026-03-04T05:06:07Z'),
+) => {
   fs.mkdirSync(path.dirname(file), { recursive: true });
   fs.writeFileSync(file, text);
   fs.utimesSync(file, mtime, mtime);
@@ -26,8 +41,16 @@ const scan = async (d: Device) => {
   await d.svc.settled();
 };
 const hostOf = (d: Device) => ({ db: d.db, sharedFolders: d.svc });
-const session = (signal = new AbortController().signal, watch = false): Session => ({
-  account: { id: 'acct-shared', source: 'shared-folder', identifier: 'shared', config: watch ? {} : { watch: false } } as never,
+const session = (
+  signal = new AbortController().signal,
+  watch = false,
+): Session => ({
+  account: {
+    id: 'acct-shared',
+    source: 'shared-folder',
+    identifier: 'shared',
+    config: watch ? {} : { watch: false },
+  } as never,
   signal,
   credentials: async () => null,
   saveCredentials: async () => {},
@@ -38,9 +61,17 @@ async function pullAll(d: Device, cursor: SharedFolderCursor | null = null) {
   const source = createSharedFolderSource(() => hostOf(d));
   const batches: Batch<SharedFolderCursor, SharedFileItem>[] = [];
   for await (const b of source.pull(session(), cursor)) batches.push(b);
-  const docs = batches.flatMap((b) => b.items).map((i) => source.toDocument(i) as DocumentInput);
+  const docs = batches
+    .flatMap((b) => b.items)
+    .map((i) => source.toDocument(i) as DocumentInput);
   const deletions = batches.flatMap((b) => b.deletions ?? []);
-  return { source, batches, docs, deletions, cursor: batches[batches.length - 1]?.cursor ?? cursor };
+  return {
+    source,
+    batches,
+    docs,
+    deletions,
+    cursor: batches[batches.length - 1]?.cursor ?? cursor,
+  };
 }
 async function leader() {
   const d = await device('leader');
@@ -91,7 +122,9 @@ it('two Macs with different absolute roots produce the same document for the sam
   await copy.svc.settled();
   const a = await pullAll(lead);
   const b = await pullAll(copy);
-  expect(a.docs.map((x) => ({ ...x, createdAt: undefined }))).toEqual(b.docs.map((x) => ({ ...x, createdAt: undefined })));
+  expect(a.docs.map((x) => ({ ...x, createdAt: undefined }))).toEqual(
+    b.docs.map((x) => ({ ...x, createdAt: undefined })),
+  );
   expect(lead.dir).not.toBe(copy.dir);
 });
 
@@ -111,7 +144,8 @@ it('a deleted row archives its document; a missing_here row neither emits nor de
   expect(ids(docs)).toEqual(['sorted/keep.txt']);
   expect(deletions).toEqual([{ externalId: 'sorted/gone.txt', type: 'file' }]);
   const listed: string[] = [];
-  for await (const page of source.reconcile!(session())) listed.push(...page.map((r) => r.externalId));
+  for await (const page of source.reconcile!(session()))
+    listed.push(...page.map((r) => r.externalId));
   expect(listed.sort()).toEqual(['sorted/away.txt', 'sorted/keep.txt']); // the missing_here row keeps its document
 });
 
@@ -123,12 +157,18 @@ it('a file moved from Incoming to Sorted ends as one live document', async () =>
   const first = await pullAll(d);
   const live = new Map(first.docs.map((x) => [x.externalId, x]));
   fs.mkdirSync(path.join(sorted, 'Tax'));
-  fs.renameSync(path.join(incoming, 'scan.txt'), path.join(sorted, 'Tax', 'scan.txt'));
+  fs.renameSync(
+    path.join(incoming, 'scan.txt'),
+    path.join(sorted, 'Tax', 'scan.txt'),
+  );
   await scan(d);
   const second = await pullAll(d, first.cursor);
   for (const x of second.docs) live.set(x.externalId, x);
   for (const r of second.deletions) live.delete(r.externalId);
-  expect([...live.keys()].sort()).toEqual(['incoming/other.txt', 'sorted/Tax/scan.txt']);
+  expect([...live.keys()].sort()).toEqual([
+    'incoming/other.txt',
+    'sorted/Tax/scan.txt',
+  ]);
 });
 
 it('the cursor makes the next pull incremental, and an edit is emitted again', async () => {
@@ -192,7 +232,10 @@ it('a missing_here row emits nothing even though an older version of the file is
   write(path.join(sorted, 'a.txt'), 'older version');
   write(path.join(sorted, 'b.txt'), 'other');
   await scan(d);
-  await d.db.run(`UPDATE shared_files SET sha256 = ?, missing_here = 1, rev = 900 WHERE rel_path = 'a.txt'`, [sha('newer')]);
+  await d.db.run(
+    `UPDATE shared_files SET sha256 = ?, missing_here = 1, rev = 900 WHERE rel_path = 'a.txt'`,
+    [sha('newer')],
+  );
   const { docs, deletions } = await pullAll(d);
   expect(ids(docs)).toEqual(['sorted/b.txt']);
   expect(deletions).toEqual([]);
@@ -205,9 +248,12 @@ it('a file that changes while it is read is not emitted from mixed bytes; the sc
   write(path.join(sorted, 'b.txt'), 'other');
   await scan(d);
   const real = fs.promises.readFile.bind(fs.promises);
-  const spy = jest.spyOn(fs.promises, 'readFile').mockImplementation((async (...args: unknown[]) => {
+  const spy = jest.spyOn(fs.promises, 'readFile').mockImplementation((async (
+    ...args: unknown[]
+  ) => {
     const out = await (real as (...a: unknown[]) => Promise<unknown>)(...args);
-    if (String(args[0]) === file) fs.writeFileSync(file, 'second version, longer');
+    if (String(args[0]) === file)
+      fs.writeFileSync(file, 'second version, longer');
     return out;
   }) as never);
   try {
@@ -218,7 +264,10 @@ it('a file that changes while it is read is not emitted from mixed bytes; the sc
     spy.mockRestore();
   }
   await scan(d);
-  expect(ids((await pullAll(d)).docs)).toEqual(['sorted/a.txt', 'sorted/b.txt']);
+  expect(ids((await pullAll(d)).docs)).toEqual([
+    'sorted/a.txt',
+    'sorted/b.txt',
+  ]);
 });
 
 it('an archive or mailbox is findable by name, not expanded', async () => {
@@ -227,9 +276,15 @@ it('an archive or mailbox is findable by name, not expanded', async () => {
   await scan(d);
   const { docs } = await pullAll(d);
   expect(docs).toHaveLength(1);
-  expect(docs[0]).toMatchObject({ externalId: 'sorted/bundle.zip', type: 'file' });
+  expect(docs[0]).toMatchObject({
+    externalId: 'sorted/bundle.zip',
+    type: 'file',
+  });
   expect(docs[0].markdown ?? null).toBeNull();
-  expect(docs[0].metadata).toMatchObject({ root: 'sorted', relPath: 'bundle.zip' });
+  expect(docs[0].metadata).toMatchObject({
+    root: 'sorted',
+    relPath: 'bundle.zip',
+  });
 });
 
 it('reconcile lists every row that is not deleted, in pages', async () => {
@@ -239,12 +294,18 @@ it('reconcile lists every row that is not deleted, in pages', async () => {
     steps.push({
       sql: `INSERT INTO shared_files(root, rel_path, sha256, bytes, mtime, missing_here, deleted, parked, rev)
             VALUES('sorted', ?, 'h', 1, 't', ?, ?, 0, ?)`,
-      params: [`f${String(i).padStart(4, '0')}.txt`, i % 10 === 0 ? 1 : 0, i % 7 === 0 ? 1 : 0, i + 1],
+      params: [
+        `f${String(i).padStart(4, '0')}.txt`,
+        i % 10 === 0 ? 1 : 0,
+        i % 7 === 0 ? 1 : 0,
+        i + 1,
+      ],
     });
   await d.db.batch(steps);
   const source = createSharedFolderSource(() => hostOf(d));
   const pages: string[][] = [];
-  for await (const page of source.reconcile!(session())) pages.push(page.map((r) => r.externalId));
+  for await (const page of source.reconcile!(session()))
+    pages.push(page.map((r) => r.externalId));
   const all = pages.flat();
   expect(pages.length).toBeGreaterThan(1);
   expect(new Set(all).size).toBe(all.length);
@@ -254,14 +315,15 @@ it('reconcile lists every row that is not deleted, in pages', async () => {
 });
 
 describe('fetchBytes', () => {
-  const doc = (externalId: string): Document => ({ accountId: 'acct-shared', externalId } as never);
+  const doc = (externalId: string): Document =>
+    ({ accountId: 'acct-shared', externalId }) as never;
   const addAccount = (d: Device) =>
     d.db.run(
       `INSERT INTO accounts(id, source, identifier, config, status, created_at)
        VALUES('acct-shared', 'shared-folder', 'shared', '{}', 'connecting', 'now')`,
     );
 
-  it('reads the file at this Mac\'s own path for the document', async () => {
+  it("reads the file at this Mac's own path for the document", async () => {
     const { d, sorted } = await leader();
     await addAccount(d);
     write(path.join(sorted, 'tax', 'a.txt'), 'hello');
@@ -276,10 +338,21 @@ describe('fetchBytes', () => {
     await addAccount(d);
     write(path.join(sorted, 'a.txt'), 'hello');
     const source = createSharedFolderSource(() => hostOf(d));
-    expect(await source.fetchBytes!(session(), doc('sorted/none.txt'))).toBeNull();
-    expect(await source.fetchBytes!(session(), doc('sorted/../a.txt'))).toBeNull();
-    expect(await source.fetchBytes!(session(), doc('elsewhere/a.txt'))).toBeNull();
-    expect(await source.fetchBytes!(session(), { accountId: 'other', externalId: 'sorted/a.txt' } as never)).toBeNull();
+    expect(
+      await source.fetchBytes!(session(), doc('sorted/none.txt')),
+    ).toBeNull();
+    expect(
+      await source.fetchBytes!(session(), doc('sorted/../a.txt')),
+    ).toBeNull();
+    expect(
+      await source.fetchBytes!(session(), doc('elsewhere/a.txt')),
+    ).toBeNull();
+    expect(
+      await source.fetchBytes!(session(), {
+        accountId: 'other',
+        externalId: 'sorted/a.txt',
+      } as never),
+    ).toBeNull();
     await d.svc.setRoots({ incoming: null, sorted: null });
     expect(await source.fetchBytes!(session(), doc('sorted/a.txt'))).toBeNull();
   });
@@ -341,8 +414,15 @@ describe('a root that is owed its reconcile', () => {
     const { sorted } = await withRoots(d);
     write(path.join(sorted, 'a.txt'), 'hello world');
     const source = createSharedFolderSource(() => hostOf(d));
-    const doc = { accountId: 'x', externalId: 'sorted/a.txt' } as unknown as Document;
-    await d.db.run(`INSERT INTO accounts(id, source, identifier, config, status, created_at) VALUES('x','shared-folder','shared','{}','connected','t')`).catch(() => {});
+    const doc = {
+      accountId: 'x',
+      externalId: 'sorted/a.txt',
+    } as unknown as Document;
+    await d.db
+      .run(
+        `INSERT INTO accounts(id, source, identifier, config, status, created_at) VALUES('x','shared-folder','shared','{}','connected','t')`,
+      )
+      .catch(() => {});
     expect(await source.fetchBytes!(session(), doc)).toBeNull();
   });
 });
@@ -366,7 +446,10 @@ describe('a path from another device through a symlinked directory', () => {
     const { docs } = await pullAll(d);
     expect(ids(docs)).toEqual(['sorted/ok.txt']);
     const source = createSharedFolderSource(() => hostOf(d));
-    const doc = { accountId: 'acct-shared', externalId: 'sorted/Tax/report.txt' } as never;
+    const doc = {
+      accountId: 'acct-shared',
+      externalId: 'sorted/Tax/report.txt',
+    } as never;
     expect(await source.fetchBytes!(session(), doc)).toBeNull();
     expect(await d.svc.pathOf(doc)).toBeNull();
   });
@@ -384,22 +467,40 @@ describe('older bytes are never indexed as the current file', () => {
     write(path.join(sorted, 'c.txt'), 'sea');
     await scan(d);
     // the leader's disk holds an older version than the row names
-    await d.db.run(`UPDATE shared_files SET sha256 = ? WHERE rel_path = 'a.txt'`, [sha('version two')]);
-    await d.db.run(`UPDATE shared_files SET missing_here = 1 WHERE rel_path = 'b.txt'`);
-    await d.db.run(`UPDATE shared_files SET deleted = 1 WHERE rel_path = 'c.txt'`);
+    await d.db.run(
+      `UPDATE shared_files SET sha256 = ? WHERE rel_path = 'a.txt'`,
+      [sha('version two')],
+    );
+    await d.db.run(
+      `UPDATE shared_files SET missing_here = 1 WHERE rel_path = 'b.txt'`,
+    );
+    await d.db.run(
+      `UPDATE shared_files SET deleted = 1 WHERE rel_path = 'c.txt'`,
+    );
     const { docs } = await pullAll(d);
     expect(ids(docs)).toEqual([]);
     const source = createSharedFolderSource(() => hostOf(d));
     for (const rel of ['a', 'b', 'c'])
-      expect(await source.fetchBytes!(session(), { accountId: 'acct-shared', externalId: `sorted/${rel}.txt` } as never)).toBeNull();
+      expect(
+        await source.fetchBytes!(session(), {
+          accountId: 'acct-shared',
+          externalId: `sorted/${rel}.txt`,
+        } as never),
+      ).toBeNull();
     // the row and the file agree again: it is indexed, and its bytes are served
-    await d.db.run(`UPDATE shared_files SET sha256 = ? WHERE rel_path = 'a.txt'`, [sha('version one')]);
+    await d.db.run(
+      `UPDATE shared_files SET sha256 = ? WHERE rel_path = 'a.txt'`,
+      [sha('version one')],
+    );
     expect(ids((await pullAll(d)).docs)).toEqual(['sorted/a.txt']);
-    const bytes = await source.fetchBytes!(session(), { accountId: 'acct-shared', externalId: 'sorted/a.txt' } as never);
+    const bytes = await source.fetchBytes!(session(), {
+      accountId: 'acct-shared',
+      externalId: 'sorted/a.txt',
+    } as never);
     expect(Buffer.from(bytes!).toString()).toBe('version one');
   });
 
-  it('the document carries the hash of the bytes it was parsed from, which is the row\'s', async () => {
+  it("the document carries the hash of the bytes it was parsed from, which is the row's", async () => {
     const { d, sorted } = await leader();
     write(path.join(sorted, 'a.txt'), 'hello world');
     await scan(d);
@@ -410,7 +511,11 @@ describe('older bytes are never indexed as the current file', () => {
 
 describe('a file that could not be read is indexed when it can be', () => {
   const rev = async (d: Device, rel: string) =>
-    Number((await d.db.all(`SELECT rev FROM shared_files WHERE rel_path = ?`, [rel]))[0]?.rev);
+    Number(
+      (
+        await d.db.all(`SELECT rev FROM shared_files WHERE rel_path = ?`, [rel])
+      )[0]?.rev,
+    );
 
   it('is listed again once it is readable, and not more than once per interval while it stays unreadable', async () => {
     const { d, sorted } = await leader();
@@ -420,7 +525,9 @@ describe('a file that could not be read is indexed when it can be', () => {
     const first = await pullAll(d, null);
     expect(ids(first.docs)).toEqual(['sorted/a.txt']);
     // the file is touched by another program: unreadable when the row is parsed again
-    await d.db.run(`UPDATE shared_files SET rev = rev + 100 WHERE rel_path = 'a.txt'`);
+    await d.db.run(
+      `UPDATE shared_files SET rev = rev + 100 WHERE rel_path = 'a.txt'`,
+    );
     fs.chmodSync(file, 0o000);
     try {
       const second = await pullAll(d, first.cursor);
@@ -445,8 +552,11 @@ describe('a file that could not be read is indexed when it can be', () => {
     write(path.join(sorted, 'a.txt'), 'x');
     await scan(d);
     const host = hostOf(d);
-    const stamp = async () => Number((await d.db.all(`SELECT rev FROM shared_files`))[0].rev);
-    await host.sharedFolders.reportUnparsed([{ root: 'sorted', relPath: 'a.txt' }]);
+    const stamp = async () =>
+      Number((await d.db.all(`SELECT rev FROM shared_files`))[0].rev);
+    await host.sharedFolders.reportUnparsed([
+      { root: 'sorted', relPath: 'a.txt' },
+    ]);
     const r0 = await stamp();
     await scan(d);
     expect(await stamp()).toBe(r0); // too soon: the file did not change
@@ -454,26 +564,36 @@ describe('a file that could not be read is indexed when it can be', () => {
     await scan(d);
     const r1 = await stamp();
     expect(r1).toBeGreaterThan(r0);
-    await host.sharedFolders.reportUnparsed([{ root: 'sorted', relPath: 'a.txt' }]); // failed again
+    await host.sharedFolders.reportUnparsed([
+      { root: 'sorted', relPath: 'a.txt' },
+    ]); // failed again
     await scan(d);
     expect(await stamp()).toBe(r1);
     write(path.join(sorted, 'a.txt'), 'x'); // touched: the stat changed
-    fs.utimesSync(path.join(sorted, 'a.txt'), new Date('2027-01-01'), new Date('2027-01-01'));
+    fs.utimesSync(
+      path.join(sorted, 'a.txt'),
+      new Date('2027-01-01'),
+      new Date('2027-01-01'),
+    );
     await scan(d);
     expect(await stamp()).toBeGreaterThan(r1);
   });
 
-  it('is tried again by the leader\'s own timer, without any file event', async () => {
+  it("is tried again by the leader's own timer, without any file event", async () => {
     const d = await device('leader', { retryMs: 20 });
     const { sorted } = await withRoots(d);
     write(path.join(sorted, 'a.txt'), 'x');
     await scan(d);
     await d.svc.reportUnparsed([{ root: 'sorted', relPath: 'a.txt' }]);
-    const before = Number((await d.db.all(`SELECT rev FROM shared_files`))[0].rev);
+    const before = Number(
+      (await d.db.all(`SELECT rev FROM shared_files`))[0].rev,
+    );
     d.clock.t += 61_000;
     await new Promise((r) => setTimeout(r, 120));
     await d.svc.settled();
-    expect(Number((await d.db.all(`SELECT rev FROM shared_files`))[0].rev)).toBeGreaterThan(before);
+    expect(
+      Number((await d.db.all(`SELECT rev FROM shared_files`))[0].rev),
+    ).toBeGreaterThan(before);
   });
 
   it('survives a restart', async () => {
@@ -481,11 +601,15 @@ describe('a file that could not be read is indexed when it can be', () => {
     write(path.join(sorted, 'a.txt'), 'x');
     await scan(d);
     await d.svc.reportUnparsed([{ root: 'sorted', relPath: 'a.txt' }]);
-    const before = Number((await d.db.all(`SELECT rev FROM shared_files`))[0].rev);
+    const before = Number(
+      (await d.db.all(`SELECT rev FROM shared_files`))[0].rev,
+    );
     const again = await d.restart();
     d.clock.t += 61_000;
     again.kick();
     await again.settled();
-    expect(Number((await d.db.all(`SELECT rev FROM shared_files`))[0].rev)).toBeGreaterThan(before);
+    expect(
+      Number((await d.db.all(`SELECT rev FROM shared_files`))[0].rev),
+    ).toBeGreaterThan(before);
   });
 });

@@ -375,9 +375,7 @@ export function wrapAccountChannels(
       'forward' | 'readOnly' | 'ownsAccount' | 'masterName'
     >;
     ops: AccountOps;
-    account(
-      id: string,
-    ): Promise<{ source: string; identifier: string } | null>;
+    account(id: string): Promise<{ source: string; identifier: string } | null>;
     newId(): string;
   },
 ): Map<string, (req: unknown) => Promise<unknown>> {
@@ -387,7 +385,10 @@ export function wrapAccountChannels(
     if (!fn) continue;
     const idOf = (req: unknown): string =>
       isPlain(req) && isText(req.accountId) ? req.accountId : '';
-    const here = async (opId: string | null, req: unknown): Promise<unknown> => {
+    const here = async (
+      opId: string | null,
+      req: unknown,
+    ): Promise<unknown> => {
       const id = idOf(req);
       const key = id ? await accountKeyOf(d.account, id) : channel;
       return d.ops.run(opId, key, async () => fn(req));

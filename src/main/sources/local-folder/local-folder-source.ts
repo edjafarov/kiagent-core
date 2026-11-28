@@ -556,7 +556,11 @@ export async function* pull(
     if (rootPaths.some((root) => !working?.roots?.[root])) {
       for (const root of rootPaths) {
         // eslint-disable-next-line @typescript-eslint/no-unused-vars, no-await-in-loop
-        for await (const _path of walkPaths(root, undefined, deps.excluded?.())) {
+        for await (const _path of walkPaths(
+          root,
+          undefined,
+          deps.excluded?.(),
+        )) {
           if (session.signal.aborted) return;
           estimateTotal += 1;
         }

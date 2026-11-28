@@ -23,7 +23,11 @@ export function descriptor(
   extra: Record<string, unknown> = {},
   objects: string[] = ['notes', 'blobs', 'local_x'],
 ): PluginDatabaseDescriptor {
-  const sql: Record<string, string> = { notes: NOTES, blobs: BLOBS, local_x: LOCAL };
+  const sql: Record<string, string> = {
+    notes: NOTES,
+    blobs: BLOBS,
+    local_x: LOCAL,
+  };
   return parseDatabaseDescriptor({
     format: 1,
     objects: objects.map((name) => ({ name, kind: 'table' })),
@@ -72,7 +76,11 @@ export function addOutbox(
   ).run(id, accountId, status);
 }
 
-export function addDraft(c: BetterSqlite3.Database, accountId: string, id: string): void {
+export function addDraft(
+  c: BetterSqlite3.Database,
+  accountId: string,
+  id: string,
+): void {
   c.prepare(
     `INSERT INTO event_drafts(id, account_id, payload_json, fingerprint, confirm_mode, status,
                               created_via, created_at, updated_at, expires_at, touched_at, touched_via)

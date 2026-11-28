@@ -10,7 +10,10 @@ const CORE_LABELS: Record<UserPrefKey, string> = {
 };
 
 export const FOLLOWS_USER: readonly { label: string; keys: string[] }[] = [
-  ...USER_PREF_KEYS.map((k) => ({ label: CORE_LABELS[k], keys: [`core.${k}`] })),
+  ...USER_PREF_KEYS.map((k) => ({
+    label: CORE_LABELS[k],
+    keys: [`core.${k}`],
+  })),
   { label: 'Connectors on/off', keys: ['core.extensions'] },
   {
     label: 'Meetings settings',
@@ -25,5 +28,8 @@ export const FOLLOWS_USER: readonly { label: string; keys: string[] }[] = [
       'audioRetentionDays',
     ].map((f) => `kiagent.meetings.${f}`),
   },
-  { label: 'Documents sorting description', keys: ['kiagent.documents.description'] },
+  {
+    label: 'Documents sorting description',
+    keys: ['kiagent.documents.description'],
+  },
 ];

@@ -20,7 +20,13 @@ import {
   primaryKeyColumns,
 } from './tables';
 
-export const SWAP_STEPS = ['committed', 'merged', 'archived', 'replaced', 'outcome'] as const;
+export const SWAP_STEPS = [
+  'committed',
+  'merged',
+  'archived',
+  'replaced',
+  'outcome',
+] as const;
 type SwapStep =
   | (typeof SWAP_STEPS)[number]
   | 'incoming-renamed'
@@ -53,7 +59,8 @@ export interface RecoverySwapOpts {
 
 /** A journal that carries a mark is a recovery swap (journals written before
  *  the archive went also carried `keepArchive: true`; the mark is enough). */
-const isRecovery = (j: Partial<Journal>): boolean => typeof j.markId === 'string';
+const isRecovery = (j: Partial<Journal>): boolean =>
+  typeof j.markId === 'string';
 
 const journalPath = (db: string) => `${db}.swap.json`;
 const incomingPath = (db: string) => `${db}.swap-incoming`;
@@ -68,7 +75,9 @@ const hasMergeMarker = (file: string, sha256: string | undefined): boolean => {
   let db: Database.Database | null = null;
   try {
     db = new Database(file, { readonly: true });
-    const r = db.prepare(`SELECT sha256 FROM ${MERGE_MARKER}`).all() as { sha256: string }[];
+    const r = db.prepare(`SELECT sha256 FROM ${MERGE_MARKER}`).all() as {
+      sha256: string;
+    }[];
     return r.length === 1 && r[0].sha256 === sha256;
   } catch {
     return false;
@@ -88,11 +97,19 @@ const dropMergeMarker = (file: string): void => {
 
 /** The swap's result, durable before the journal goes: the join reads it at
  *  boot and must never be told nothing happened when it did. */
-const writeOutcome = (db: string, v: 'swapped' | 'abandoned', j: Journal): void => {
+const writeOutcome = (
+  db: string,
+  v: 'swapped' | 'abandoned',
+  j: Journal,
+): void => {
   const tmp = `${swapOutcomePath(db)}.tmp`;
   fs.writeFileSync(
     tmp,
-    JSON.stringify({ outcome: v, markId: j.markId ?? null, attempt: j.attempt ?? null }),
+    JSON.stringify({
+      outcome: v,
+      markId: j.markId ?? null,
+      attempt: j.attempt ?? null,
+    }),
   );
   fs.renameSync(tmp, swapOutcomePath(db));
 };
@@ -106,7 +123,11 @@ const writeJournal = (db: string, j: Journal): void => {
 const roleOf = (dbPath: string): string | undefined => {
   const db = new Database(dbPath, { readonly: true });
   try {
-    return (db.prepare(`SELECT role FROM sync_state`).get() as { role: string } | undefined)?.role;
+    return (
+      db.prepare(`SELECT role FROM sync_state`).get() as
+        | { role: string }
+        | undefined
+    )?.role;
   } finally {
     db.close();
   }
@@ -131,11 +152,18 @@ const readJournalLoose = (dbPath: string): Partial<Journal> | null => {
   }
 };
 
-const isOwnJournal = (j: Partial<Journal>, markId: string, attempt: number): boolean =>
-  j.markId === markId && j.attempt === attempt;
+const isOwnJournal = (
+  j: Partial<Journal>,
+  markId: string,
+  attempt: number,
+): boolean => j.markId === markId && j.attempt === attempt;
 
 /** A pending swap or restore that this mark and attempt did not prepare. */
-const foreignPending = (dbPath: string, markId: string, attempt: number): boolean => {
+const foreignPending = (
+  dbPath: string,
+  markId: string,
+  attempt: number,
+): boolean => {
   if (fs.existsSync(restorePath(dbPath))) return true;
   const j = readJournalLoose(dbPath);
   return j !== null && !isOwnJournal(j, markId, attempt);
@@ -150,28 +178,45 @@ export function prepareSwap(
   freeOrOpts?: (() => number) | RecoverySwapOpts,
   maybeOpts?: RecoverySwapOpts,
 ): 'ready' | 'no-disk' | 'invalid' | 'pending' {
-  const freeBytes = typeof freeOrOpts === 'function' ? freeOrOpts : defaultFree(dbPath);
-  const opts = typeof freeOrOpts === 'function' || freeOrOpts === undefined ? maybeOpts : freeOrOpts;
+  const freeBytes =
+    typeof freeOrOpts === 'function' ? freeOrOpts : defaultFree(dbPath);
+  const opts =
+    typeof freeOrOpts === 'function' || freeOrOpts === undefined
+      ? maybeOpts
+      : freeOrOpts;
   // A recovery swap never replaces a journal that is not its own: that
   // one is another swap (or a restore) the caller must discard on purpose.
-  if (opts && foreignPending(dbPath, opts.markId, opts.attempt)) return 'pending';
+  if (opts && foreignPending(dbPath, opts.markId, opts.attempt))
+    return 'pending';
   if (hashFile(file) !== sha256) return 'invalid';
   // The file was already downloaded here, so only the local tables are new.
   // They can't outgrow the database they come from.
-  const wal = fs.existsSync(`${dbPath}-wal`) ? fs.statSync(`${dbPath}-wal`).size : 0;
+  const wal = fs.existsSync(`${dbPath}-wal`)
+    ? fs.statSync(`${dbPath}-wal`).size
+    : 0;
   const needed = fs.statSync(dbPath).size + wal;
   if (freeBytes() < needed) return 'no-disk';
   fs.renameSync(file, incomingPath(dbPath));
   fs.rmSync(swapOutcomePath(dbPath), { force: true });
   if (opts) {
     // A recovery swap deletes the old file: no archive is named.
-    writeJournal(dbPath, { masterDeviceId, merged: false, sha256, markId: opts.markId, attempt: opts.attempt });
+    writeJournal(dbPath, {
+      masterDeviceId,
+      merged: false,
+      sha256,
+      markId: opts.markId,
+      attempt: opts.attempt,
+    });
     return 'ready';
   }
   const stamp = new Date().toISOString().replace(/\D/g, '').slice(0, 14);
   // A second archive within the same second must not replace the first.
   let archive = `${dbPath}.archive-${stamp}`;
-  for (let i = 1; fs.existsSync(archive) || fs.existsSync(sidecarPath(archive)); i++) {
+  for (
+    let i = 1;
+    fs.existsSync(archive) || fs.existsSync(sidecarPath(archive));
+    i++
+  ) {
     archive = `${dbPath}.archive-${stamp}-${i}`;
   }
   writeJournal(dbPath, {
@@ -224,13 +269,27 @@ export function swapStatus(dbPath: string): {
     } catch {
       /* unreadable journal: still pending */
     }
-    return { pending: 'swap', outcome, markId: j.markId ?? null, attempt: j.attempt ?? null };
+    return {
+      pending: 'swap',
+      outcome,
+      markId: j.markId ?? null,
+      attempt: j.attempt ?? null,
+    };
   }
-  return { pending: null, outcome, markId: r?.markId ?? null, attempt: r?.attempt ?? null };
+  return {
+    pending: null,
+    outcome,
+    markId: r?.markId ?? null,
+    attempt: r?.attempt ?? null,
+  };
 }
 
 /** Removes the outcome only when it is the one for this mark and attempt. */
-export async function clearSwapStatus(dbPath: string, markId: string, attempt: number): Promise<void> {
+export async function clearSwapStatus(
+  dbPath: string,
+  markId: string,
+  attempt: number,
+): Promise<void> {
   const r = readSwapRecord(dbPath);
   if (r && r.markId === markId && r.attempt === attempt) {
     fs.rmSync(swapOutcomePath(dbPath), { force: true });
@@ -269,22 +328,34 @@ function mergeLocalTables(
       // newly syncs must come from the snapshot and not be created again from
       // this device's own copy of it.
       const copiedNames = new Set(JSON.parse(meta.copied) as string[]);
-      const copied = (name: string) => copiedNames.has(name) || isDerivedTable(name);
+      const copied = (name: string) =>
+        copiedNames.has(name) || isDerivedTable(name);
       const defs = db
         .prepare(
           `SELECT type, name, tbl_name, sql FROM old.sqlite_master
            WHERE sql IS NOT NULL AND name NOT LIKE 'sqlite_%'`,
         )
-        .all() as { type: string; name: string; tbl_name: string; sql: string }[];
+        .all() as {
+        type: string;
+        name: string;
+        tbl_name: string;
+        sql: string;
+      }[];
       const shadow = new Set(
         (
           db
-            .prepare(`SELECT name FROM pragma_table_list WHERE schema='old' AND type='shadow'`)
+            .prepare(
+              `SELECT name FROM pragma_table_list WHERE schema='old' AND type='shadow'`,
+            )
             .all() as { name: string }[]
         ).map((r) => r.name),
       );
       const localTables = defs.filter(
-        (d) => d.type === 'table' && !copied(d.name) && !shadow.has(d.name) && d.name !== MERGE_MARKER,
+        (d) =>
+          d.type === 'table' &&
+          !copied(d.name) &&
+          !shadow.has(d.name) &&
+          d.name !== MERGE_MARKER,
       );
       const isVirtual = (sql: string) => /^CREATE\s+VIRTUAL/i.test(sql);
       // A recovery swap takes the snapshot's join state: the old file's
@@ -299,22 +370,36 @@ function mergeLocalTables(
       }
       for (const s of shadow) {
         if (copied(s)) continue;
-        db.exec(`DELETE FROM main."${s}"; INSERT INTO main."${s}" SELECT * FROM old."${s}";`);
+        db.exec(
+          `DELETE FROM main."${s}"; INSERT INTO main."${s}" SELECT * FROM old."${s}";`,
+        );
       }
       // Owner-capture tables (step 3): the master's rows come with the
       // snapshot, and this device's own rows of them stay, listed in
       // `sync_retained` so the extension can send each one to the leader.
       for (const t of ownerCaptureTables(db, 'old')) {
         if (!copiedNames.has(t)) continue; // not synced there: already carried
-        const mine = db.prepare(`SELECT 1 FROM main.sqlite_master WHERE type='table' AND name = ?`).get(t);
+        const mine = db
+          .prepare(
+            `SELECT 1 FROM main.sqlite_master WHERE type='table' AND name = ?`,
+          )
+          .get(t);
         if (!mine) continue;
         const pk = primaryKeyColumns(db, t, 'old');
         if (pk.length === 0) continue;
-        const rows = db.prepare(`SELECT ${pk.map((c) => `"${c}"`).join(', ')} FROM old."${t}"`).all() as Record<string, unknown>[];
+        const rows = db
+          .prepare(
+            `SELECT ${pk.map((c) => `"${c}"`).join(', ')} FROM old."${t}"`,
+          )
+          .all() as Record<string, unknown>[];
         db.exec(`INSERT OR IGNORE INTO main."${t}" SELECT * FROM old."${t}"`);
         // An old file from before this table existed has none to copy.
-        db.exec(`CREATE TABLE IF NOT EXISTS main.sync_retained (tbl TEXT NOT NULL, pk TEXT NOT NULL, PRIMARY KEY (tbl, pk))`);
-        const note = db.prepare(`INSERT OR IGNORE INTO main.sync_retained(tbl, pk) VALUES(?, ?)`);
+        db.exec(
+          `CREATE TABLE IF NOT EXISTS main.sync_retained (tbl TEXT NOT NULL, pk TEXT NOT NULL, PRIMARY KEY (tbl, pk))`,
+        );
+        const note = db.prepare(
+          `INSERT OR IGNORE INTO main.sync_retained(tbl, pk) VALUES(?, ?)`,
+        );
         for (const r of rows) note.run(t, JSON.stringify(pk.map((c) => r[c])));
       }
       for (const d of defs) {
@@ -329,9 +414,9 @@ function mergeLocalTables(
           WHERE ${recovery ? `name <> 'sync_rows'` : '1'};`,
       );
       if (recovery) {
-        db.prepare(`INSERT INTO main.sqlite_sequence(name, seq) VALUES('sync_rows', ?)`).run(
-          meta.after_cursor,
-        );
+        db.prepare(
+          `INSERT INTO main.sqlite_sequence(name, seq) VALUES('sync_rows', ?)`,
+        ).run(meta.after_cursor);
       }
       // Followers read `changes` through headSeq and the feed. Delete rather
       // than drop, so sqlite_sequence keeps numbers from being reused.
@@ -345,10 +430,18 @@ function mergeLocalTables(
         `UPDATE main.sync_state SET role = 'follower', tracking = 0, joining = 0,
            after_seq = ?, after_cursor = ?, history_id = ?, master_device_id = ?, epoch = ?,
            pre_demote_epoch = NULL${recovery ? ', joined = 1' : ''}`,
-      ).run(meta.after_seq, meta.after_cursor, meta.history_id, masterDeviceId, meta.epoch);
+      ).run(
+        meta.after_seq,
+        meta.after_cursor,
+        meta.history_id,
+        masterDeviceId,
+        meta.epoch,
+      );
       db.exec(`DROP TABLE main.${SNAPSHOT_META}`);
       db.exec(`CREATE TABLE main.${MERGE_MARKER}(sha256 TEXT NOT NULL)`);
-      db.prepare(`INSERT INTO main.${MERGE_MARKER}(sha256) VALUES(?)`).run(sha256);
+      db.prepare(`INSERT INTO main.${MERGE_MARKER}(sha256) VALUES(?)`).run(
+        sha256,
+      );
     })();
     db.unsafeMode(false);
     db.exec(`DETACH old`);
@@ -372,7 +465,12 @@ export function prepareRestore(dbPath: string): 'ready' | 'no-archive' {
     .readdirSync(dir)
     // An archive with a sidecar is a leftover from an earlier version, a
     // history the account abandoned: never restored (the boot sweep removes it).
-    .filter((f) => f.startsWith(prefix) && /\d$/.test(f) && !fs.existsSync(sidecarPath(path.join(dir, f))))
+    .filter(
+      (f) =>
+        f.startsWith(prefix) &&
+        /\d$/.test(f) &&
+        !fs.existsSync(sidecarPath(path.join(dir, f))),
+    )
     .sort()
     .pop();
   if (!newest) return 'no-archive';
@@ -417,26 +515,38 @@ function mergeIntoArchive(archive: string, current: string): void {
           `SELECT type, name, tbl_name, sql FROM cur.sqlite_master
            WHERE sql IS NOT NULL AND name NOT LIKE 'sqlite_%'`,
         )
-        .all() as { type: string; name: string; tbl_name: string; sql: string }[];
+        .all() as {
+        type: string;
+        name: string;
+        tbl_name: string;
+        sql: string;
+      }[];
       const have = new Set(
-        (db.prepare(`SELECT name FROM main.sqlite_master`).all() as { name: string }[]).map(
-          (r) => r.name,
-        ),
+        (
+          db.prepare(`SELECT name FROM main.sqlite_master`).all() as {
+            name: string;
+          }[]
+        ).map((r) => r.name),
       );
       const shadow = new Set(
         (
           db
-            .prepare(`SELECT name FROM pragma_table_list WHERE schema='cur' AND type='shadow'`)
+            .prepare(
+              `SELECT name FROM pragma_table_list WHERE schema='cur' AND type='shadow'`,
+            )
             .all() as { name: string }[]
         ).map((r) => r.name),
       );
       const isVirtual = (sql: string) => /^CREATE\s+VIRTUAL/i.test(sql);
       const tables = defs.filter(
-        (d) => d.type === 'table' && !shadow.has(d.name) && carriedOnRestore(d.name),
+        (d) =>
+          d.type === 'table' && !shadow.has(d.name) && carriedOnRestore(d.name),
       );
       const cols = (schema: string, t: string) =>
         (
-          db.prepare(`SELECT name FROM pragma_table_info(?, ?)`).all(t, schema) as {
+          db
+            .prepare(`SELECT name FROM pragma_table_info(?, ?)`)
+            .all(t, schema) as {
             name: string;
           }[]
         ).map((c) => c.name);
@@ -447,21 +557,34 @@ function mergeIntoArchive(archive: string, current: string): void {
           // Their rows live in shadow tables; copying those spares a rebuild.
           for (const sh of shadow) {
             if (!sh.startsWith(`${t.name}_`)) continue;
-            db.exec(`DELETE FROM main."${sh}"; INSERT INTO main."${sh}" SELECT * FROM cur."${sh}";`);
+            db.exec(
+              `DELETE FROM main."${sh}"; INSERT INTO main."${sh}" SELECT * FROM cur."${sh}";`,
+            );
           }
           continue;
         }
-        const common = cols('main', t.name).filter((c) => cols('cur', t.name).includes(c));
+        const common = cols('main', t.name).filter((c) =>
+          cols('cur', t.name).includes(c),
+        );
         const list = common.map((c) => `"${c}"`).join(', ');
         db.exec(`DELETE FROM main."${t.name}"`);
-        if (list) db.exec(`INSERT INTO main."${t.name}"(${list}) SELECT ${list} FROM cur."${t.name}"`);
+        if (list)
+          db.exec(
+            `INSERT INTO main."${t.name}"(${list}) SELECT ${list} FROM cur."${t.name}"`,
+          );
         if (fresh) {
           for (const d of defs) {
-            if ((d.type === 'index' || d.type === 'trigger') && d.tbl_name === t.name) db.exec(d.sql);
+            if (
+              (d.type === 'index' || d.type === 'trigger') &&
+              d.tbl_name === t.name
+            )
+              db.exec(d.sql);
           }
         }
       }
-      const names = tables.map((t) => `'${t.name.replace(/'/g, "''")}'`).join(', ');
+      const names = tables
+        .map((t) => `'${t.name.replace(/'/g, "''")}'`)
+        .join(', ');
       if (names) {
         db.exec(
           `DELETE FROM main.sqlite_sequence WHERE name IN (${names});
@@ -503,7 +626,8 @@ function applyRestore(
       fs.renameSync(tmp, restorePath(dbPath));
       crashAt('restore-merged');
     }
-    for (const ext of ['', '-wal', '-shm']) fs.rmSync(`${dbPath}${ext}`, { force: true });
+    for (const ext of ['', '-wal', '-shm'])
+      fs.rmSync(`${dbPath}${ext}`, { force: true });
     moveIfThere(archive, dbPath);
     moveIfThere(`${archive}-wal`, `${dbPath}-wal`);
     moveIfThere(`${archive}-shm`, `${dbPath}-shm`);
@@ -582,14 +706,22 @@ export function applyPendingSwap(
       // A merged file counts only with the marker the merge transaction wrote
       // for this swap's snapshot; anything else is debris and goes.
       if (fs.existsSync(merged) && !hasMergeMarker(merged, j.sha256)) {
-        for (const ext of ['', '-wal', '-shm']) fs.rmSync(`${merged}${ext}`, { force: true });
+        for (const ext of ['', '-wal', '-shm'])
+          fs.rmSync(`${merged}${ext}`, { force: true });
       }
       if (!fs.existsSync(merged)) {
-        if (!fs.existsSync(incomingPath(dbPath))) throw new Error('swap: no snapshot to merge');
+        if (!fs.existsSync(incomingPath(dbPath)))
+          throw new Error('swap: no snapshot to merge');
         // Merged where it lies, so a crash leaves either an untouched snapshot
         // or one carrying its marker; then a rename.
         if (!hasMergeMarker(incomingPath(dbPath), j.sha256)) {
-          mergeLocalTables(incomingPath(dbPath), dbPath, j.masterDeviceId, j.sha256 ?? '', isRecovery(j));
+          mergeLocalTables(
+            incomingPath(dbPath),
+            dbPath,
+            j.masterDeviceId,
+            j.sha256 ?? '',
+            isRecovery(j),
+          );
         }
         fs.renameSync(incomingPath(dbPath), merged);
         try {
@@ -624,7 +756,8 @@ export function applyPendingSwap(
     // file holds changes the account moved on without: they are not kept.
     // Only while the merged file waits: a replay after the install must not
     // delete the installed database.
-    for (const ext of ['', '-wal', '-shm']) fs.rmSync(`${dbPath}${ext}`, { force: true });
+    for (const ext of ['', '-wal', '-shm'])
+      fs.rmSync(`${dbPath}${ext}`, { force: true });
     crashAt('archived');
   } else if (!deletesOld && j.archive && !fs.existsSync(j.archive)) {
     moveIfThere(dbPath, j.archive);

@@ -102,17 +102,22 @@ describe('createAttentionService', () => {
     const service = createAttentionService({ db, onChanged: jest.fn() });
     service.setExtensions([extension()]);
     await service.publish(producer, [item()]);
-    const rows = () =>
-      db._conn!.prepare(`SELECT * FROM attention_items`).all();
+    const rows = () => db._conn!.prepare(`SELECT * FROM attention_items`).all();
     const revisions = () =>
-      (db._conn!.prepare(`SELECT count(*) n FROM attention_revisions`).get() as { n: number }).n;
+      (
+        db
+          ._conn!.prepare(`SELECT count(*) n FROM attention_revisions`)
+          .get() as { n: number }
+      ).n;
 
     await service.act({ id: `${producer}:one`, action: 'dismiss' });
     const once = rows();
     const onceRevisions = revisions();
     expect(once).toEqual([expect.objectContaining({ state: 'resolved' })]);
 
-    await expect(service.act({ id: `${producer}:one`, action: 'dismiss' })).resolves.toBeUndefined();
+    await expect(
+      service.act({ id: `${producer}:one`, action: 'dismiss' }),
+    ).resolves.toBeUndefined();
     expect(rows()).toEqual(once);
     expect(revisions()).toBe(onceRevisions);
     await service.dispose();

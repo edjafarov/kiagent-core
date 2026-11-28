@@ -1330,7 +1330,7 @@ describe('createExtensionPlatform', () => {
       order.length = 0;
       wipe.mockClear();
       beforeCoreWipe.mockClear();
-      failing = ids[1];
+      [, failing] = ids;
       const result = await platform.resetAll({ beforeCoreWipe });
       expect(result.failed.map((f) => f.pluginId)).toEqual([failing]);
       expect(beforeCoreWipe).not.toHaveBeenCalled();

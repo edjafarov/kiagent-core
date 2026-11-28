@@ -829,17 +829,21 @@ export function createSyncService(deps: SyncServiceDeps): SyncService {
         >[0],
       ),
     discardQueued: async (rowId) => {
-      const row = (
+      const queuedRow = (
         await deps.db.all(
           `SELECT coalesce_key FROM sync_outbound WHERE id = ? AND coalesce_key IS NOT NULL`,
           [rowId],
         )
       )[0] as { coalesce_key: string } | undefined;
-      if (!row) return;
+      if (!queuedRow) return;
       await deps.db.run(`DELETE FROM sync_outbound WHERE id = ?`, [rowId]);
       retryAt.delete(rowId);
       spentLogged.delete(rowId);
-      fireQueue({ kind: 'discarded', rowId, coalesceKey: row.coalesce_key });
+      fireQueue({
+        kind: 'discarded',
+        rowId,
+        coalesceKey: queuedRow.coalesce_key,
+      });
     },
     drainOutbound,
     retained: async (table) =>
@@ -888,10 +892,10 @@ export function createSyncService(deps: SyncServiceDeps): SyncService {
     },
     loadOwned: async () => {
       if (!deviceId) {
-        const row = (
+        const stateRow = (
           await deps.db.all(`SELECT device_id FROM sync_state`)
         )[0] as { device_id: string | null } | undefined;
-        if (row?.device_id) deviceId = row.device_id;
+        if (stateRow?.device_id) deviceId = stateRow.device_id;
       }
       await refreshOwned();
     },
@@ -1157,9 +1161,9 @@ export function createSyncService(deps: SyncServiceDeps): SyncService {
       const gen = fenceGen;
       await refreshGate();
       if (opening) return opening;
-      if (fenceGen !== gen) return;
+      if (fenceGen !== gen) return undefined;
       if (row.role === 'follower' || row.joining) throw new SyncNotLeader();
-      if (!fenced) return;
+      if (!fenced) return undefined;
       if (kind === 'lease' && row.headPending) throw new SyncHeadPending();
       opening = (async () => {
         if (kind === 'head-acked') {

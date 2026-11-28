@@ -15,7 +15,13 @@ import { buildDelta, SyncStageInvalid, type SyncCursor } from '../delta';
 import { disableTracking, enableTracking } from '../tracking';
 import { readGateSync, SyncReadOnly } from '../role';
 import { createSyncService } from '../service';
-import { addAttention, addDraft, addOutbox, physical, registerPlugin } from './synced-plugin';
+import {
+  addAttention,
+  addDraft,
+  addOutbox,
+  physical,
+  registerPlugin,
+} from './synced-plugin';
 
 const deps = {
   encrypt: (s: string) => Buffer.from(s, 'utf8'),
@@ -56,9 +62,13 @@ const sync = () => {
 const rows = (c: Database.Database, tbl: string) =>
   c.prepare(`SELECT * FROM ${tbl} ORDER BY id`).all();
 const search = (c: Database.Database, term: string) =>
-  (c.prepare(`SELECT doc_id FROM documents_fts WHERE documents_fts MATCH ?`).all(term) as {
-    doc_id: string;
-  }[]).map((r) => r.doc_id);
+  (
+    c
+      .prepare(`SELECT doc_id FROM documents_fts WHERE documents_fts MATCH ?`)
+      .all(term) as {
+      doc_id: string;
+    }[]
+  ).map((r) => r.doc_id);
 const searchRowCount = (c: Database.Database) =>
   (c.prepare(`SELECT count(*) n FROM documents_tri`).get() as { n: number }).n;
 
@@ -72,7 +82,10 @@ beforeEach(async () => {
   dest = await openDb(path.join(dir, 'dst.db'));
   migrate(dst());
   dst().prepare(`UPDATE sync_state SET role = 'follower'`).run();
-  destTx = createWriteTx(dst(), { detectLanguages: () => ['eng'], now: () => new Date().toISOString() });
+  destTx = createWriteTx(dst(), {
+    detectLanguages: () => ['eng'],
+    now: () => new Date().toISOString(),
+  });
   reader = new Database(file, { readonly: true });
   stage = path.join(dir, 'stage');
   after = { seq: 0, cursor: 0 };
@@ -100,9 +113,13 @@ it('after applying, copied tables and search match the source', async () => {
 it('writes content_hash, seq and metadata verbatim', async () => {
   const a = await account();
   await commit(a.id, [doc('d1')]);
-  src().prepare(`UPDATE documents SET content_hash='custom', metadata='{"e":1}'`).run();
+  src()
+    .prepare(`UPDATE documents SET content_hash='custom', metadata='{"e":1}'`)
+    .run();
   sync();
-  expect(dst().prepare(`SELECT content_hash, metadata, seq FROM documents`).get()).toEqual(
+  expect(
+    dst().prepare(`SELECT content_hash, metadata, seq FROM documents`).get(),
+  ).toEqual(
     src().prepare(`SELECT content_hash, metadata, seq FROM documents`).get(),
   );
 });
@@ -111,8 +128,13 @@ it('adds a changes row per document with INSERT OR IGNORE', async () => {
   const a = await account();
   await commit(a.id, [doc('d1')]);
   sync();
-  const d = dst().prepare(`SELECT id, seq FROM documents`).get() as { id: string; seq: number };
-  expect(dst().prepare(`SELECT kind, ref_id FROM changes WHERE seq=?`).get(d.seq)).toEqual({
+  const d = dst().prepare(`SELECT id, seq FROM documents`).get() as {
+    id: string;
+    seq: number;
+  };
+  expect(
+    dst().prepare(`SELECT kind, ref_id FROM changes WHERE seq=?`).get(d.seq),
+  ).toEqual({
     kind: 'document',
     ref_id: d.id,
   });
@@ -123,9 +145,19 @@ it('deletes a tracked key with no row, including its search rows', async () => {
   const a = await account();
   await commit(a.id, [doc('d1', 'alpha')]);
   sync();
-  const id = (src().prepare(`SELECT id FROM documents`).get() as { id: string }).id;
-  src().prepare(`DELETE FROM documents_fts WHERE rowid=(SELECT rowid FROM documents WHERE id=?)`).run(id);
-  src().prepare(`DELETE FROM documents_tri WHERE rowid=(SELECT rowid FROM documents WHERE id=?)`).run(id);
+  const { id } = src().prepare(`SELECT id FROM documents`).get() as {
+    id: string;
+  };
+  src()
+    .prepare(
+      `DELETE FROM documents_fts WHERE rowid=(SELECT rowid FROM documents WHERE id=?)`,
+    )
+    .run(id);
+  src()
+    .prepare(
+      `DELETE FROM documents_tri WHERE rowid=(SELECT rowid FROM documents WHERE id=?)`,
+    )
+    .run(id);
   src().prepare(`DELETE FROM documents WHERE id=?`).run(id);
   sync();
   expect(rows(dst(), 'documents')).toEqual([]);
@@ -142,7 +174,9 @@ it('a truncated stage or wrong sha256 throws and moves nothing', async () => {
   fs.writeFileSync(stage, bytes.subarray(0, bytes.length - 10));
   expect(() => destTx.applyDelta(stage)).toThrow(SyncStageInvalid);
   expect(rows(dst(), 'documents')).toEqual([]);
-  expect(dst().prepare(`SELECT after_seq s FROM sync_state`).get()).toEqual({ s: 0 });
+  expect(dst().prepare(`SELECT after_seq s FROM sync_state`).get()).toEqual({
+    s: 0,
+  });
 });
 
 it('a failure mid-apply rolls back rows and cursor together', async () => {
@@ -154,7 +188,9 @@ it('a failure mid-apply rolls back rows and cursor together', async () => {
     (SELECT id FROM documents WHERE external_id='d2') BEGIN SELECT RAISE(ABORT,'boom'); END`);
   expect(() => destTx.applyDelta(stage)).toThrow(/boom/);
   expect(rows(dst(), 'documents')).toEqual([]);
-  expect(dst().prepare(`SELECT after_seq s FROM sync_state`).get()).toEqual({ s: 0 });
+  expect(dst().prepare(`SELECT after_seq s FROM sync_state`).get()).toEqual({
+    s: 0,
+  });
 });
 
 it('an interrupted then repeated apply of the same stage converges', async () => {
@@ -176,7 +212,9 @@ it('writes no sync_rows while applying, even with triggers present', async () =>
   dst().prepare(`UPDATE sync_state SET role = 'follower'`).run();
   dst().prepare(`DELETE FROM sync_rows`).run();
   sync();
-  expect(dst().prepare(`SELECT count(*) n FROM sync_rows`).get()).toEqual({ n: 0 });
+  expect(dst().prepare(`SELECT count(*) n FROM sync_rows`).get()).toEqual({
+    n: 0,
+  });
 });
 
 it('updating an account keeps its documents and updating a document keeps its rowid', async () => {
@@ -247,7 +285,9 @@ it('reset all leaves sync_state to SyncService.resetState, and wipes the data', 
   const destStore = openStore(dest, deps);
   await destStore.maintenance.resetAll();
   expect(dst().prepare(`SELECT * FROM sync_state`).get()).toEqual(before);
-  expect(dst().prepare(`SELECT count(*) n FROM documents`).get()).toEqual({ n: 0 });
+  expect(dst().prepare(`SELECT count(*) n FROM documents`).get()).toEqual({
+    n: 0,
+  });
 });
 
 it('reset all on a tracking master leaves no tracked rows', async () => {
@@ -255,7 +295,9 @@ it('reset all on a tracking master leaves no tracked rows', async () => {
   await commit(a.id, [doc('d1')]);
   enableTracking(src());
   await sourceStore.maintenance.resetAll();
-  expect(src().prepare(`SELECT count(*) n FROM sync_rows`).get()).toEqual({ n: 0 });
+  expect(src().prepare(`SELECT count(*) n FROM sync_rows`).get()).toEqual({
+    n: 0,
+  });
 });
 
 describe('rewind (step 2)', () => {
@@ -264,7 +306,10 @@ describe('rewind (step 2)', () => {
     await commit(a.id, [doc('d1')]);
     src().prepare(`UPDATE sync_state SET epoch = 4`).run();
     sync();
-    expect((dst().prepare(`SELECT epoch FROM sync_state`).get() as { epoch: number }).epoch).toBe(4);
+    expect(
+      (dst().prepare(`SELECT epoch FROM sync_state`).get() as { epoch: number })
+        .epoch,
+    ).toBe(4);
   });
 
   it('a follower ahead of the new master converges to its rows', async () => {
@@ -272,19 +317,36 @@ describe('rewind (step 2)', () => {
     await commit(a.id, [doc('d1', 'old master wrote this'), doc('d2')]);
     sync();
     // The follower heard more from the old master than the new one ever had.
-    const stale = dst().prepare(`UPDATE documents SET markdown = 'only on the old master', seq = 900 WHERE external_id = 'd1'`);
+    const stale = dst().prepare(
+      `UPDATE documents SET markdown = 'only on the old master', seq = 900 WHERE external_id = 'd1'`,
+    );
     stale.run();
-    dst().prepare(`UPDATE sync_state SET after_seq = 900, after_cursor = 900, epoch = 1`).run();
+    dst()
+      .prepare(
+        `UPDATE sync_state SET after_seq = 900, after_cursor = 900, epoch = 1`,
+      )
+      .run();
     after = { seq: 900, cursor: 900 };
     src().prepare(`UPDATE sync_state SET epoch = 2`).run();
-    src().prepare(`INSERT INTO sync_epochs(epoch, grant_seq, grant_cursor) VALUES(2, 0, 0)`).run();
+    src()
+      .prepare(
+        `INSERT INTO sync_epochs(epoch, grant_seq, grant_cursor) VALUES(2, 0, 0)`,
+      )
+      .run();
     const r = buildDelta(reader, after, 1, stage, 250 * 1024 * 1024);
     if (r.status !== 'ok') throw new Error(r.status);
     destTx.applyDelta(stage);
     const md = (c: Database.Database) =>
-      c.prepare(`SELECT external_id, markdown FROM documents ORDER BY external_id`).all();
+      c
+        .prepare(
+          `SELECT external_id, markdown FROM documents ORDER BY external_id`,
+        )
+        .all();
     expect(md(dst())).toEqual(md(src()));
-    expect((dst().prepare(`SELECT epoch FROM sync_state`).get() as { epoch: number }).epoch).toBe(2);
+    expect(
+      (dst().prepare(`SELECT epoch FROM sync_state`).get() as { epoch: number })
+        .epoch,
+    ).toBe(2);
   });
 });
 
@@ -305,11 +367,21 @@ describe('more copied tables (step 2)', () => {
 
   it('attention rows and epochs travel and apply', async () => {
     addAttention(src(), 'att1');
-    src().prepare(`INSERT INTO sync_epochs(epoch, grant_seq, grant_cursor) VALUES(2, 5, 6)`).run();
+    src()
+      .prepare(
+        `INSERT INTO sync_epochs(epoch, grant_seq, grant_cursor) VALUES(2, 5, 6)`,
+      )
+      .run();
     sync();
-    expect(rows(dst(), 'attention_items')).toEqual(rows(src(), 'attention_items'));
-    expect(rows(dst(), 'attention_revisions')).toEqual(rows(src(), 'attention_revisions'));
-    expect(dst().prepare(`SELECT * FROM sync_epochs`).all()).toEqual([{ epoch: 2, grant_seq: 5, grant_cursor: 6 }]);
+    expect(rows(dst(), 'attention_items')).toEqual(
+      rows(src(), 'attention_items'),
+    );
+    expect(rows(dst(), 'attention_revisions')).toEqual(
+      rows(src(), 'attention_revisions'),
+    );
+    expect(dst().prepare(`SELECT * FROM sync_epochs`).all()).toEqual([
+      { epoch: 2, grant_seq: 5, grant_cursor: 6 },
+    ]);
   });
 
   it('apply upserts on the table primary key, blobs included, and deletes by it', async () => {
@@ -317,22 +389,34 @@ describe('more copied tables (step 2)', () => {
     await registerPlugin(path.join(dir, 'dst.db'), dst());
     const n = physical('notes');
     const b = physical('blobs');
-    src().prepare(`INSERT INTO "${n}"(account_id, key, body) VALUES('a','k','one'),('a','j','two')`).run();
-    src().prepare(`INSERT INTO "${b}"(id, data) VALUES('x', ?)`).run(Buffer.from([0, 1, 2, 255]));
+    src()
+      .prepare(
+        `INSERT INTO "${n}"(account_id, key, body) VALUES('a','k','one'),('a','j','two')`,
+      )
+      .run();
+    src()
+      .prepare(`INSERT INTO "${b}"(id, data) VALUES('x', ?)`)
+      .run(Buffer.from([0, 1, 2, 255]));
     sync();
     src().prepare(`UPDATE "${n}" SET body='three' WHERE key='k'`).run();
     src().prepare(`DELETE FROM "${n}" WHERE key='j'`).run();
     sync();
-    expect(dst().prepare(`SELECT account_id, key, body FROM "${n}"`).all()).toEqual([
-      { account_id: 'a', key: 'k', body: 'three' },
-    ]);
-    const got = dst().prepare(`SELECT data FROM "${b}"`).get() as { data: Buffer };
+    expect(
+      dst().prepare(`SELECT account_id, key, body FROM "${n}"`).all(),
+    ).toEqual([{ account_id: 'a', key: 'k', body: 'three' }]);
+    const got = dst().prepare(`SELECT data FROM "${b}"`).get() as {
+      data: Buffer;
+    };
     expect(Buffer.compare(got.data, Buffer.from([0, 1, 2, 255]))).toBe(0);
   });
 
   it('a table that is not copied on this device is refused', async () => {
     await registerPlugin(path.join(dir, 'src.db'), src());
-    src().prepare(`INSERT INTO "${physical('notes')}"(account_id, key, body) VALUES('a','k','one')`).run();
+    src()
+      .prepare(
+        `INSERT INTO "${physical('notes')}"(account_id, key, body) VALUES('a','k','one')`,
+      )
+      .run();
     const r = buildDelta(reader, after, 0, stage, 1e9);
     if (r.status !== 'ok') throw new Error(r.status);
     expect(() => destTx.applyDelta(stage)).toThrow(SyncStageInvalid);
@@ -342,7 +426,9 @@ describe('more copied tables (step 2)', () => {
 describe('user_prefs keys (phase 6c)', () => {
   const put = (k: string, v: unknown) =>
     src()
-      .prepare(`INSERT INTO user_prefs(key, value_json) VALUES(?, ?) ON CONFLICT(key) DO UPDATE SET value_json = excluded.value_json`)
+      .prepare(
+        `INSERT INTO user_prefs(key, value_json) VALUES(?, ?) ON CONFLICT(key) DO UPDATE SET value_json = excluded.value_json`,
+      )
       .run(k, JSON.stringify(v));
 
   it('applyDelta reports the user_prefs keys it touched, upserts and deletes', () => {
@@ -351,10 +437,17 @@ describe('user_prefs keys (phase 6c)', () => {
     const first = sync();
     expect(first.prefKeys).toEqual(['core.theme', 'kiagent.meetings.language']);
     put('core.theme', 'light');
-    src().prepare(`DELETE FROM user_prefs WHERE key = ?`).run('kiagent.meetings.language');
+    src()
+      .prepare(`DELETE FROM user_prefs WHERE key = ?`)
+      .run('kiagent.meetings.language');
     const second = sync();
-    expect(second.prefKeys).toEqual(['core.theme', 'kiagent.meetings.language']);
-    expect(dst().prepare(`SELECT key FROM user_prefs`).all()).toEqual([{ key: 'core.theme' }]);
+    expect(second.prefKeys).toEqual([
+      'core.theme',
+      'kiagent.meetings.language',
+    ]);
+    expect(dst().prepare(`SELECT key FROM user_prefs`).all()).toEqual([
+      { key: 'core.theme' },
+    ]);
   });
 
   it('a delta without user_prefs rows reports no keys, and a second apply does not remember the first', async () => {
@@ -368,7 +461,9 @@ describe('user_prefs keys (phase 6c)', () => {
 
 describe('ownership follows the accounts a delta brings (core-sync 4.4)', () => {
   it('applyDelta refreshes ownership when accounts changed', async () => {
-    dst().prepare(`UPDATE sync_state SET joined = 1, device_id = 'me-device'`).run();
+    dst()
+      .prepare(`UPDATE sync_state SET joined = 1, device_id = 'me-device'`)
+      .run();
     const svc = createSyncService({
       bootGate: readGateSync(dst()),
       db: dest,
@@ -383,13 +478,22 @@ describe('ownership follows the accounts a delta brings (core-sync 4.4)', () => 
       if (r.status !== 'ok') throw new Error(r.status);
       after = (await svc.applyDelta(stage)).target;
     };
-    const a = await sourceStore.createAccount({ source: 'local-folder', identifier: 'docs#x' });
-    src().prepare(`UPDATE accounts SET owner_device_id = 'other-device' WHERE id = ?`).run(a.id);
+    const a = await sourceStore.createAccount({
+      source: 'local-folder',
+      identifier: 'docs#x',
+    });
+    src()
+      .prepare(
+        `UPDATE accounts SET owner_device_id = 'other-device' WHERE id = ?`,
+      )
+      .run(a.id);
     await pull();
     expect(svc.ownsAccount(a.id)).toBe(false);
     expect(svc.ownedByOther(a.id)).toBe(true);
     // The owner moves to this device: the next delta carries the new row.
-    src().prepare(`UPDATE accounts SET owner_device_id = 'me-device' WHERE id = ?`).run(a.id);
+    src()
+      .prepare(`UPDATE accounts SET owner_device_id = 'me-device' WHERE id = ?`)
+      .run(a.id);
     await pull();
     expect(svc.ownsAccount(a.id)).toBe(true);
     expect(svc.ownedByOther(a.id)).toBe(false);

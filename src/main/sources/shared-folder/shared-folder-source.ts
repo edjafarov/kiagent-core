@@ -24,7 +24,11 @@ import { decideLocalFile } from '../local-folder/ingestible';
 import { resolvePathMime } from '../local-folder/mime';
 import { buildItem } from '../local-folder/scanner';
 import type { LocalFileItem } from '../local-folder/to-document';
-import { sharedExternalId, toDocument, type SharedFileItem } from './to-document';
+import {
+  sharedExternalId,
+  toDocument,
+  type SharedFileItem,
+} from './to-document';
 
 export const SHARED_SOURCE_ID = 'shared-folder';
 /** The one account's fixed identifier. */
@@ -42,7 +46,10 @@ export const descriptor: SourceDescriptor = {
 /** What the source needs from the host; absent until the host has built it. */
 export interface SharedFolderHost {
   db: AppDb;
-  sharedFolders: Pick<SharedFoldersApi, 'roots' | 'pathOf' | 'onChange' | 'usable' | 'reportUnparsed' | 'enabled'>;
+  sharedFolders: Pick<
+    SharedFoldersApi,
+    'roots' | 'pathOf' | 'onChange' | 'usable' | 'reportUnparsed' | 'enabled'
+  >;
 }
 
 /** `rev` is the highest manifest revision handled. `roots` are the roots that
@@ -70,22 +77,34 @@ const rootsSet = (host: SharedFolderHost): SharedRoot[] => {
   const r = host.sharedFolders.roots();
   // A root that is owed its reconcile counts as not set: its rows are passed
   // over, and the listing starts again from the top when it becomes usable.
-  return (['incoming', 'sorted'] as const).filter((k) => r[k] && host.sharedFolders.usable(k));
+  return (['incoming', 'sorted'] as const).filter(
+    (k) => r[k] && host.sharedFolders.usable(k),
+  );
 };
 
 /** The item for a present, live row, or null when the file is not readable
  *  here or changed while it was read (the scan will list the change). */
 /** The manifest's live row for this file that this Mac holds the bytes of
  *  (not `missing_here`): the version the leader publishes. */
-async function currentSha(host: SharedFolderHost, root: string, rel: string): Promise<string | null> {
-  const row = (await host.db.all(`SELECT sha256, deleted, missing_here FROM shared_files WHERE root = ? AND rel_path = ?`, [
-    root,
-    rel,
-  ]))[0];
+async function currentSha(
+  host: SharedFolderHost,
+  root: string,
+  rel: string,
+): Promise<string | null> {
+  const row = (
+    await host.db.all(
+      `SELECT sha256, deleted, missing_here FROM shared_files WHERE root = ? AND rel_path = ?`,
+      [root, rel],
+    )
+  )[0];
   return !row || row.deleted || row.missing_here ? null : String(row.sha256);
 }
 
-async function itemFor(host: SharedFolderHost, row: Row, base: string): Promise<SharedFileItem | null> {
+async function itemFor(
+  host: SharedFolderHost,
+  row: Row,
+  base: string,
+): Promise<SharedFileItem | null> {
   const current = await currentSha(host, row.root, row.rel_path);
   if (current === null) return null;
   let abs: string;
@@ -103,12 +122,19 @@ async function itemFor(host: SharedFolderHost, row: Row, base: string): Promise<
   if (!before.isFile()) return null;
   // The hash of the bytes parsed: the manifest's stat cache when the file is
   // as the scan saw it, else a fresh hash. Checked again after the read.
-  const m = (await host.db.all(`SELECT sha256, bytes, mtime_ms FROM shared_mirror WHERE root = ? AND rel_path = ?`, [
-    row.root,
-    row.rel_path,
-  ]))[0];
+  const m = (
+    await host.db.all(
+      `SELECT sha256, bytes, mtime_ms FROM shared_mirror WHERE root = ? AND rel_path = ?`,
+      [row.root, row.rel_path],
+    )
+  )[0];
   let sha: string;
-  if (m && Number(m.bytes) === before.size && Number(m.mtime_ms) === Math.floor(before.mtimeMs)) sha = String(m.sha256);
+  if (
+    m &&
+    Number(m.bytes) === before.size &&
+    Number(m.mtime_ms) === Math.floor(before.mtimeMs)
+  )
+    sha = String(m.sha256);
   else {
     try {
       sha = await sha256File(abs);
@@ -125,7 +151,8 @@ async function itemFor(host: SharedFolderHost, row: Row, base: string): Promise<
   } catch {
     return null;
   }
-  if (after.size !== before.size || after.mtimeMs !== before.mtimeMs) return null;
+  if (after.size !== before.size || after.mtimeMs !== before.mtimeMs)
+    return null;
   let file: LocalFileItem;
   if (built && !('container' in built)) file = built;
   else if (built) {
@@ -135,7 +162,10 @@ async function itemFor(host: SharedFolderHost, row: Row, base: string): Promise<
       externalId: abs,
       size: before.size,
       mtimeIso: before.mtime.toISOString(),
-      createdIso: (before.birthtime.getTime() > 0 ? before.birthtime : before.mtime).toISOString(),
+      createdIso: (before.birthtime.getTime() > 0
+        ? before.birthtime
+        : before.mtime
+      ).toISOString(),
       ext: path.extname(abs).slice(1).toLowerCase(),
       mime: resolvePathMime(abs),
       markdownText: null,
@@ -163,15 +193,21 @@ export function createSharedFolderSource(
           wake?.();
         })
       : () => {};
+    let lastCursor = cursor;
     try {
       for (;;) {
         dirty = false;
         const set = rootsSet(h);
-        let cur = cursor;
+        let cur = lastCursor;
         if (cur && (cur.roots ?? []).join() !== set.join()) cur = null; // a root appeared or went: list again
         let rev = cur?.rev ?? 0;
         const total = Number(
-          (await h.db.all(`SELECT count(*) AS n FROM shared_files WHERE rev > ?`, [rev]))[0]?.n ?? 0,
+          (
+            await h.db.all(
+              `SELECT count(*) AS n FROM shared_files WHERE rev > ?`,
+              [rev],
+            )
+          )[0]?.n ?? 0,
         );
         let first = true;
         for (;;) {
@@ -187,9 +223,15 @@ export function createSharedFolderSource(
           const deletions: ExternalRef[] = [];
           const unparsed: { root: SharedRoot; relPath: string }[] = [];
           for (const row of rows) {
-            if (row.deleted) deletions.push({ externalId: sharedExternalId(row.root, row.rel_path), type: 'file' });
+            if (row.deleted)
+              deletions.push({
+                externalId: sharedExternalId(row.root, row.rel_path),
+                type: 'file',
+              });
             else if (!row.missing_here) {
-              const base = set.includes(row.root) ? h.sharedFolders.roots()[row.root] : null;
+              const base = set.includes(row.root)
+                ? h.sharedFolders.roots()[row.root]
+                : null;
               // eslint-disable-next-line no-await-in-loop
               const item = base ? await itemFor(h, row, base) : null;
               if (item) items.push(item);
@@ -197,7 +239,10 @@ export function createSharedFolderSource(
                 // The cursor moves past this row: the service gives it a new
                 // revision when the file can be read, so it is not lost.
                 unparsed.push({ root: row.root, relPath: row.rel_path });
-                session.log('info', `${row.root}/${row.rel_path} is not readable here yet; it is listed again when it can be`);
+                session.log(
+                  'info',
+                  `${row.root}/${row.rel_path} is not readable here yet; it is listed again when it can be`,
+                );
               }
             }
           }
@@ -214,7 +259,7 @@ export function createSharedFolderSource(
           };
           if (done) break;
         }
-        cursor = { rev, roots: set };
+        lastCursor = { rev, roots: set };
         if (!live) return;
         if (dirty) continue;
         // Wait for the manifest to change (or the pull to be cancelled).
@@ -248,7 +293,12 @@ export function createSharedFolderSource(
         [after],
       )) as unknown as { root: string; rel_path: string }[];
       if (rows.length === 0) return;
-      const refs = rows.map((r): ExternalRef => ({ externalId: sharedExternalId(r.root, r.rel_path), type: 'file' }));
+      const refs = rows.map(
+        (r): ExternalRef => ({
+          externalId: sharedExternalId(r.root, r.rel_path),
+          type: 'file',
+        }),
+      );
       after = refs[refs.length - 1].externalId;
       yield refs;
     }
@@ -256,17 +306,30 @@ export function createSharedFolderSource(
 
   return {
     descriptor,
-    connect: async (_auth: AuthChannel) => ({ identifier: SHARED_IDENTIFIER, config: {} }),
+    connect: async (_auth: AuthChannel) => ({
+      identifier: SHARED_IDENTIFIER,
+      config: {},
+    }),
     pull,
     toDocument,
     reconcile,
-    async fetchBytes(_session: Session, doc: Document): Promise<Uint8Array | null> {
+    async fetchBytes(
+      _session: Session,
+      doc: Document,
+    ): Promise<Uint8Array | null> {
       const h = host();
       if (!h) return null;
-      const abs = await h.sharedFolders.pathOf({ accountId: doc.accountId, externalId: doc.externalId });
+      const abs = await h.sharedFolders.pathOf({
+        accountId: doc.accountId,
+        externalId: doc.externalId,
+      });
       if (!abs) return null;
       const root = doc.externalId.slice(0, doc.externalId.indexOf('/'));
-      if ((root === 'incoming' || root === 'sorted') && !h.sharedFolders.usable(root)) return null;
+      if (
+        (root === 'incoming' || root === 'sorted') &&
+        !h.sharedFolders.usable(root)
+      )
+        return null;
       try {
         const rel = doc.externalId.slice(doc.externalId.indexOf('/') + 1);
         const current = await currentSha(h, root, rel);
@@ -275,7 +338,9 @@ export function createSharedFolderSource(
         if (d.kind === 'ignore' || d.bytes === 'none') return null;
         const bytes = new Uint8Array(await fs.promises.readFile(abs));
         // The bytes just read must be the version the row names.
-        return createHash('sha256').update(bytes).digest('hex') === current ? bytes : null;
+        return createHash('sha256').update(bytes).digest('hex') === current
+          ? bytes
+          : null;
       } catch {
         return null;
       }

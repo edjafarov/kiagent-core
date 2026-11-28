@@ -72,7 +72,8 @@ export function Options(props: {
         let checked: boolean;
         if (inFlight) checked = pending[o.key];
         else if (held) checked = saved[o.key];
-        else checked = optionValue(descriptor, account.config, o.key) ?? o.default;
+        else
+          checked = optionValue(descriptor, account.config, o.key) ?? o.default;
         return (
           <SettingsRow
             key={o.key}

@@ -19,13 +19,17 @@ import { checkRoot, ROOT_NAMES, type GateDeps } from './root-state';
 import { NEXT_REV } from './schema';
 import type { Roots, SharedFoldersDeps } from './service';
 
-export type PromoteDeps = Pick<SharedFoldersDeps, 'db' | 'hashFile' | 'trash' | 'log' | 'platform'> & Pick<GateDeps, 'gateChanged'> & {
-  roots: Roots;
-  /** False once the role this pass started under has changed. */
-  still?: () => boolean;
-  /** Only these roots are reconciled (the ones still owed); default both. */
-  only?: ReadonlySet<SharedRoot>;
-};
+export type PromoteDeps = Pick<
+  SharedFoldersDeps,
+  'db' | 'hashFile' | 'trash' | 'log' | 'platform'
+> &
+  Pick<GateDeps, 'gateChanged'> & {
+    roots: Roots;
+    /** False once the role this pass started under has changed. */
+    still?: () => boolean;
+    /** Only these roots are reconciled (the ones still owed); default both. */
+    only?: ReadonlySet<SharedRoot>;
+  };
 
 /** `done`: the root was reconciled completely. `owed`: it could not be trusted
  *  (unset, missing, unreadable, or empty while the manifest has live files and
@@ -38,7 +42,11 @@ type Row = FileRow & { parked: number };
 type Disk = DiskFile & { rel: string };
 type G = Group<Disk, MirrorRow, Row>;
 
-async function reconcileRoot(d: PromoteDeps, root: SharedRoot, base: string): Promise<ReconcileResult> {
+async function reconcileRoot(
+  d: PromoteDeps,
+  root: SharedRoot,
+  base: string,
+): Promise<ReconcileResult> {
   if ((await checkRoot(d, root, base)) !== 'ok') return 'owed';
   const key = nameKey(d.platform);
   const rowList = (await d.db.all(
@@ -49,7 +57,12 @@ async function reconcileRoot(d: PromoteDeps, root: SharedRoot, base: string): Pr
     `SELECT rel_path, sha256, bytes, mtime_ms, capture_id FROM shared_mirror WHERE root = ?`,
     [root],
   )) as unknown as MirrorRow[];
-  const disk = await readDisk(d, base, new Map(mirrorList.map((m) => [key(m.rel_path), m])), key);
+  const disk = await readDisk(
+    d,
+    base,
+    new Map(mirrorList.map((m) => [key(m.rel_path), m])),
+    key,
+  );
   const gone = explainedRels(await loadOps(d.db, root), key);
   const explained = (rel: string): boolean => gone.has(key(rel));
   // The listing counts only if the root was really here while it was made.
@@ -66,24 +79,50 @@ async function reconcileRoot(d: PromoteDeps, root: SharedRoot, base: string): Pr
    *  `parked` is only for a new row: an existing row keeps its flag. */
   const fromDisk = (g: G, f: Disk): void => {
     steps.push(
-      { sql: UPSERT_ROW, params: [root, g.r?.rel_path ?? f.rel, f.sha, f.stats.size, f.iso, 0] },
+      {
+        sql: UPSERT_ROW,
+        params: [root, g.r?.rel_path ?? f.rel, f.sha, f.stats.size, f.iso, 0],
+      },
       {
         sql: UPSERT_MIRROR,
-        params: [root, g.m?.rel_path ?? f.rel, f.sha, f.stats.size, f.mtimeMs, g.m?.capture_id ?? null],
+        params: [
+          root,
+          g.m?.rel_path ?? f.rel,
+          f.sha,
+          f.stats.size,
+          f.mtimeMs,
+          g.m?.capture_id ?? null,
+        ],
       },
     );
   };
   const setMirror = (g: G, f: Disk): void => {
     const { m } = g;
-    if (m && m.sha256 === f.sha && m.bytes === f.stats.size && m.mtime_ms === f.mtimeMs) return;
+    if (
+      m &&
+      m.sha256 === f.sha &&
+      m.bytes === f.stats.size &&
+      m.mtime_ms === f.mtimeMs
+    )
+      return;
     steps.push({
       sql: UPSERT_MIRROR,
-      params: [root, m?.rel_path ?? f.rel, f.sha, f.stats.size, f.mtimeMs, m?.capture_id ?? null],
+      params: [
+        root,
+        m?.rel_path ?? f.rel,
+        f.sha,
+        f.stats.size,
+        f.mtimeMs,
+        m?.capture_id ?? null,
+      ],
     });
   };
   const dropMirror = (g: G): void => {
     if (g.m)
-      steps.push({ sql: `DELETE FROM shared_mirror WHERE root = ? AND rel_path = ?`, params: [root, g.m.rel_path] });
+      steps.push({
+        sql: `DELETE FROM shared_mirror WHERE root = ? AND rel_path = ?`,
+        params: [root, g.m.rel_path],
+      });
   };
   const markMissing = (r: Row): void => {
     steps.push({
@@ -92,7 +131,12 @@ async function reconcileRoot(d: PromoteDeps, root: SharedRoot, base: string): Pr
     });
   };
 
-  const groups = groupByName(key, [...disk.files].map(([rel, f]) => ({ ...f, rel })), mirrorList, rowList);
+  const groups = groupByName(
+    key,
+    [...disk.files].map(([rel, f]) => ({ ...f, rel })),
+    mirrorList,
+    rowList,
+  );
   for (const [k, g] of groups) {
     const { r, m, f } = g;
     // A file that exists but could not be read, or that may sit in a folder
@@ -110,7 +154,11 @@ async function reconcileRoot(d: PromoteDeps, root: SharedRoot, base: string): Pr
       // Unchanged since it was last in agreement: the tombstone applies.
       // eslint-disable-next-line no-await-in-loop
       const now = await fs.promises.stat(f.abs).catch(() => null);
-      if (!now || now.size !== f.stats.size || Math.floor(now.mtimeMs) !== f.mtimeMs) {
+      if (
+        !now ||
+        now.size !== f.stats.size ||
+        Math.floor(now.mtimeMs) !== f.mtimeMs
+      ) {
         unfinished = true; // changed while we looked: decided on the next try
         continue;
       }
@@ -122,7 +170,10 @@ async function reconcileRoot(d: PromoteDeps, root: SharedRoot, base: string): Pr
         await d.trash(f.abs);
         dropMirror(g);
       } catch (err) {
-        d.log('warn', `could not move ${root}/${f.rel} to the Trash: ${String(err)}`);
+        d.log(
+          'warn',
+          `could not move ${root}/${f.rel} to the Trash: ${String(err)}`,
+        );
         unfinished = true;
       }
     } else if (!f) {
@@ -148,12 +199,21 @@ async function reconcileRoot(d: PromoteDeps, root: SharedRoot, base: string): Pr
     // eslint-disable-next-line no-await-in-loop
     await d.db.batch(steps.slice(i, i + 400));
   }
-  if (unfinished) d.log('info', `the ${root} folder could not be reconciled completely; reconcile pending`);
+  if (unfinished)
+    d.log(
+      'info',
+      `the ${root} folder could not be reconciled completely; reconcile pending`,
+    );
   return unfinished ? 'owed' : 'done';
 }
 
-export async function reconcileAtPromotion(d: PromoteDeps): Promise<Record<SharedRoot, ReconcileResult>> {
-  const out: Record<SharedRoot, ReconcileResult> = { incoming: 'owed', sorted: 'owed' };
+export async function reconcileAtPromotion(
+  d: PromoteDeps,
+): Promise<Record<SharedRoot, ReconcileResult>> {
+  const out: Record<SharedRoot, ReconcileResult> = {
+    incoming: 'owed',
+    sorted: 'owed',
+  };
   for (const root of ROOT_NAMES) {
     if (d.only && !d.only.has(root)) {
       out[root] = 'done'; // not owed: an ordinary root of a leader, the scan's business

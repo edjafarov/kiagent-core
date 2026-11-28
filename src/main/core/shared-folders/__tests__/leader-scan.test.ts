@@ -7,8 +7,14 @@ import { closeDevices, device, withRoots, type Device } from './helpers/device';
 afterEach(closeDevices);
 
 type Row = {
-  root: string; rel_path: string; sha256: string; bytes: number; missing_here: number;
-  deleted: number; parked: number; rev: number;
+  root: string;
+  rel_path: string;
+  sha256: string;
+  bytes: number;
+  missing_here: number;
+  deleted: number;
+  parked: number;
+  rev: number;
 };
 const rows = async (d: Device, root?: string): Promise<Row[]> =>
   (await d.db.all(
@@ -16,8 +22,14 @@ const rows = async (d: Device, root?: string): Promise<Row[]> =>
       ${root ? `WHERE root = '${root}'` : ''} ORDER BY root, rel_path`,
   )) as unknown as Row[];
 const mirror = async (d: Device) =>
-  (await d.db.all(`SELECT root, rel_path, sha256, bytes, capture_id FROM shared_mirror ORDER BY root, rel_path`)) as {
-    root: string; rel_path: string; sha256: string; bytes: number; capture_id: string | null;
+  (await d.db.all(
+    `SELECT root, rel_path, sha256, bytes, capture_id FROM shared_mirror ORDER BY root, rel_path`,
+  )) as {
+    root: string;
+    rel_path: string;
+    sha256: string;
+    bytes: number;
+    capture_id: string | null;
   }[];
 const write = (file: string, text: string) => {
   fs.mkdirSync(path.dirname(file), { recursive: true });
@@ -36,9 +48,22 @@ it('a new file gets a row and a mirror entry', async () => {
   write(path.join(sorted, 'tax', 'a.txt'), 'hello');
   await scanRoot(d.deps, 'sorted', sorted);
   const [row] = await rows(d);
-  expect(row).toMatchObject({ root: 'sorted', rel_path: 'tax/a.txt', bytes: 5, deleted: 0, missing_here: 0, parked: 0 });
+  expect(row).toMatchObject({
+    root: 'sorted',
+    rel_path: 'tax/a.txt',
+    bytes: 5,
+    deleted: 0,
+    missing_here: 0,
+    parked: 0,
+  });
   expect(await mirror(d)).toEqual([
-    { root: 'sorted', rel_path: 'tax/a.txt', sha256: row.sha256, bytes: 5, capture_id: null },
+    {
+      root: 'sorted',
+      rel_path: 'tax/a.txt',
+      sha256: row.sha256,
+      bytes: 5,
+      capture_id: null,
+    },
   ]);
 });
 
@@ -69,7 +94,7 @@ it('a removed file becomes a deleted row with its last hash, and loses its mirro
   expect(after).toMatchObject({ deleted: 1, sha256: before.sha256 });
   expect(after.rev).toBeGreaterThan(before.rev);
   expect((await mirror(d)).map((m) => m.rel_path)).toEqual(['keep.txt']);
-  const rev = after.rev;
+  const { rev } = after;
   await scanRoot(d.deps, 'sorted', sorted);
   expect((await rows(d))[0].rev).toBe(rev);
 });
@@ -92,16 +117,27 @@ it('a missing_here row survives a scan that does not find its file', async () =>
     `INSERT INTO shared_files(root, rel_path, sha256, bytes, mtime, missing_here, rev) VALUES('sorted','x.pdf','h',9,'t',1,5)`,
   );
   await scanRoot(d.deps, 'sorted', sorted);
-  expect((await rows(d))[0]).toMatchObject({ rel_path: 'x.pdf', missing_here: 1, deleted: 0, rev: 5 });
+  expect((await rows(d))[0]).toMatchObject({
+    rel_path: 'x.pdf',
+    missing_here: 1,
+    deleted: 0,
+    rev: 5,
+  });
 });
 
 it('a missing_here row keeps its manifest hash when the disk holds an older version', async () => {
   const { d, sorted } = await setup();
   write(path.join(sorted, 'x.txt'), 'old');
   await scanRoot(d.deps, 'sorted', sorted);
-  await d.db.run(`UPDATE shared_files SET sha256 = 'newer', missing_here = 1, rev = 9`);
+  await d.db.run(
+    `UPDATE shared_files SET sha256 = 'newer', missing_here = 1, rev = 9`,
+  );
   await scanRoot(d.deps, 'sorted', sorted);
-  expect((await rows(d))[0]).toMatchObject({ sha256: 'newer', missing_here: 1, rev: 9 });
+  expect((await rows(d))[0]).toMatchObject({
+    sha256: 'newer',
+    missing_here: 1,
+    rev: 9,
+  });
 });
 
 it('a missing_here row is filled when the file with its hash is here', async () => {
@@ -145,7 +181,9 @@ it('a leader that already has Incoming rows parks nothing it finds', async () =>
   );
   write(path.join(incoming, 'fresh.pdf'), 'fresh');
   await scanRoot(d.deps, 'incoming', incoming);
-  expect((await rows(d, 'incoming')).find((r) => r.rel_path === 'fresh.pdf')!.parked).toBe(0);
+  expect(
+    (await rows(d, 'incoming')).find((r) => r.rel_path === 'fresh.pdf')!.parked,
+  ).toBe(0);
 });
 
 it('a root that is gone changes nothing and logs once (Review Focus 5)', async () => {
@@ -181,7 +219,10 @@ it('a folder that cannot be read hides its files but tombstones none of them', a
   fs.chmodSync(locked, 0o000);
   try {
     await scanRoot(d.deps, 'sorted', sorted);
-    expect((await rows(d)).map((r) => [r.rel_path, r.deleted])).toEqual([['b.txt', 0], ['locked/a.txt', 0]]);
+    expect((await rows(d)).map((r) => [r.rel_path, r.deleted])).toEqual([
+      ['b.txt', 0],
+      ['locked/a.txt', 0],
+    ]);
   } finally {
     fs.chmodSync(locked, 0o755);
   }
@@ -212,8 +253,13 @@ it('a rename carries the capture id to the new mirror entry', async () => {
   await d.db.run(`UPDATE shared_mirror SET capture_id = 'cap-1'`);
   fs.renameSync(a, path.join(incoming, 'renamed.pdf'));
   await scanRoot(d.deps, 'incoming', incoming);
-  expect(await mirror(d)).toMatchObject([{ rel_path: 'renamed.pdf', capture_id: 'cap-1' }]);
-  expect((await rows(d)).map((r) => [r.rel_path, r.deleted])).toEqual([['renamed.pdf', 0], ['scan.pdf', 1]]);
+  expect(await mirror(d)).toMatchObject([
+    { rel_path: 'renamed.pdf', capture_id: 'cap-1' },
+  ]);
+  expect((await rows(d)).map((r) => [r.rel_path, r.deleted])).toEqual([
+    ['renamed.pdf', 0],
+    ['scan.pdf', 1],
+  ]);
 });
 
 it('an edit keeps the capture id on the mirror entry', async () => {
@@ -235,7 +281,10 @@ it('a root that lists nothing but still has its marker is believed: its files ar
   fs.rmSync(path.join(sorted, 'a.txt'));
   fs.rmSync(path.join(sorted, 'b.txt'));
   await scanRoot(d.deps, 'sorted', sorted);
-  expect((await rows(d)).map((r) => [r.rel_path, r.deleted])).toEqual([['a.txt', 1], ['b.txt', 1]]);
+  expect((await rows(d)).map((r) => [r.rel_path, r.deleted])).toEqual([
+    ['a.txt', 1],
+    ['b.txt', 1],
+  ]);
   expect(await mirror(d)).toEqual([]);
 });
 
@@ -246,7 +295,10 @@ it('a root that lists nothing and has no marker changes nothing, until the marke
   await scanRoot(d.deps, 'sorted', sorted);
   const before = await rows(d);
   const mirrorBefore = await mirror(d);
-  const marker = fs.readFileSync(path.join(sorted, '.kia-sync', 'root'), 'utf8');
+  const marker = fs.readFileSync(
+    path.join(sorted, '.kia-sync', 'root'),
+    'utf8',
+  );
   fs.rmSync(sorted, { recursive: true });
   fs.mkdirSync(sorted); // the mount point
   await scanRoot(d.deps, 'sorted', sorted);
@@ -257,7 +309,10 @@ it('a root that lists nothing and has no marker changes nothing, until the marke
   write(path.join(sorted, '.kia-sync', 'root'), marker);
   write(path.join(sorted, 'a.txt'), 'one');
   await scanRoot(d.deps, 'sorted', sorted);
-  expect((await rows(d)).map((r) => [r.rel_path, r.deleted])).toEqual([['a.txt', 0], ['b.txt', 1]]);
+  expect((await rows(d)).map((r) => [r.rel_path, r.deleted])).toEqual([
+    ['a.txt', 0],
+    ['b.txt', 1],
+  ]);
 });
 
 it('an empty first Incoming is still a fresh root: no rows, nothing to protect', async () => {

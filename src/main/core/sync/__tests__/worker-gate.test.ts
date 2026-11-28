@@ -168,7 +168,9 @@ it('seed overtaken mid-lead: a copied-table write is refused after lead() resolv
   // Hold the real worker's syncLead until the newer lease has landed.
   const realProc = db.proc!.bind(db);
   let release!: () => void;
-  const held = new Promise<void>((r) => (release = r));
+  const held = new Promise<void>((r) => {
+    release = r;
+  });
   (db as unknown as { proc: unknown }).proc = async (n: string, a: unknown) => {
     if (n === 'syncLead') await held;
     return realProc(n, a);

@@ -49,7 +49,10 @@ const open = async (
   return openPluginConnection(file, { ...registration, readOnly });
 };
 const tracked = () =>
-  conn().prepare(`SELECT tbl, pk FROM sync_rows ORDER BY cursor`).all() as { tbl: string; pk: string }[];
+  conn().prepare(`SELECT tbl, pk FROM sync_rows ORDER BY cursor`).all() as {
+    tbl: string;
+    pk: string;
+  }[];
 
 describe('descriptor `synced`', () => {
   it('is accepted and kept; ownerCapture too', () => {
@@ -63,7 +66,17 @@ describe('descriptor `synced`', () => {
       parseDatabaseDescriptor({
         format: 1,
         objects: [{ name: 'loose', kind: 'table' }],
-        modules: [{ name: 'm', migrations: [{ version: 0, statements: ['CREATE TABLE {{loose}} (a TEXT, b TEXT)'] }] }],
+        modules: [
+          {
+            name: 'm',
+            migrations: [
+              {
+                version: 0,
+                statements: ['CREATE TABLE {{loose}} (a TEXT, b TEXT)'],
+              },
+            ],
+          },
+        ],
         legacy: { tables: [] },
         synced: ['loose'],
       }),
@@ -75,13 +88,23 @@ describe('descriptor `synced`', () => {
   });
 
   it('ownerCapture outside synced is refused', () => {
-    expect(() => descriptor({ ownerCapture: ['local_x'] })).toThrow(/ownerCapture/);
+    expect(() => descriptor({ ownerCapture: ['local_x'] })).toThrow(
+      /ownerCapture/,
+    );
   });
 
   it('adding synced to a registered descriptor is not an append-only violation', async () => {
-    const registry = await registerPlugin(file, conn(), descriptor({ synced: [] }));
+    const registry = await registerPlugin(
+      file,
+      conn(),
+      descriptor({ synced: [] }),
+    );
     await expect(
-      registry.register({ pluginId: PLUGIN, descriptor: descriptor(), legacyPath: file }),
+      registry.register({
+        pluginId: PLUGIN,
+        descriptor: descriptor(),
+        legacyPath: file,
+      }),
     ).resolves.toMatchObject({ pluginId: PLUGIN, state: 'active' });
     const reg = await registry.open({
       pluginId: PLUGIN,
@@ -96,31 +119,58 @@ describe('plugin connection authorizer', () => {
     const registry = await registerPlugin(file, conn());
     enableTracking(conn());
     const c = await open(registry, () => false);
-    await c.exec('INSERT INTO {{notes}}(account_id, key, body) VALUES(?, ?, ?)', ['a', 'k', 'x']);
+    await c.exec(
+      'INSERT INTO {{notes}}(account_id, key, body) VALUES(?, ?, ?)',
+      ['a', 'k', 'x'],
+    );
     await c.exec('UPDATE {{notes}} SET body = ?', ['y']);
     await c.exec('DELETE FROM {{notes}}');
     expect(tracked().map((r) => r.tbl)).toEqual([physical('notes')]);
     // The plugin cannot reach those tables itself.
-    await expect(c.exec('INSERT INTO sync_rows(tbl, pk) VALUES(?, ?)', ['x', '[]'])).rejects.toThrow();
+    await expect(
+      c.exec('INSERT INTO sync_rows(tbl, pk) VALUES(?, ?)', ['x', '[]']),
+    ).rejects.toThrow();
     await expect(c.query('SELECT * FROM sync_state')).rejects.toThrow();
     await c.close();
   });
 
   it('a follower plugin write to a synced table is refused; ownerCapture is not; the same connection writes after promote', async () => {
-    const registry = await registerPlugin(file, conn(), descriptor({ ownerCapture: ['blobs'] }));
+    const registry = await registerPlugin(
+      file,
+      conn(),
+      descriptor({ ownerCapture: ['blobs'] }),
+    );
     let follower = true;
     const c = await open(registry, () => follower);
     await expect(
-      c.exec('INSERT INTO {{notes}}(account_id, key, body) VALUES(?, ?, ?)', ['a', 'k', 'x']),
+      c.exec('INSERT INTO {{notes}}(account_id, key, body) VALUES(?, ?, ?)', [
+        'a',
+        'k',
+        'x',
+      ]),
     ).rejects.toMatchObject({ name: 'SyncReadOnly' });
-    await expect(c.exec('UPDATE {{notes}} SET body = ?', ['y'])).rejects.toMatchObject({ name: 'SyncReadOnly' });
-    await expect(c.exec('DELETE FROM {{notes}}')).rejects.toMatchObject({ name: 'SyncReadOnly' });
-    await c.exec('INSERT INTO {{blobs}}(id, data) VALUES(?, ?)', ['b', new Uint8Array([1])]);
+    await expect(
+      c.exec('UPDATE {{notes}} SET body = ?', ['y']),
+    ).rejects.toMatchObject({ name: 'SyncReadOnly' });
+    await expect(c.exec('DELETE FROM {{notes}}')).rejects.toMatchObject({
+      name: 'SyncReadOnly',
+    });
+    await c.exec('INSERT INTO {{blobs}}(id, data) VALUES(?, ?)', [
+      'b',
+      new Uint8Array([1]),
+    ]);
     await c.exec('INSERT INTO {{local_x}}(id, v) VALUES(?, ?)', ['l', 'v']);
-    await expect(c.query('SELECT count(*) AS n FROM {{notes}}')).resolves.toEqual([{ n: 0 }]);
+    await expect(
+      c.query('SELECT count(*) AS n FROM {{notes}}'),
+    ).resolves.toEqual([{ n: 0 }]);
     follower = false;
-    await c.exec('INSERT INTO {{notes}}(account_id, key, body) VALUES(?, ?, ?)', ['a', 'k', 'x']);
-    await expect(c.query('SELECT count(*) AS n FROM {{notes}}')).resolves.toEqual([{ n: 1 }]);
+    await c.exec(
+      'INSERT INTO {{notes}}(account_id, key, body) VALUES(?, ?, ?)',
+      ['a', 'k', 'x'],
+    );
+    await expect(
+      c.query('SELECT count(*) AS n FROM {{notes}}'),
+    ).resolves.toEqual([{ n: 1 }]);
     await c.close();
   });
 });
@@ -137,12 +187,22 @@ describe('beforeStatement', () => {
       ...registration,
       readOnly: () => cached,
       beforeStatement: () => {
-        cached = (conn().prepare(`SELECT role FROM sync_state`).get() as { role: string }).role === 'follower';
+        cached =
+          (
+            conn().prepare(`SELECT role FROM sync_state`).get() as {
+              role: string;
+            }
+          ).role === 'follower';
       },
     });
-    await c.exec('INSERT INTO {{notes}}(account_id, key, body) VALUES(?, ?, ?)', ['a', 'k', 'x']);
+    await c.exec(
+      'INSERT INTO {{notes}}(account_id, key, body) VALUES(?, ?, ?)',
+      ['a', 'k', 'x'],
+    );
     conn().prepare(`UPDATE sync_state SET role = 'follower'`).run();
-    await expect(c.exec('DELETE FROM {{notes}}')).rejects.toMatchObject({ name: 'SyncReadOnly' });
+    await expect(c.exec('DELETE FROM {{notes}}')).rejects.toMatchObject({
+      name: 'SyncReadOnly',
+    });
     conn().prepare(`UPDATE sync_state SET role = 'normal'`).run();
     await c.exec('DELETE FROM {{notes}}');
     await c.close();
@@ -151,7 +211,11 @@ describe('beforeStatement', () => {
 
 describe('registry and tracking', () => {
   it('a later migration adding a synced table generates its triggers while tracking', async () => {
-    const registry = await registerPlugin(file, conn(), descriptor({}, ['notes', 'local_x']));
+    const registry = await registerPlugin(
+      file,
+      conn(),
+      descriptor({}, ['notes', 'local_x']),
+    );
     enableTracking(conn());
     const next = parseDatabaseDescriptor({
       format: 1,
@@ -164,7 +228,13 @@ describe('registry and tracking', () => {
         {
           name: 'base',
           migrations: [
-            { version: 0, statements: [NOTES, 'CREATE TABLE {{local_x}} (id TEXT PRIMARY KEY, v TEXT)'] },
+            {
+              version: 0,
+              statements: [
+                NOTES,
+                'CREATE TABLE {{local_x}} (id TEXT PRIMARY KEY, v TEXT)',
+              ],
+            },
             { version: 1, statements: [BLOBS] },
           ],
         },
@@ -179,9 +249,16 @@ describe('registry and tracking', () => {
     });
     void registry;
     const reg = createPluginRegistry(conn(), { filename: file });
-    await reg.migrate({ pluginId: PLUGIN, module: 'base', version: 1, statements: [BLOBS] });
+    await reg.migrate({
+      pluginId: PLUGIN,
+      module: 'base',
+      version: 1,
+      statements: [BLOBS],
+    });
     const have = conn()
-      .prepare(`SELECT count(*) n FROM sqlite_master WHERE type='trigger' AND name LIKE ?`)
+      .prepare(
+        `SELECT count(*) n FROM sqlite_master WHERE type='trigger' AND name LIKE ?`,
+      )
       .get(`sync_%${physical('blobs')}`) as { n: number };
     expect(have.n).toBe(3);
   });

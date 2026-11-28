@@ -41,9 +41,13 @@ export class SharedRootPaused extends Error {
   }
 }
 
-const isRoot = (s: unknown): s is SharedRoot => s === 'incoming' || s === 'sorted';
+const isRoot = (s: unknown): s is SharedRoot =>
+  s === 'incoming' || s === 'sorted';
 
-export async function loadRootSet(db: AppDb, key: string): Promise<Set<SharedRoot>> {
+export async function loadRootSet(
+  db: AppDb,
+  key: string,
+): Promise<Set<SharedRoot>> {
   const row = (await db.all(`SELECT value FROM meta WHERE key = ?`, [key]))[0];
   if (!row) return new Set();
   try {
@@ -55,7 +59,11 @@ export async function loadRootSet(db: AppDb, key: string): Promise<Set<SharedRoo
   return new Set(ROOT_NAMES);
 }
 
-export async function saveRootSet(db: AppDb, key: string, set: ReadonlySet<SharedRoot>): Promise<void> {
+export async function saveRootSet(
+  db: AppDb,
+  key: string,
+  set: ReadonlySet<SharedRoot>,
+): Promise<void> {
   if (set.size === 0) {
     await db.run(`DELETE FROM meta WHERE key = ?`, [key]);
     return;
@@ -98,24 +106,40 @@ interface Initialised {
 
 async function loadInitialised(db: AppDb): Promise<Initialised[]> {
   try {
-    const row = (await db.all(`SELECT value FROM meta WHERE key = ?`, [INITIALISED_KEY]))[0];
+    const row = (
+      await db.all(`SELECT value FROM meta WHERE key = ?`, [INITIALISED_KEY])
+    )[0];
     const j: unknown = JSON.parse(String(row?.value ?? '[]'));
-    if (Array.isArray(j)) return j.filter((e) => e && isRoot(e.root) && typeof e.path === 'string' && typeof e.id === 'string');
+    if (Array.isArray(j))
+      return j.filter(
+        (e) =>
+          e &&
+          isRoot(e.root) &&
+          typeof e.path === 'string' &&
+          typeof e.id === 'string',
+      );
   } catch {
     // an unreadable note is the same as none: the root is uninitialised, so paused
   }
   return [];
 }
 
-const saveInitialised = (db: AppDb, list: readonly Initialised[]): Promise<unknown> =>
-  db.run(`INSERT INTO meta(key, value) VALUES(?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`, [
-    INITIALISED_KEY,
-    JSON.stringify(list),
-  ]);
+const saveInitialised = (
+  db: AppDb,
+  list: readonly Initialised[],
+): Promise<unknown> =>
+  db.run(
+    `INSERT INTO meta(key, value) VALUES(?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
+    [INITIALISED_KEY, JSON.stringify(list)],
+  );
 
 const markerIdIn = async (base: string): Promise<string | null> => {
   try {
-    return (await fs.promises.readFile(path.join(base, MARKER_REL), 'utf8')).trim() || null;
+    return (
+      (
+        await fs.promises.readFile(path.join(base, MARKER_REL), 'utf8')
+      ).trim() || null
+    );
   } catch {
     return null;
   }
@@ -132,7 +156,11 @@ async function writeMarker(base: string, id: string): Promise<void> {
  *  marker already in the folder (a database that was wiped) is adopted, not
  *  rewritten. Called only from `setRoots` and the start of a pass, never while
  *  scanning, mirroring, receiving or serving. */
-export async function initialiseRoot(d: GateDeps, root: SharedRoot, base: string): Promise<void> {
+export async function initialiseRoot(
+  d: GateDeps,
+  root: SharedRoot,
+  base: string,
+): Promise<void> {
   const list = await loadInitialised(d.db);
   if (list.some((e) => e.root === root && e.path === base)) return;
   if (!(await readable(base))) return;
@@ -141,24 +169,41 @@ export async function initialiseRoot(d: GateDeps, root: SharedRoot, base: string
     id = randomUUID();
     await writeMarker(base, id);
   }
-  await saveInitialised(d.db, [...list.filter((e) => e.root !== root), { root, path: base, id }]);
+  await saveInitialised(d.db, [
+    ...list.filter((e) => e.root !== root),
+    { root, path: base, id },
+  ]);
 }
 
 /** The user confirmed that the folder now at `base` is the one to use: a new
  *  marker and id replace whatever was there. Throws when it does not list. */
-export async function reinitialiseRoot(d: GateDeps, root: SharedRoot, base: string): Promise<void> {
-  if (!(await readable(base))) throw new Error(`shared-folders: the ${root} folder is not there`);
+export async function reinitialiseRoot(
+  d: GateDeps,
+  root: SharedRoot,
+  base: string,
+): Promise<void> {
+  if (!(await readable(base)))
+    throw new Error(`shared-folders: the ${root} folder is not there`);
   const id = randomUUID();
   await writeMarker(base, id);
   const list = await loadInitialised(d.db);
-  await saveInitialised(d.db, [...list.filter((e) => e.root !== root), { root, path: base, id }]);
+  await saveInitialised(d.db, [
+    ...list.filter((e) => e.root !== root),
+    { root, path: base, id },
+  ]);
 }
 
 /** THE judgement of one root, used by the leader's scan, the copy's mirror,
  *  the promotion reconcile and every request served: only `ok` allows a
  *  change. Reads only; never writes the marker. */
-export async function checkRoot(d: GateDeps, root: SharedRoot, base: string): Promise<Gate> {
-  const rec = (await loadInitialised(d.db)).find((e) => e.root === root && e.path === base);
+export async function checkRoot(
+  d: GateDeps,
+  root: SharedRoot,
+  base: string,
+): Promise<Gate> {
+  const rec = (await loadInitialised(d.db)).find(
+    (e) => e.root === root && e.path === base,
+  );
   let gate: Gate;
   if (!rec || !(await readable(base))) gate = 'missing';
   else gate = (await markerIdIn(base)) === rec.id ? 'ok' : 'marker';

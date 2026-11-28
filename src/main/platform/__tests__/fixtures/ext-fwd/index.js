@@ -14,7 +14,9 @@ module.exports = {
       return { plain: p };
     });
     // Goes through the host, so it forwards like a renderer call.
-    await host.ui.handle('viaCall', async (p) => ({ viaCall: await host.ui.call('save', p) }));
+    await host.ui.handle('viaCall', async (p) => ({
+      viaCall: await host.ui.call('save', p),
+    }));
     await host.ui.handle('calls', async () => calls.slice());
     return { tools: [] };
   },

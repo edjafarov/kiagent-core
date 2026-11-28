@@ -11,8 +11,12 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-import type { Account, AccountId, Source } from '@shared/contracts';
-import type { FolderScopeUpdate } from '@shared/contracts';
+import type {
+  Account,
+  AccountId,
+  Source,
+  FolderScopeUpdate,
+} from '@shared/contracts';
 
 import { createEngine } from '../../../core/engine/engine';
 import { migrateLocalFolders } from '../../../core/shared-folders/migrate';
@@ -49,8 +53,10 @@ it('a pull held open with the old exclusions cannot commit a document under the 
   parent = path.join(dir, 'Documents');
   shared = path.join(parent, 'Sorted');
   fs.mkdirSync(shared, { recursive: true });
-  for (let i = 0; i < 3; i += 1) fs.writeFileSync(path.join(parent, `s${i}.txt`), `sibling ${i}`);
-  for (let i = 0; i < 3; i += 1) fs.writeFileSync(path.join(shared, `f${i}.txt`), `shared ${i}`);
+  for (let i = 0; i < 3; i += 1)
+    fs.writeFileSync(path.join(parent, `s${i}.txt`), `sibling ${i}`);
+  for (let i = 0; i < 3; i += 1)
+    fs.writeFileSync(path.join(shared, `f${i}.txt`), `shared ${i}`);
   excluded = [];
   const db = await openDb(path.join(dir, 'test.db'));
   store = await openStore(db, {
@@ -59,17 +65,24 @@ it('a pull held open with the old exclusions cannot commit a document under the 
     detectLanguages: () => [],
   });
 
-  const real = createLocalFolderSource({ converter: createInlineConverter(), excluded: () => excluded });
+  const real = createLocalFolderSource({
+    converter: createInlineConverter(),
+    excluded: () => excluded,
+  });
   // The first pull walks with no exclusions, then is held before its first
   // batch is handed to the engine, until the test lets it go (or it is aborted).
   let release!: () => void;
-  const gate = new Promise<void>((r) => (release = r));
+  const gate = new Promise<void>((r) => {
+    release = r;
+  });
   let held = false;
   let pulls = 0;
   const source = {
     ...real,
     pull: (session: never, cursor: never) => {
-      const inner = (real.pull as (s: never, c: never) => AsyncGenerator<unknown>)(session, cursor);
+      const inner = (
+        real.pull as (s: never, c: never) => AsyncGenerator<unknown>
+      )(session, cursor);
       pulls += 1;
       if (pulls > 1) return inner;
       return (async function* () {
@@ -90,8 +103,15 @@ it('a pull held open with the old exclusions cannot commit a document under the 
   } as unknown as Source;
   engine = createEngine({
     store,
-    sources: { get: (id: string) => (id === 'local-folder' ? source : undefined) },
-    inference: { complete: async () => 's', see: async () => 's', read: async () => 's', hear: async () => 's' },
+    sources: {
+      get: (id: string) => (id === 'local-folder' ? source : undefined),
+    },
+    inference: {
+      complete: async () => 's',
+      see: async () => 's',
+      read: async () => 's',
+      hear: async () => 's',
+    },
     convert: async (input: never) => input,
     logs: { log: () => {} },
   } as never);
@@ -99,7 +119,10 @@ it('a pull held open with the old exclusions cannot commit a document under the 
   const account: Account = await store.createAccount({
     source: 'local-folder',
     identifier: 'this-machine',
-    config: { ...folderScopedConfig({}, [{ id: parent, name: 'Documents' }]), watch: false },
+    config: {
+      ...folderScopedConfig({}, [{ id: parent, name: 'Documents' }]),
+      watch: false,
+    },
     status: 'connecting',
   });
   engine.run(account);
@@ -123,7 +146,10 @@ it('a pull held open with the old exclusions cannot commit a document under the 
         JSON.stringify(a.config),
       );
     },
-    archive: async (id: string, refs: { externalId: string; type: string }[]) => {
+    archive: async (
+      id: string,
+      refs: { externalId: string; type: string }[],
+    ) => {
       const a = (await store.account(id as AccountId))!;
       await engine.applyScope(
         a.id,
@@ -137,12 +163,23 @@ it('a pull held open with the old exclusions cannot commit a document under the 
       );
     },
   };
-  await migrateLocalFolders({ db, localFolders: access, log: () => {} }, shared);
+  await migrateLocalFolders(
+    { db, localFolders: access, log: () => {} },
+    shared,
+  );
 
   release(); // the held pull may now hand over what it built
-  await waitFor(async () => ((await store.read.count({ account: account.id as AccountId })) as number) >= 3);
+  await waitFor(
+    async () =>
+      ((await store.read.count({
+        account: account.id as AccountId,
+      })) as number) >= 3,
+  );
   await engine.stopAll?.();
-  const live = (await store.read.search({ account: account.id, limit: 100 } as never)) as { externalId?: string; external_id?: string }[];
+  const live = (await store.read.search({
+    account: account.id,
+    limit: 100,
+  } as never)) as { externalId?: string; external_id?: string }[];
   const ids = live.map((d) => d.externalId ?? d.external_id ?? '');
   expect(ids.filter((id) => id.startsWith(`${shared}/`))).toEqual([]);
   expect(ids.length).toBe(3);

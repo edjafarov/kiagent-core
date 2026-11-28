@@ -146,8 +146,7 @@ export function createBootQueue(deps: BootQueueDeps): BootQueue {
 
     syncPending(accounts) {
       for (const account of accounts) {
-        if (account.source === 'worker' || isParked(account.status))
-          continue;
+        if (account.source === 'worker' || isParked(account.status)) continue;
         if (isPending(account.source)) enqueue(account, 'explicit');
       }
     },

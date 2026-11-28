@@ -224,7 +224,9 @@ describe('engine.project leadKinds', () => {
       () => {},
     );
     // Both feeds are open before the account is created.
-    await waitUntil(() => feeds.some((f) => f.kinds) && feeds.some((f) => !f.kinds));
+    await waitUntil(
+      () => feeds.some((f) => f.kinds) && feeds.some((f) => !f.kinds),
+    );
     const acc = await store.createAccount({ source: 's', identifier: 'once' });
     await waitUntil(() => applied.includes(acc.id));
     releaseMain();

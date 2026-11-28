@@ -15,11 +15,14 @@ const write = (file: string, text: string) => {
 };
 const deferred = () => {
   let resolve!: () => void;
-  const promise = new Promise<void>((r) => (resolve = r));
+  const promise = new Promise<void>((r) => {
+    resolve = r;
+  });
   return { promise, resolve };
 };
 const nap = (ms: number) => new Promise((r) => setTimeout(r, ms));
-const hashOf = (p: string) => createHash('sha256').update(fs.readFileSync(p)).digest('hex');
+const hashOf = (p: string) =>
+  createHash('sha256').update(fs.readFileSync(p)).digest('hex');
 
 /** A hashFile that stops on files whose name matches until `release()`. */
 function gated(match: (p: string) => boolean) {
@@ -37,8 +40,12 @@ function gated(match: (p: string) => boolean) {
     },
   };
 }
-const revs = async (d: { db: { all: (s: string) => Promise<Record<string, unknown>[]> } }) =>
-  (await d.db.all(`SELECT rel_path, rev FROM shared_files ORDER BY rev`)) as unknown as { rel_path: string; rev: number }[];
+const revs = async (d: {
+  db: { all: (s: string) => Promise<Record<string, unknown>[]> };
+}) =>
+  (await d.db.all(
+    `SELECT rel_path, rev FROM shared_files ORDER BY rev`,
+  )) as unknown as { rel_path: string; rev: number }[];
 
 describe('one queue, and the role is checked at every write', () => {
   it('a filled offer that commits while a scan hashes gets its own revision', async () => {
@@ -57,7 +64,13 @@ describe('one queue, and the role is checked at every write', () => {
     const tmp = await d.svc.serve.stagingFile('sorted');
     fs.writeFileSync(tmp, 'mm');
     const offered = d.svc.serve.offer(
-      { root: 'sorted', relPath: 'm.txt', sha256: sha('mm'), base: null, captureId: null },
+      {
+        root: 'sorted',
+        relPath: 'm.txt',
+        sha256: sha('mm'),
+        base: null,
+        captureId: null,
+      },
       tmp,
       'Air',
     );
@@ -95,7 +108,13 @@ describe('one queue, and the role is checked at every write', () => {
     const tmp = await d.svc.serve.stagingFile('sorted');
     fs.writeFileSync(tmp, 'bytes');
     const offered = d.svc.serve.offer(
-      { root: 'sorted', relPath: 'x.txt', sha256: sha('bytes'), base: null, captureId: null },
+      {
+        root: 'sorted',
+        relPath: 'x.txt',
+        sha256: sha('bytes'),
+        base: null,
+        captureId: null,
+      },
       tmp,
       'Air',
     );
@@ -137,7 +156,9 @@ describe('one queue, and the role is checked at every write', () => {
     gate.resolve();
     await d.svc.settled();
     expect(fs.existsSync(path.join(sorted, 'a.txt'))).toBe(false);
-    expect(await d.db.all(`SELECT 1 FROM shared_mirror WHERE rel_path = 'a.txt'`)).toEqual([]);
+    expect(
+      await d.db.all(`SELECT 1 FROM shared_mirror WHERE rel_path = 'a.txt'`),
+    ).toEqual([]);
   });
 
   it('serve answers only after the pass that is running has finished', async () => {
@@ -150,10 +171,12 @@ describe('one queue, and the role is checked at every write', () => {
     d.svc.kick();
     await g.reached;
     let answered = false;
-    const opened = d.svc.serve.open({ root: 'sorted', relPath: 'a.txt', sha256: sha('one') }).then((r) => {
-      answered = true;
-      return r;
-    });
+    const opened = d.svc.serve
+      .open({ root: 'sorted', relPath: 'a.txt', sha256: sha('one') })
+      .then((r) => {
+        answered = true;
+        return r;
+      });
     await nap(40);
     expect(answered).toBe(false);
     g.release();

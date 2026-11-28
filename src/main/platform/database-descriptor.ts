@@ -35,7 +35,14 @@ export function parseDatabaseDescriptor(
 ): PluginDatabaseDescriptor {
   if (
     !isRecord(value) ||
-    !exact(value, ['format', 'objects', 'modules', 'legacy', 'synced', 'ownerCapture'])
+    !exact(value, [
+      'format',
+      'objects',
+      'modules',
+      'legacy',
+      'synced',
+      'ownerCapture',
+    ])
   )
     fail('expected object with format, objects, modules and legacy');
   const root = value as Record<string, unknown>;
@@ -190,12 +197,14 @@ export function parseDatabaseDescriptor(
   const synced = nameList('synced');
   const ownerCapture = nameList('ownerCapture');
   for (const name of synced ?? []) {
-    if (!tableNames.has(name)) fail(`synced ${name} is not a table of this descriptor`);
+    if (!tableNames.has(name))
+      fail(`synced ${name} is not a table of this descriptor`);
     if (!hasPrimaryKey(name, modules))
       fail(`synced table ${name} needs a primary key`);
   }
   for (const name of ownerCapture ?? []) {
-    if (!(synced ?? []).includes(name)) fail(`ownerCapture ${name} is not in synced`);
+    if (!(synced ?? []).includes(name))
+      fail(`ownerCapture ${name} is not in synced`);
   }
   return {
     format: 1,

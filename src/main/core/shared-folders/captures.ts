@@ -83,17 +83,30 @@ export function createCaptures(ctx: CaptureCtx): Captures {
         )[0];
         const row = old
           ? null
-          : (await db.all(`SELECT sha256 FROM shared_files WHERE root = ? AND rel_path = ?`, [from.root, from.rel]))[0];
+          : (
+              await db.all(
+                `SELECT sha256 FROM shared_files WHERE root = ? AND rel_path = ?`,
+                [from.root, from.rel],
+              )
+            )[0];
         // A scan that saw the file leave first kept its capture note at the old path.
         const left = old
           ? null
-          : (await db.all(
-              `SELECT id, sha256, capture_id FROM shared_pending WHERE kind = 'note' AND root = ? AND rel_path = ?`,
-              [from.root, from.rel],
-            ))[0];
+          : (
+              await db.all(
+                `SELECT id, sha256, capture_id FROM shared_pending WHERE kind = 'note' AND root = ? AND rel_path = ?`,
+                [from.root, from.rel],
+              )
+            )[0];
         const sha = String(old?.sha256 ?? row?.sha256 ?? left?.sha256 ?? '');
         const capture = old?.capture_id ?? left?.capture_id ?? null;
-        await recordGone(db, 'moved', { root: from.root, rel: from.rel }, sha, to);
+        await recordGone(
+          db,
+          'moved',
+          { root: from.root, rel: from.rel },
+          sha,
+          to,
+        );
         // The note follows the bytes to where the file went.
         if (capture && to) {
           await recordNote(db, to, sha, String(capture));

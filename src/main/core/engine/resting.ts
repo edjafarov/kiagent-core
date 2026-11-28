@@ -6,7 +6,9 @@ import type { SyncStatus } from '@shared/contracts';
  *  connector) moves it on. ONE predicate, so a new resting status can't be
  *  forgotten by one of those paths (resting-states.test.ts holds the line). */
 export const isResting = (status: SyncStatus): boolean =>
-  status === 'paused' || status === 'needsReauth' || status === 'needs-connector';
+  status === 'paused' ||
+  status === 'needsReauth' ||
+  status === 'needs-connector';
 
 /** Resting, and not even an explicit Retry starts it: the user paused it, or
  *  its connector isn't installed. A needsReauth account is the one resting

@@ -13,27 +13,60 @@ const write = (file: string, text: string) => {
   fs.mkdirSync(path.dirname(file), { recursive: true });
   fs.writeFileSync(file, text);
 };
-type Row = { rel_path: string; sha256: string; missing_here: number; deleted: number; parked: number; rev: number };
+type Row = {
+  rel_path: string;
+  sha256: string;
+  missing_here: number;
+  deleted: number;
+  parked: number;
+  rev: number;
+};
 const rows = async (d: Device, root = 'incoming') =>
   (await d.db.all(
     `SELECT rel_path, sha256, missing_here, deleted, parked, rev FROM shared_files WHERE root = ? ORDER BY rel_path`,
     [root],
   )) as unknown as Row[];
 const mirror = async (d: Device, root = 'incoming') =>
-  (await d.db.all(`SELECT rel_path, sha256 FROM shared_mirror WHERE root = ? ORDER BY rel_path`, [root])) as {
-    rel_path: string; sha256: string;
+  (await d.db.all(
+    `SELECT rel_path, sha256 FROM shared_mirror WHERE root = ? ORDER BY rel_path`,
+    [root],
+  )) as {
+    rel_path: string;
+    sha256: string;
   }[];
-const putRow = (d: Device, rel: string, text: string, o: Partial<{ deleted: number; missing: number; parked: number; rev: number; root: string }> = {}) =>
+const putRow = (
+  d: Device,
+  rel: string,
+  text: string,
+  o: Partial<{
+    deleted: number;
+    missing: number;
+    parked: number;
+    rev: number;
+    root: string;
+  }> = {},
+) =>
   d.db.run(
     `INSERT INTO shared_files(root, rel_path, sha256, bytes, mtime, missing_here, deleted, parked, rev)
      VALUES(?, ?, ?, ?, 't', ?, ?, ?, ?)`,
-    [o.root ?? 'incoming', rel, sha(text), text.length, o.missing ?? 0, o.deleted ?? 0, o.parked ?? 0, o.rev ?? 3],
+    [
+      o.root ?? 'incoming',
+      rel,
+      sha(text),
+      text.length,
+      o.missing ?? 0,
+      o.deleted ?? 0,
+      o.parked ?? 0,
+      o.rev ?? 3,
+    ],
   );
 const putMirror = (d: Device, rel: string, text: string, root = 'incoming') =>
-  d.db.run(`INSERT INTO shared_mirror(root, rel_path, sha256, bytes, mtime_ms) VALUES(?, ?, ?, ?, 0)`, [
-    root, rel, sha(text), text.length,
-  ]);
-const run = (d: Device) => reconcileAtPromotion({ ...d.deps, roots: d.svc.roots() });
+  d.db.run(
+    `INSERT INTO shared_mirror(root, rel_path, sha256, bytes, mtime_ms) VALUES(?, ?, ?, ?, 0)`,
+    [root, rel, sha(text), text.length],
+  );
+const run = (d: Device) =>
+  reconcileAtPromotion({ ...d.deps, roots: d.svc.roots() });
 const setup = async () => {
   const d = await device('copy');
   const r = await withRoots(d);
@@ -45,7 +78,9 @@ it('a row whose file is here with that hash is kept, and the mirror agrees', asy
   write(path.join(incoming, 'a.pdf'), 'same');
   await putRow(d, 'a.pdf', 'same');
   await run(d);
-  expect(await rows(d)).toMatchObject([{ rel_path: 'a.pdf', missing_here: 0, deleted: 0, rev: 3 }]);
+  expect(await rows(d)).toMatchObject([
+    { rel_path: 'a.pdf', missing_here: 0, deleted: 0, rev: 3 },
+  ]);
   expect(await mirror(d)).toEqual([{ rel_path: 'a.pdf', sha256: sha('same') }]);
 });
 
@@ -54,7 +89,11 @@ it('a row whose file was never fetched becomes missing_here', async () => {
   await putRow(d, 'gone.pdf', 'bytes');
   await run(d);
   const [r] = await rows(d);
-  expect(r).toMatchObject({ missing_here: 1, deleted: 0, sha256: sha('bytes') });
+  expect(r).toMatchObject({
+    missing_here: 1,
+    deleted: 0,
+    sha256: sha('bytes'),
+  });
   expect(r.rev).toBeGreaterThan(3);
 });
 
@@ -66,12 +105,16 @@ it('an older version is neither published nor sorted, and its file stays (Review
   await putRow(d, 'a.pdf', 'new');
   await run(d);
   expect(fs.readFileSync(f, 'utf8')).toBe('old');
-  expect(await rows(d)).toMatchObject([{ sha256: sha('new'), missing_here: 1 }]);
+  expect(await rows(d)).toMatchObject([
+    { sha256: sha('new'), missing_here: 1 },
+  ]);
   expect(await mirror(d)).toEqual([{ rel_path: 'a.pdf', sha256: sha('old') }]);
   d.sync.set('leader');
   expect(await d.svc.listForSorting()).toEqual([]);
   await d.svc.settled();
-  expect(await rows(d)).toMatchObject([{ sha256: sha('new'), missing_here: 1 }]);
+  expect(await rows(d)).toMatchObject([
+    { sha256: sha('new'), missing_here: 1 },
+  ]);
 });
 
 it('a tombstone whose file is unchanged sends the file to the Trash', async () => {
@@ -111,8 +154,12 @@ it('a file with no row and no mirror entry is written into the manifest, not par
   const { d, incoming } = await setup();
   write(path.join(incoming, 'new', 'b.pdf'), 'fresh');
   await run(d);
-  expect(await rows(d)).toMatchObject([{ rel_path: 'new/b.pdf', sha256: sha('fresh'), parked: 0, missing_here: 0 }]);
-  expect(await mirror(d)).toEqual([{ rel_path: 'new/b.pdf', sha256: sha('fresh') }]);
+  expect(await rows(d)).toMatchObject([
+    { rel_path: 'new/b.pdf', sha256: sha('fresh'), parked: 0, missing_here: 0 },
+  ]);
+  expect(await mirror(d)).toEqual([
+    { rel_path: 'new/b.pdf', sha256: sha('fresh') },
+  ]);
 });
 
 it('a file changed here under a tombstone is not removed: it comes back', async () => {
@@ -161,7 +208,9 @@ it('a revived tombstone keeps the parked flag of its row', async () => {
   write(path.join(incoming, 'a.pdf'), 'mine');
   await putRow(d, 'a.pdf', 'theirs', { deleted: 1, parked: 1 });
   await run(d);
-  expect(await rows(d)).toMatchObject([{ deleted: 0, parked: 1, sha256: sha('mine') }]);
+  expect(await rows(d)).toMatchObject([
+    { deleted: 0, parked: 1, sha256: sha('mine') },
+  ]);
 });
 
 it('a folder that cannot be listed does not turn its rows into missing_here', async () => {
@@ -186,7 +235,9 @@ it('a root that cannot be read is left alone', async () => {
   await putMirror(d, 'a.pdf', 'bytes');
   fs.rmSync(incoming, { recursive: true });
   await run(d);
-  expect(await rows(d)).toMatchObject([{ missing_here: 0, deleted: 0, rev: 3 }]);
+  expect(await rows(d)).toMatchObject([
+    { missing_here: 0, deleted: 0, rev: 3 },
+  ]);
   expect(await mirror(d)).toHaveLength(1);
   expect(d.trashed).toEqual([]);
 });
@@ -194,7 +245,10 @@ it('a root that cannot be read is left alone', async () => {
 it('listForSorting lists only live, present, unparked Incoming rows', async () => {
   const { d, incoming } = await setup();
   for (const [rel, o] of [
-    ['ok.pdf', {}], ['parked.pdf', { parked: 1 }], ['dead.pdf', { deleted: 1 }], ['away.pdf', { missing: 1 }],
+    ['ok.pdf', {}],
+    ['parked.pdf', { parked: 1 }],
+    ['dead.pdf', { deleted: 1 }],
+    ['away.pdf', { missing: 1 }],
   ] as const) {
     if (rel !== 'away.pdf') write(path.join(incoming, rel), rel);
     await putRow(d, rel, rel, o);
@@ -235,7 +289,9 @@ it('no scan publishes before the reconcile: the first leader scan sees the settl
   await putRow(d, 'a.pdf', 'new');
   d.sync.set('leader');
   await d.svc.settled();
-  expect(await rows(d)).toMatchObject([{ sha256: sha('new'), missing_here: 1 }]);
+  expect(await rows(d)).toMatchObject([
+    { sha256: sha('new'), missing_here: 1 },
+  ]);
 });
 
 it('a restart as leader after having been a copy still reconciles', async () => {
@@ -248,7 +304,9 @@ it('a restart as leader after having been a copy still reconciles', async () => 
   const again = await d.restart();
   expect(await again.listForSorting()).toEqual([]);
   await again.settled();
-  expect(await rows(d)).toMatchObject([{ sha256: sha('new'), missing_here: 1 }]);
+  expect(await rows(d)).toMatchObject([
+    { sha256: sha('new'), missing_here: 1 },
+  ]);
 });
 
 it('a Mac that never was a copy has nothing to reconcile', async () => {
@@ -258,20 +316,31 @@ it('a Mac that never was a copy has nothing to reconcile', async () => {
   write(path.join(incoming, 'a.pdf'), 'x');
   d.svc.kick();
   await d.svc.settled();
-  expect(await d.db.all(`SELECT 1 FROM meta WHERE key = 'shared-folders:reconcile-pending'`)).toEqual([]);
+  expect(
+    await d.db.all(
+      `SELECT 1 FROM meta WHERE key = 'shared-folders:reconcile-pending'`,
+    ),
+  ).toEqual([]);
   expect(await d.svc.listForSorting()).toEqual([path.join(incoming, 'a.pdf')]);
 });
 
 describe('a root that is not there is still owed its reconcile', () => {
   const owed = async (d: Device) =>
-    (await d.db.all(`SELECT value FROM meta WHERE key = 'shared-folders:reconcile-pending'`)).map((r) => r.value);
+    (
+      await d.db.all(
+        `SELECT value FROM meta WHERE key = 'shared-folders:reconcile-pending'`,
+      )
+    ).map((r) => r.value);
 
   it('an unmounted root stays owed; when it returns the rows are reconciled, not tombstoned', async () => {
     const { d, incoming } = await setup();
     await putRow(d, 'never-fetched.pdf', 'bytes');
     await putRow(d, 'kept.pdf', 'kept');
     await putRow(d, 'dead.pdf', 'bye', { deleted: 1 });
-    const marker = fs.readFileSync(path.join(incoming, '.kia-sync', 'root'), 'utf8');
+    const marker = fs.readFileSync(
+      path.join(incoming, '.kia-sync', 'root'),
+      'utf8',
+    );
     fs.rmSync(incoming, { recursive: true });
     d.sync.set('leader');
     await d.svc.settled();
@@ -305,20 +374,24 @@ describe('a root that is not there is still owed its reconcile', () => {
     const incoming = path.join(dir, 'incoming');
     const d = await device('copy', {
       log: (_l, m) => {
-        if (m.includes('reconcile is still owed')) write(path.join(incoming, 'own.pdf'), 'own');
+        if (m.includes('reconcile is still owed'))
+          write(path.join(incoming, 'own.pdf'), 'own');
       },
     });
     await d.svc.setRoots({ incoming, sorted: null });
     await putRow(d, 'never-fetched.pdf', 'bytes');
     d.sync.set('leader');
     await d.svc.settled();
-    expect(await rows(d)).toMatchObject([{ rel_path: 'never-fetched.pdf', deleted: 0, rev: 3 }]);
+    expect(await rows(d)).toMatchObject([
+      { rel_path: 'never-fetched.pdf', deleted: 0, rev: 3 },
+    ]);
     fs.rmSync(dir, { recursive: true, force: true });
   });
 
   it('an empty mount point leaves rows and mirror entries alone and stays owed', async () => {
     const { d, incoming, sorted } = await setup();
-    for (const root of [incoming, sorted]) fs.rmSync(path.join(root, '.kia-sync'), { recursive: true }); // what a mount point lacks
+    for (const root of [incoming, sorted])
+      fs.rmSync(path.join(root, '.kia-sync'), { recursive: true }); // what a mount point lacks
     await putRow(d, 'a.pdf', 'a');
     await putRow(d, 'b.pdf', 'b');
     await putMirror(d, 'a.pdf', 'a');
@@ -344,7 +417,11 @@ describe('a root that is not there is still owed its reconcile', () => {
     expect(await owed(d)).toHaveLength(1);
     await expect(
       d.svc.serve.open({ root: 'sorted', relPath: 'x.pdf', sha256: sha('x') }),
-    ).rejects.toMatchObject({ code: 'SHARED_ROOT_PAUSED', root: 'sorted', reason: 'owed' });
+    ).rejects.toMatchObject({
+      code: 'SHARED_ROOT_PAUSED',
+      root: 'sorted',
+      reason: 'owed',
+    });
     await d.svc.setRoots({ incoming, sorted: path.join(d.dir, 'sorted') });
     fs.mkdirSync(path.join(d.dir, 'sorted'));
     write(path.join(d.dir, 'sorted', 'x.pdf'), 'x'); // the row's file is back
@@ -379,7 +456,11 @@ describe('a root that is not there is still owed its reconcile', () => {
 
 describe('a reconcile that could not finish is still owed', () => {
   const owed = async (d: Device) =>
-    (await d.db.all(`SELECT value FROM meta WHERE key = 'shared-folders:reconcile-pending'`)).map((r) => r.value);
+    (
+      await d.db.all(
+        `SELECT value FROM meta WHERE key = 'shared-folders:reconcile-pending'`,
+      )
+    ).map((r) => r.value);
 
   it('a folder that cannot be listed keeps the root owed; the older file is not published when it opens', async () => {
     const { d, incoming } = await setup();
@@ -399,7 +480,9 @@ describe('a reconcile that could not finish is still owed', () => {
     }
     d.svc.kick();
     await d.svc.settled();
-    expect(await rows(d)).toMatchObject([{ rel_path: 'locked/a.pdf', sha256: sha('new'), missing_here: 1 }]);
+    expect(await rows(d)).toMatchObject([
+      { rel_path: 'locked/a.pdf', sha256: sha('new'), missing_here: 1 },
+    ]);
     expect(fs.readFileSync(path.join(locked, 'a.pdf'), 'utf8')).toBe('old');
     expect(await owed(d)).toEqual([]);
   });
@@ -421,7 +504,9 @@ describe('a reconcile that could not finish is still owed', () => {
     d.sync.set('leader');
     await d.svc.settled();
     expect(fs.existsSync(f)).toBe(true);
-    expect(await rows(d)).toMatchObject([{ rel_path: 'a.pdf', deleted: 1, rev: 3 }]);
+    expect(await rows(d)).toMatchObject([
+      { rel_path: 'a.pdf', deleted: 1, rev: 3 },
+    ]);
     expect(await owed(d)).toHaveLength(1);
     expect(d.svc.usable('incoming')).toBe(false);
     failing = false;
@@ -433,14 +518,19 @@ describe('a reconcile that could not finish is still owed', () => {
   });
 
   it('a Trash that fails once is retried on the timer: the root becomes ok with no other event', async () => {
-    let failing = true;
+    // The retry is held inside its Trash until the owed state is checked:
+    // a 20 ms timer otherwise finishes the retry first on a loaded machine.
+    let calls = 0;
+    let release!: () => void;
+    const held = new Promise<void>((r) => {
+      release = r;
+    });
     const d = await device('copy', {
       retryMs: 20,
       trash: async (p) => {
-        if (failing) {
-          failing = false;
-          throw new Error('busy');
-        }
+        calls += 1;
+        if (calls === 1) throw new Error('busy');
+        await held;
         d.trashed.push(p);
         fs.rmSync(p, { force: true });
       },
@@ -454,12 +544,14 @@ describe('a reconcile that could not finish is still owed', () => {
     await d.svc.settled();
     expect(await owed(d)).toHaveLength(1);
     expect(d.svc.rootStatus('incoming')).toBe('owed');
+    release();
     // no kick, no file event: only the timer
-    for (let i = 0; i < 100 && d.svc.rootStatus('incoming') !== 'ok'; i += 1) {
+    while (d.svc.rootStatus('incoming') !== 'ok') {
       // eslint-disable-next-line no-await-in-loop
       await new Promise((r) => setTimeout(r, 20));
     }
     await d.svc.settled();
+    expect(calls).toBe(2);
     expect(d.svc.rootStatus('incoming')).toBe('ok');
     expect(d.svc.usable('incoming')).toBe(true);
     expect(d.trashed).toEqual([f]);

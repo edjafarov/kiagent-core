@@ -4,7 +4,12 @@ import os from 'os';
 import path from 'path';
 
 import { openDb, type AppDb } from '../../../db/app-db';
-import { createDbUserPrefsStore, createPrefs, type OfflineQueue, type UserPrefsStore } from '../../prefs';
+import {
+  createDbUserPrefsStore,
+  createPrefs,
+  type OfflineQueue,
+  type UserPrefsStore,
+} from '../../prefs';
 import { SyncNoMaster } from '../forward-core';
 import { migrate } from '../../store/schema';
 import { openStore } from '../../store/store';
@@ -13,7 +18,11 @@ import { fakeOps } from '../../../platform/__tests__/helpers/extension-fakes';
 import { leadProc } from './lead-proc';
 import { readGateSync } from '../role';
 import { createSyncService } from '../service';
-import { forwardOrQueue, installSettingsSync, type ForwardOrQueueOp } from '../settings-sync';
+import {
+  forwardOrQueue,
+  installSettingsSync,
+  type ForwardOrQueueOp,
+} from '../settings-sync';
 
 let db: AppDb | undefined;
 let dir = '';
@@ -25,7 +34,9 @@ afterEach(async () => {
 });
 
 it('installSettingsSync wires the same things main did', async () => {
-  jest.useFakeTimers({ doNotFake: ['nextTick', 'setImmediate', 'queueMicrotask'] });
+  jest.useFakeTimers({
+    doNotFake: ['nextTick', 'setImmediate', 'queueMicrotask'],
+  });
   dir = fs.mkdtempSync(path.join(os.tmpdir(), 'settings-sync-'));
   db = await openDb(path.join(dir, 'a.db'));
   migrate(db._conn!);
@@ -44,7 +55,10 @@ it('installSettingsSync wires the same things main did', async () => {
     workerFile: '',
     log: () => undefined,
   });
-  const prefs = createPrefs(path.join(dir, 'prefs'), createDbUserPrefsStore(db, () => !svc.readOnly()));
+  const prefs = createPrefs(
+    path.join(dir, 'prefs'),
+    createDbUserPrefsStore(db, () => !svc.readOnly()),
+  );
   await prefs.ready;
   const extensions = {
     reconcileExtensions: jest.fn(async () => undefined),
@@ -73,12 +87,14 @@ it('installSettingsSync wires the same things main did', async () => {
     log: () => undefined,
     retryEveryMs: 1000,
     nowMs: Date.now,
-    setInterval: setInterval,
+    setInterval,
   });
 
   // A prefs:patch on a follower with no leader lands in sync_outbound.
   await settings.forwardedLocal.get('prefs:patch')!({ theme: 'dark' });
-  expect(db._conn!.prepare(`SELECT kind FROM sync_outbound`).all()).toEqual([{ kind: 'prefs:patch' }]);
+  expect(db._conn!.prepare(`SELECT kind FROM sync_outbound`).all()).toEqual([
+    { kind: 'prefs:patch' },
+  ]);
 
   // onApplied(['user_prefs']) refreshes prefs, then reconciles once.
   const refresh = jest.spyOn(prefs, 'refreshUser');
@@ -108,7 +124,12 @@ describe('forwardOrQueue', () => {
   function op(over: Partial<ForwardOrQueueOp> = {}) {
     const rows = new Map<string, { id: number; n: number }>();
     let id = 0;
-    const calls = { forward: 0, enqueue: [] as string[], forwarded: 0, queued: [] as string[] };
+    const calls = {
+      forward: 0,
+      enqueue: [] as string[],
+      forwarded: 0,
+      queued: [] as string[],
+    };
     const o: ForwardOrQueueOp = {
       keys: ['a'],
       isHeld: () => false,
@@ -124,14 +145,22 @@ describe('forwardOrQueue', () => {
         rows.set(k, { id, n: (rows.get(k)?.n ?? 0) + 1 });
         return id;
       },
-      apply: { forwarded: () => void (calls.forwarded += 1), queued: (k) => void calls.queued.push(k) },
+      apply: {
+        forwarded: () => {
+          calls.forwarded += 1;
+        },
+        queued: (k) => void calls.queued.push(k),
+      },
       ...over,
     };
     return { o, calls, rows };
   }
 
   it('a multi-key patch with one held key queues every touched key with its complete merged value and forwards nothing', async () => {
-    const { o, calls } = op({ keys: ['core.theme', 'core.outbound'], isHeld: (k) => k === 'core.outbound' });
+    const { o, calls } = op({
+      keys: ['core.theme', 'core.outbound'],
+      isHeld: (k) => k === 'core.outbound',
+    });
     expect(await forwardOrQueue(o)).toBe('queued');
     expect(calls.forward).toBe(0);
     expect(calls.enqueue).toEqual(['core.theme', 'core.outbound']);
@@ -146,7 +175,10 @@ describe('forwardOrQueue', () => {
   });
 
   it('a held ext key replaces its row', async () => {
-    const { o, calls, rows } = op({ keys: ['kiagent.x'], isHeld: (k) => rows.has(k) });
+    const { o, calls, rows } = op({
+      keys: ['kiagent.x'],
+      isHeld: (k) => rows.has(k),
+    });
     expect(await forwardOrQueue(o)).toBe('queued');
     expect(await forwardOrQueue(o)).toBe('queued');
     expect(calls.forward).toBe(1);
@@ -157,7 +189,11 @@ describe('forwardOrQueue', () => {
     const ok = op({ forward: async () => ({ ok: true }) });
     expect(await forwardOrQueue(ok.o)).toBe('forwarded');
     expect(ok.calls.forwarded).toBe(1);
-    const bad = op({ forward: async () => { throw new Error('refused'); } });
+    const bad = op({
+      forward: async () => {
+        throw new Error('refused');
+      },
+    });
     await expect(forwardOrQueue(bad.o)).rejects.toThrow('refused');
     expect(bad.calls.enqueue).toEqual([]);
   });
@@ -176,7 +212,9 @@ describe('settings on a copy through the real prefs', () => {
     const rows: Record<string, unknown> = {};
     const store: UserPrefsStore = {
       all: async () => JSON.parse(JSON.stringify(rows)),
-      set: async (k, v) => void (rows[k] = v),
+      set: async (k, v) => {
+        rows[k] = v;
+      },
       canWrite: () => false,
     };
     const queued: { key: string; payload: unknown }[] = [];
@@ -212,7 +250,9 @@ describe('settings on a copy through the real prefs', () => {
     expect(last.map((q) => q.key)).toEqual(['core.theme', 'core.outbound']);
     expect(last[0].payload).toEqual({ theme: 'dark' });
     expect(last[1].payload).toEqual({ outbound: prefs.get().outbound });
-    expect((last[1].payload as { outbound: Record<string, unknown> }).outbound).toMatchObject({ defaultMode: 'link' });
+    expect(
+      (last[1].payload as { outbound: Record<string, unknown> }).outbound,
+    ).toMatchObject({ defaultMode: 'link' });
   });
 
   it('a forwarded switch shows until a pull that started after it lands', async () => {
@@ -222,7 +262,9 @@ describe('settings on a copy through the real prefs', () => {
     const prefs = createPrefs(tmp, c.store);
     await prefs.ready;
     prefs.setOfflineQueue(c.queue);
-    const handlers: Record<string, (r: unknown) => unknown> = { 'extension:set-enabled': async () => ({ ok: true }) };
+    const handlers: Record<string, (r: unknown) => unknown> = {
+      'extension:set-enabled': async () => ({ ok: true }),
+    };
     installSettingsSync({
       prefs,
       sync: {
@@ -251,12 +293,20 @@ describe('settings on a copy through the real prefs', () => {
       nowMs: () => c.clock.now,
       setInterval: (() => ({ unref: () => undefined })) as never,
     });
-    const view = () => (prefs.getCore('core.extensions') as Record<string, { enabled: boolean }>).a.enabled;
+    const view = () =>
+      (prefs.getCore('core.extensions') as Record<string, { enabled: boolean }>)
+        .a.enabled;
     await handlers['extension:set-enabled']({ id: 'a', enabled: true });
     expect(view()).toBe(true);
-    await prefs.refreshUser({ prefKeys: ['core.extensions'], pullStartedAt: 50 });
+    await prefs.refreshUser({
+      prefKeys: ['core.extensions'],
+      pullStartedAt: 50,
+    });
     expect(view()).toBe(true);
-    await prefs.refreshUser({ prefKeys: ['core.extensions'], pullStartedAt: 150 });
+    await prefs.refreshUser({
+      prefKeys: ['core.extensions'],
+      pullStartedAt: 150,
+    });
     expect(view()).toBe(false);
   });
 });
@@ -264,16 +314,20 @@ describe('settings on a copy through the real prefs', () => {
 describe('a copy through the real service, then promoted', () => {
   /** A joined follower (tracking, a head), the way lead-api.test builds one;
    *  promoted with `lead({epoch})` + `open('head-acked')`. */
-  async function rig(over: { nowMs?: () => number; extensions?: Record<string, unknown>; writes?: { on: boolean } } = {}) {
+  async function rig(
+    over: {
+      nowMs?: () => number;
+      extensions?: Record<string, unknown>;
+      writes?: { on: boolean };
+    } = {},
+  ) {
     dir = fs.mkdtempSync(path.join(os.tmpdir(), 'settings-promote-'));
     db = await openDb(path.join(dir, 'a.db'));
     migrate(db._conn!);
-    db._conn!
-      .prepare(
-        `UPDATE sync_state SET role='follower', master_device_id='m1', tracking=0,
+    db._conn!.prepare(
+      `UPDATE sync_state SET role='follower', master_device_id='m1', tracking=0,
                                history_id='h1', after_seq=7, after_cursor=5, joined=1, epoch=1`,
-      )
-      .run();
+    ).run();
     (db as unknown as { proc: unknown }).proc = leadProc(() => db!._conn!);
     const svc = createSyncService({
       bootGate: readGateSync(db._conn!),
@@ -319,7 +373,8 @@ describe('a copy through the real service, then promoted', () => {
       await svc.lead({ epoch });
       await svc.open('head-acked');
     };
-    const rows = () => db!._conn!.prepare(`SELECT id, attempts FROM sync_outbound`).all();
+    const rows = () =>
+      db!._conn!.prepare(`SELECT id, attempts FROM sync_outbound`).all();
     return { svc, prefs, extensions, handlers, settingsDeps, promote, rows };
   }
 
@@ -331,7 +386,11 @@ describe('a copy through the real service, then promoted', () => {
     expect(r.prefs.hasQueued('kiagent.x.y')).toBe(true);
     const seen: unknown[] = [];
     r.prefs.onExtChange((k, v) => seen.push([k, v]));
-    r.svc.setRunners({ ui: jest.fn(), commit: jest.fn(), core: settings.coreRunner });
+    r.svc.setRunners({
+      ui: jest.fn(),
+      commit: jest.fn(),
+      core: settings.coreRunner,
+    });
     await r.promote(2);
     expect(r.rows()).toEqual([]);
     expect(r.prefs.hasQueued('kiagent.x.y')).toBe(false);
@@ -340,21 +399,33 @@ describe('a copy through the real service, then promoted', () => {
   });
 
   it("a promoted leader's setEnabled on an id with a queued switch: no deadlock, one reconcile at most, overlay empty", async () => {
-    const ops = fakeOps([{ id: 'a', origin: 'marketplace', enabled: true, ref: 'github:kia-plugins/a@1' }]);
+    const ops = fakeOps([
+      {
+        id: 'a',
+        origin: 'marketplace',
+        enabled: true,
+        ref: 'github:kia-plugins/a@1',
+      },
+    ]);
     let setSync: ReturnType<typeof createExtensionSync>;
     const r = await rig({
-      extensions: { reconcileExtensions: jest.fn(async () => void (await setSync.runFromStore())) },
+      extensions: {
+        reconcileExtensions: jest.fn(
+          async () => void (await setSync.runFromStore()),
+        ),
+      },
     });
     setSync = createExtensionSync({
       store: {
         get: () => r.prefs.getCore('core.extensions') as never,
         canWrite: () => !r.svc.readOnly(),
-        update: (fn) => r.prefs.updateCore('core.extensions', (cur) => fn(cur as never)),
+        update: (fn) =>
+          r.prefs.updateCore('core.extensions', (cur) => fn(cur as never)),
       },
       ops,
       log: () => undefined,
     });
-    const handlers = r.handlers;
+    const { handlers } = r;
     handlers['extension:set-enabled'] = (req) => {
       const { id, enabled } = req as { id: string; enabled: boolean };
       return setSync.act(
@@ -371,7 +442,9 @@ describe('a copy through the real service, then promoted', () => {
     expect(r.rows()).toHaveLength(1);
     let timer: NodeJS.Timeout | undefined;
     const done = await Promise.race([
-      Promise.resolve(handlers['extension:set-enabled']({ id: 'a', enabled: true })).then(() => 'done'),
+      Promise.resolve(
+        handlers['extension:set-enabled']({ id: 'a', enabled: true }),
+      ).then(() => 'done'),
       new Promise((res) => {
         timer = setTimeout(() => res('deadlock'), 5000);
       }),
@@ -379,10 +452,19 @@ describe('a copy through the real service, then promoted', () => {
     clearTimeout(timer);
     expect(done).toBe('done');
     await new Promise((res) => setTimeout(res, 50));
-    expect(r.extensions.reconcileExtensions.mock.calls.length).toBeLessThanOrEqual(1);
+    expect(
+      r.extensions.reconcileExtensions.mock.calls.length,
+    ).toBeLessThanOrEqual(1);
     expect(r.prefs.hasQueued('core.extensions.a')).toBe(false);
     expect(r.rows()).toEqual([]);
-    expect((r.prefs.getCore('core.extensions') as Record<string, { enabled: boolean }>).a.enabled).toBe(true);
+    expect(
+      (
+        r.prefs.getCore('core.extensions') as Record<
+          string,
+          { enabled: boolean }
+        >
+      ).a.enabled,
+    ).toBe(true);
   }, 10_000);
 
   it('the fifth refusal emits stuck once and the overlay entry shows it; a later drain does not emit again', async () => {
@@ -393,7 +475,11 @@ describe('a copy through the real service, then promoted', () => {
     await r.prefs.setExt('kiagent.x.y', 7);
     const stuck: unknown[] = [];
     r.svc.onQueueChange((e) => e.kind === 'stuck' && stuck.push(e));
-    r.svc.setForwarder(async () => ({ ok: false, code: 'handler', message: 'bad' }));
+    r.svc.setForwarder(async () => ({
+      ok: false,
+      code: 'handler',
+      message: 'bad',
+    }));
     const drain = async () => {
       await r.svc.drainOutbound();
       t.now += 24 * 60 * 60_000;
@@ -405,7 +491,9 @@ describe('a copy through the real service, then promoted', () => {
     expect(r.prefs.getExt('kiagent.x.y')).toBe(7);
     writes.on = false;
     await drain();
-    expect(stuck).toEqual([{ kind: 'stuck', rowId: 1, coalesceKey: 'kiagent.x.y' }]);
+    expect(stuck).toEqual([
+      { kind: 'stuck', rowId: 1, coalesceKey: 'kiagent.x.y' },
+    ]);
     writes.on = true;
     expect(r.prefs.getExt('kiagent.x.y')).toBeUndefined();
     writes.on = false;
@@ -422,10 +510,18 @@ describe('a copy through the real service, then promoted', () => {
     await r.prefs.setExt('kiagent.x.y', 2);
     const [row] = r.rows() as { id: number }[];
     expect(row.id).toBe(2);
-    r.prefs.onQueueChange({ kind: 'stuck', rowId: 1, coalesceKey: 'kiagent.x.y' });
+    r.prefs.onQueueChange({
+      kind: 'stuck',
+      rowId: 1,
+      coalesceKey: 'kiagent.x.y',
+    });
     writes.on = true;
     expect(r.prefs.getExt('kiagent.x.y')).toBe(2);
-    r.prefs.onQueueChange({ kind: 'stuck', rowId: 2, coalesceKey: 'kiagent.x.y' });
+    r.prefs.onQueueChange({
+      kind: 'stuck',
+      rowId: 2,
+      coalesceKey: 'kiagent.x.y',
+    });
     expect(r.prefs.getExt('kiagent.x.y')).toBeUndefined();
   });
 });

@@ -17,9 +17,12 @@ export function readGuardedDb(db: AppDb, readOnly: () => boolean): AppDb {
     throw new SyncReadOnly(sql.trim().split(/\s+/).slice(0, 3).join(' '));
   };
   const guarded = Object.create(db) as AppDb;
-  guarded.exec = (sql) => (readOnly() && !isRead(sql) ? Promise.reject(safe(sql)) : db.exec(sql));
+  guarded.exec = (sql) =>
+    readOnly() && !isRead(sql) ? Promise.reject(safe(sql)) : db.exec(sql);
   guarded.run = (sql, params) =>
-    readOnly() && !isRead(sql) ? Promise.reject(safe(sql)) : db.run(sql, params);
+    readOnly() && !isRead(sql)
+      ? Promise.reject(safe(sql))
+      : db.run(sql, params);
   guarded.batch = (steps) => {
     if (readOnly()) {
       const bad = steps.find((s) => !isRead(s.sql));

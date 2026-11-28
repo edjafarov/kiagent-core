@@ -6,7 +6,10 @@ import { createPrefs, type UserPrefsStore } from '../prefs';
 
 function fakeStore(initial: Record<string, unknown> = {}, writable = true) {
   const rows: Record<string, unknown> = { ...initial };
-  const s: UserPrefsStore & { rows: Record<string, unknown>; writable: boolean } = {
+  const s: UserPrefsStore & {
+    rows: Record<string, unknown>;
+    writable: boolean;
+  } = {
     rows,
     writable,
     all: async () => JSON.parse(JSON.stringify(rows)),

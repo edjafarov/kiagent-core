@@ -1,3 +1,4 @@
+import fs from 'fs';
 import path from 'path';
 
 import type { CorePlatform } from '../core/boot';
@@ -33,6 +34,9 @@ export function registerBundledProviders(
   localLlm: LocalLlmProvider;
   localAsr: LocalAsrProvider;
   visionHelper: VisionHelper | null;
+  /** Provider ids whose bundled program is not on disk — a build that never
+   *  ran `npm run vendor:inference`, or a package that lost its assets. */
+  missingBinaries: string[];
 } {
   const log =
     (scope: string) => (level: 'info' | 'warn' | 'error', msg: string) =>
@@ -58,6 +62,7 @@ export function registerBundledProviders(
     );
   }
 
+  let windowsOcrMissing = false;
   if (process.platform === 'win32') {
     const wocr = path.join(
       opts.assetsDir,
@@ -72,6 +77,7 @@ export function registerBundledProviders(
         log: log('inference'),
       }),
     );
+    windowsOcrMissing = !fs.existsSync(wocr);
   }
 
   const llama = resolveLlamaBinaries(path.join(opts.assetsDir, 'llama'));
@@ -95,9 +101,12 @@ export function registerBundledProviders(
   // model; this no-ops when Local AI may not install models.
   localLlm.ensureEmbedInstalled();
 
+  const whisperBinary = resolveWhisperBinary(
+    path.join(opts.assetsDir, 'whisper'),
+  );
   const localAsr = createLocalAsrProvider({
     host: platform.host,
-    binaryPath: resolveWhisperBinary(path.join(opts.assetsDir, 'whisper')),
+    binaryPath: whisperBinary,
     // One copy for every slug (scripts/whisper-assets.mjs: the model is
     // platform-independent), so it sits beside the slug dirs, not inside one.
     vadModelPath: path.join(
@@ -112,5 +121,13 @@ export function registerBundledProviders(
   });
   platform.inference.register(localAsr);
 
-  return { localLlm, localAsr, visionHelper };
+  const missingBinaries: string[] = [];
+  if (!llama.gpu && !llama.cpu)
+    missingBinaries.push('local-llm', 'local-embed');
+  if (!fs.existsSync(whisperBinary)) missingBinaries.push('local-asr');
+  if (visionHelper && !fs.existsSync(visionBinary))
+    missingBinaries.push('apple-vision');
+  if (windowsOcrMissing) missingBinaries.push('windows-ocr');
+
+  return { localLlm, localAsr, visionHelper, missingBinaries };
 }

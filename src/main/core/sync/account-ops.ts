@@ -76,7 +76,9 @@ export const accountKey = (source: string, identifier: string): string =>
   `${source}\u0000${identifier}`;
 
 export async function accountKeyOf(
-  account: (id: string) => Promise<{ source: string; identifier: string } | null>,
+  account: (
+    id: string,
+  ) => Promise<{ source: string; identifier: string } | null>,
   accountId: string,
 ): Promise<string> {
   const a = await account(accountId).catch(() => null);

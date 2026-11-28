@@ -4,12 +4,6 @@
  * thread, never the main process event loop. The main process talks to it
  * through the bridge protocol (see ./bridge.ts) via openDbInWorker.
  */
-import { buildDelta, type SyncCursor } from '../core/sync/delta';
-import { buildSnapshot } from '../core/sync/snapshot';
-import { readSyncStatus } from '../core/sync/status';
-import { type RecoverySwapOpts, prepareRestore, prepareSwap } from '../core/sync/swap';
-import { demote, lead, promote } from '../core/sync/promote';
-import { bootPhase, gateFrom, readGateSync } from '../core/sync/role';
 import { parentPort, workerData } from 'node:worker_threads';
 import path from 'node:path';
 import type { CommitBatch, ExternalRef, Seq } from '@shared/contracts';
@@ -31,6 +25,16 @@ import {
   createCorpusQuery,
   QUERY_METHODS,
 } from '@main/core/store/corpus-query';
+import { bootPhase, gateFrom, readGateSync } from '../core/sync/role';
+import { demote, lead, promote } from '../core/sync/promote';
+import {
+  type RecoverySwapOpts,
+  prepareRestore,
+  prepareSwap,
+} from '../core/sync/swap';
+import { readSyncStatus } from '../core/sync/status';
+import { buildSnapshot } from '../core/sync/snapshot';
+import { buildDelta, type SyncCursor } from '../core/sync/delta';
 import { openCorpusReadConnection, openDb } from './app-db';
 import { attachDbHost } from './bridge';
 import { createDbCoordinator } from './coordinator';
@@ -118,10 +122,16 @@ async function runSyncRole(): Promise<void> {
   attachDbHost(parentPort!, db, () => process.exit(0), {
     status: () => readSyncStatus(conn),
     buildDelta: (args) => {
-      const a = args as { after: SyncCursor; out: string; capBytes: number; fromEpoch: number };
+      const a = args as {
+        after: SyncCursor;
+        out: string;
+        capBytes: number;
+        fromEpoch: number;
+      };
       return buildDelta(conn, a.after, a.fromEpoch, a.out, a.capBytes);
     },
-    buildSnapshot: (args) => buildSnapshot(dbPath, (args as { out: string }).out),
+    buildSnapshot: (args) =>
+      buildSnapshot(dbPath, (args as { out: string }).out),
     prepareRestore: () => prepareRestore(dbPath),
     prepareSwap: (args) => {
       const a = args as {
@@ -196,7 +206,9 @@ async function runSyncRole(): Promise<void> {
         syncImportSources: (args) =>
           writeTx.importSources(args as ImportSourcesInput),
         syncImportSecrets: (args) =>
-          writeTx.importSecrets((args as { entries: ImportSecretEntry[] }).entries),
+          writeTx.importSecrets(
+            (args as { entries: ImportSecretEntry[] }).entries,
+          ),
         syncFence: (args) => {
           fenced = (args as { on: boolean }).on;
           return null;
@@ -215,7 +227,10 @@ async function runSyncRole(): Promise<void> {
           return null;
         },
         syncDemote: (args) => {
-          demote(db._conn!, (args as { masterDeviceId: string }).masterDeviceId);
+          demote(
+            db._conn!,
+            (args as { masterDeviceId: string }).masterDeviceId,
+          );
           return null;
         },
         // The reconcile pass runs entirely on this connection: its staging

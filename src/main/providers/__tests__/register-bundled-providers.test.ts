@@ -11,11 +11,11 @@ const setPlatform = (value: string) =>
 
 afterEach(() => setPlatform(realPlatform));
 
-const registeredIds = (platformName: string): string[] => {
+const register = (platformName: string) => {
   setPlatform(platformName);
-  const register = jest.fn();
+  const registerFn = jest.fn();
   const fake = {
-    inference: { register },
+    inference: { register: registerFn },
     logSink: { log: jest.fn() },
     prefs: {
       get: () => ({ models: { autoInstall: false } }),
@@ -23,13 +23,32 @@ const registeredIds = (platformName: string): string[] => {
     },
   } as unknown as CorePlatform;
   const dir = path.join(os.tmpdir(), 'kia-no-such-dir');
-  registerBundledProviders(fake, { assetsDir: dir, dataDir: dir });
-  return register.mock.calls.map(([p]) => (p as { id: string }).id);
+  const out = registerBundledProviders(fake, { assetsDir: dir, dataDir: dir });
+  return {
+    ids: registerFn.mock.calls.map(([p]) => (p as { id: string }).id),
+    missingBinaries: out.missingBinaries,
+  };
 };
+const registeredIds = (platformName: string): string[] =>
+  register(platformName).ids;
 
 it('registers windows-ocr on win32', () => {
   expect(registeredIds('win32')).toContain('windows-ocr');
 });
 it('does not register windows-ocr on darwin', () => {
   expect(registeredIds('darwin')).not.toContain('windows-ocr');
+});
+
+it('names every provider whose bundled program is missing (an assets dir with nothing vendored)', () => {
+  expect(register('linux').missingBinaries).toEqual([
+    'local-llm',
+    'local-embed',
+    'local-asr',
+  ]);
+  expect(register('win32').missingBinaries).toEqual([
+    'local-llm',
+    'local-embed',
+    'local-asr',
+    'windows-ocr',
+  ]);
 });

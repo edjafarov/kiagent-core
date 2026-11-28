@@ -40,7 +40,11 @@ function session(paths: string[], signal: AbortSignal, watch = false): Session {
   };
   return {
     saveCredentials: async () => {},
-    account, signal, credentials: async () => null, log: () => {} };
+    account,
+    signal,
+    credentials: async () => null,
+    log: () => {},
+  };
 }
 
 const msg = (subject: string, day: number) =>

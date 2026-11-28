@@ -2,17 +2,29 @@ import fs from 'fs';
 import path from 'path';
 
 import { closeDevices, device, withRoots } from './helpers/device';
-import { sha, stubServe, serveTransport, tmpDir } from './helpers/fake-transport';
+import {
+  sha,
+  stubServe,
+  serveTransport,
+  tmpDir,
+} from './helpers/fake-transport';
 
 afterEach(closeDevices);
 
 const leaderFolder = () => {
-  const lead = { incoming: path.join(tmpDir(), 'i'), sorted: path.join(tmpDir(), 's') };
+  const lead = {
+    incoming: path.join(tmpDir(), 'i'),
+    sorted: path.join(tmpDir(), 's'),
+  };
   fs.mkdirSync(lead.incoming, { recursive: true });
   fs.mkdirSync(lead.sorted, { recursive: true });
   return lead;
 };
-const rowFor = (d: Awaited<ReturnType<typeof device>>, rel: string, text: string) =>
+const rowFor = (
+  d: Awaited<ReturnType<typeof device>>,
+  rel: string,
+  text: string,
+) =>
   d.db.run(
     `INSERT OR REPLACE INTO shared_files(root, rel_path, sha256, bytes, mtime, missing_here, deleted, parked, rev)
      VALUES('sorted', ?, ?, ?, '2026-01-02T03:04:05.000Z', 0, 0, 0, 1)`,
@@ -91,7 +103,9 @@ it('a kick during a pass queues exactly one more pass', async () => {
   const lead = leaderFolder();
   await rowFor(d, 'a.txt', 'never on the leader'); // every pass asks once and is told 'gone'
   let release!: () => void;
-  const gate = new Promise<void>((r) => (release = r));
+  const gate = new Promise<void>((r) => {
+    release = r;
+  });
   let asked = 0;
   d.svc.setTransport({
     fetch: async () => {

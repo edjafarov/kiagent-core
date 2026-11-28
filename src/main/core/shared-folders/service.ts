@@ -11,7 +11,13 @@ import { scanRoot } from './leader-scan';
 import { mirrorPass } from './mirror';
 import { listSortable, reconcileAtPromotion } from './promote';
 import { rowAt } from './row-lookup';
-import { nameKey, normalizeRel, safeAbs, toRel, type SharedRoot } from './paths';
+import {
+  nameKey,
+  normalizeRel,
+  safeAbs,
+  toRel,
+  type SharedRoot,
+} from './paths';
 import {
   checkRoot,
   initialiseRoot,
@@ -24,7 +30,12 @@ import {
   type Gate,
 } from './root-state';
 import { createServe } from './serve';
-import { loadUnparsed, reportUnparsed, restamp, type Unparsed } from './unparsed';
+import {
+  loadUnparsed,
+  reportUnparsed,
+  restamp,
+  type Unparsed,
+} from './unparsed';
 import { watchRoot, type RootWatcher } from './watch';
 
 export type { SharedRoot } from './paths';
@@ -34,8 +45,18 @@ export type Roots = { incoming: string | null; sorted: string | null };
  *  the folder is not there, not readable, or not initialised yet; `paused-marker`
  *  the folder is there but its marker is absent or another id; `owed` a
  *  reconcile (a new leader's, or after `reattach`) has not finished. */
-export type RootStatus = 'ok' | 'unset' | 'paused-missing' | 'paused-marker' | 'owed';
-export type SharedRef = { accountId: string; externalId: string; root: SharedRoot; relPath: string };
+export type RootStatus =
+  | 'ok'
+  | 'unset'
+  | 'paused-missing'
+  | 'paused-marker'
+  | 'owed';
+export type SharedRef = {
+  accountId: string;
+  externalId: string;
+  root: SharedRoot;
+  relPath: string;
+};
 export type OfferMeta = {
   root: SharedRoot;
   relPath: string;
@@ -43,7 +64,12 @@ export type OfferMeta = {
   base: string | null;
   captureId: string | null;
 };
-export type OfferAnswer = 'same' | 'written' | 'kept-both' | 'have-it' | 'filled';
+export type OfferAnswer =
+  | 'same'
+  | 'written'
+  | 'kept-both'
+  | 'have-it'
+  | 'filled';
 export type FileQuery = { root: SharedRoot; relPath: string; sha256: string };
 
 /** The network, supplied by the app (remote-mcp). Core never opens a socket. */
@@ -76,7 +102,10 @@ export interface SharedFoldersApi {
   resolve(absPath: string): Promise<SharedRef | null>;
   /** The local path of a document's original, only while the root is usable,
    *  the row is live, and the file here holds the row's bytes. */
-  pathOf(doc: { accountId: string; externalId: string }): Promise<string | null>;
+  pathOf(doc: {
+    accountId: string;
+    externalId: string;
+  }): Promise<string | null>;
   parked(absPath: string): Promise<boolean>;
   /** Tells `cb` when `shared_files` changed on this device or a promotion
    *  reconcile finished (the sorter asks `listForSorting` again). */
@@ -110,14 +139,24 @@ export interface SharedFoldersApi {
   reattach(root: SharedRoot): Promise<void>;
   moved(fromAbs: string, toAbs: string): Promise<void>;
   registerCapture(captureId: string, sha256: string): Promise<void>;
-  noteCapture(captureId: string, absPath: string, sha256: string): Promise<boolean>;
-  fileOfCapture(
+  noteCapture(
     captureId: string,
-  ): Promise<{ ref: SharedRef; absPath: string | null; missingHere: boolean } | null>;
+    absPath: string,
+    sha256: string,
+  ): Promise<boolean>;
+  fileOfCapture(captureId: string): Promise<{
+    ref: SharedRef;
+    absPath: string | null;
+    missingHere: boolean;
+  } | null>;
   serve: {
     open(q: FileQuery): Promise<{ path: string; bytes: number } | null>;
     stagingFile(root: SharedRoot): Promise<string>;
-    offer(meta: OfferMeta, tmpFile: string, fromDeviceName: string): Promise<OfferAnswer>;
+    offer(
+      meta: OfferMeta,
+      tmpFile: string,
+      fromDeviceName: string,
+    ): Promise<OfferAnswer>;
     remove(q: FileQuery): Promise<boolean>;
   };
 }
@@ -172,11 +211,13 @@ export const ENABLED_META_KEY = 'shared-folders:enabled';
 export const RECONCILE_PENDING_KEY = OWED_KEY;
 export const SHARED_SOURCE = 'shared-folder';
 
-
-const isRoot = (s: string): s is SharedRoot => s === 'incoming' || s === 'sorted';
+const isRoot = (s: string): s is SharedRoot =>
+  s === 'incoming' || s === 'sorted';
 
 async function loadRoots(db: AppDb): Promise<Roots> {
-  const rows = await db.all(`SELECT value FROM meta WHERE key = ?`, [ROOTS_META_KEY]);
+  const rows = await db.all(`SELECT value FROM meta WHERE key = ?`, [
+    ROOTS_META_KEY,
+  ]);
   const out: Roots = { incoming: null, sorted: null };
   try {
     const j = JSON.parse(String(rows[0]?.value ?? '{}')) as Partial<Roots>;
@@ -188,11 +229,15 @@ async function loadRoots(db: AppDb): Promise<Roots> {
   return out;
 }
 
-export async function createSharedFolders(deps: SharedFoldersDeps): Promise<SharedFolders> {
+export async function createSharedFolders(
+  deps: SharedFoldersDeps,
+): Promise<SharedFolders> {
   let closed = false;
   let roots = await loadRoots(deps.db);
   let transport: SharedTransport | null = null;
-  let enabled = (await deps.db.all(`SELECT 1 FROM meta WHERE key = ?`, [ENABLED_META_KEY])).length > 0;
+  let enabled =
+    (await deps.db.all(`SELECT 1 FROM meta WHERE key = ?`, [ENABLED_META_KEY]))
+      .length > 0;
   /** Another computer is in this device's account: a follower always has one
    *  (its leader), a leader has one when the lease says `multiDevice`. */
   const hasPeer = (): boolean => {
@@ -200,7 +245,8 @@ export async function createSharedFolders(deps: SharedFoldersDeps): Promise<Shar
     return r.multiDevice || r.follower;
   };
   /** Enabling is due: roots are set and a peer is there. */
-  const due = (): boolean => !enabled && !closed && !!(roots.incoming || roots.sorted) && hasPeer();
+  const due = (): boolean =>
+    !enabled && !closed && !!(roots.incoming || roots.sorted) && hasPeer();
 
   const mode = (): SharedMode => {
     const r = deps.sync.role();
@@ -222,12 +268,14 @@ export async function createSharedFolders(deps: SharedFoldersDeps): Promise<Shar
   const enqueue = <T>(fn: () => Promise<T>): Promise<T> => {
     queued += 1;
     const p = tail.then(fn);
-    tail = p.then(
-      () => {},
-      () => {},
-    ).finally(() => {
-      queued -= 1;
-    });
+    tail = p
+      .then(
+        () => {},
+        () => {},
+      )
+      .finally(() => {
+        queued -= 1;
+      });
     return p;
   };
   const modeListeners: ((next: SharedMode, prev: SharedMode) => void)[] = [];
@@ -236,14 +284,22 @@ export async function createSharedFolders(deps: SharedFoldersDeps): Promise<Shar
   deps.sync.onRole(() => {
     if (due()) {
       enabled = true;
-      starting = starting.then(enableNow).catch((err) => deps.log('warn', `could not start the shared folders: ${String(err)}`));
+      starting = starting
+        .then(enableNow)
+        .catch((err) =>
+          deps.log(
+            'warn',
+            `could not start the shared folders: ${String(err)}`,
+          ),
+        );
     }
     const next = mode();
     if (next === lastMode) return;
     const prev = lastMode;
     lastMode = next;
     roleGen += 1; // every pass and request that started under the old role must stop writing
-    if (next === 'copy') void markPending().catch((err) => deps.log('warn', `${String(err)}`));
+    if (next === 'copy')
+      void markPending().catch((err) => deps.log('warn', `${String(err)}`));
     for (const cb of modeListeners) cb(next, prev);
     starting = starting.then(rewatch).then(kick);
   });
@@ -255,7 +311,11 @@ export async function createSharedFolders(deps: SharedFoldersDeps): Promise<Shar
     if (deps.localFolders) {
       for (const base of [roots.incoming, roots.sorted]) {
         // eslint-disable-next-line no-await-in-loop
-        if (base) await migrateLocalFolders({ db: deps.db, localFolders: deps.localFolders, log: deps.log }, base);
+        if (base)
+          await migrateLocalFolders(
+            { db: deps.db, localFolders: deps.localFolders, log: deps.log },
+            base,
+          );
       }
     }
     await rewatch();
@@ -269,7 +329,10 @@ export async function createSharedFolders(deps: SharedFoldersDeps): Promise<Shar
       `INSERT INTO meta(key, value) VALUES(?, '1') ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
       [ENABLED_META_KEY],
     );
-    deps.log('info', 'shared folders are on: this device has another computer in its account');
+    deps.log(
+      'info',
+      'shared folders are on: this device has another computer in its account',
+    );
     await startUp();
     fire();
   };
@@ -289,7 +352,11 @@ export async function createSharedFolders(deps: SharedFoldersDeps): Promise<Shar
     if (was === gate) return;
     gates.set(root, gate);
     if (gate === 'ok') deps.log('info', `${root} folder is back; resumed`);
-    else deps.log('warn', `${root} folder ${gate === 'marker' ? 'is not the one this Mac set up' : 'is missing or unreadable'}; paused until it is back`);
+    else
+      deps.log(
+        'warn',
+        `${root} folder ${gate === 'marker' ? 'is not the one this Mac set up' : 'is missing or unreadable'}; paused until it is back`,
+      );
     fire();
   };
   const gated = { ...deps, gateChanged };
@@ -332,15 +399,26 @@ export async function createSharedFolders(deps: SharedFoldersDeps): Promise<Shar
     }
   };
   const maxRev = async (): Promise<number> =>
-    Number((await deps.db.all(`SELECT coalesce(max(rev), 0) AS m FROM shared_files`))[0]?.m ?? 0);
+    Number(
+      (
+        await deps.db.all(`SELECT coalesce(max(rev), 0) AS m FROM shared_files`)
+      )[0]?.m ?? 0,
+    );
   /** Runs the promotion reconcile if one is owed. Only from inside the queue. */
   const reconcileIfPending = async (still: () => boolean): Promise<void> => {
     if (owed.size === 0) return;
     const gen = pendingGen;
-    const result = await reconcileAtPromotion({ ...deps, roots, gateChanged, still, only: owed });
+    const result = await reconcileAtPromotion({
+      ...deps,
+      roots,
+      gateChanged,
+      still,
+      only: owed,
+    });
     if (gen !== pendingGen || !still()) return; // became a copy again meanwhile: still owed
     let changed = false;
-    for (const r of ROOT_NAMES) if (result[r] === 'done' && owed.delete(r)) changed = true;
+    for (const r of ROOT_NAMES)
+      if (result[r] === 'done' && owed.delete(r)) changed = true;
     if (!changed) return;
     await saveRootSet(deps.db, OWED_KEY, owed);
     fire();
@@ -364,11 +442,18 @@ export async function createSharedFolders(deps: SharedFoldersDeps): Promise<Shar
     const still = stillAs('leader');
     await reconcileIfPending(still);
     if (!still()) return;
-    if (deps.ensureAccount && (roots.incoming || roots.sorted) && !(await accountId())) {
+    if (
+      deps.ensureAccount &&
+      (roots.incoming || roots.sorted) &&
+      !(await accountId())
+    ) {
       try {
         await deps.ensureAccount();
       } catch (err) {
-        deps.log('warn', `could not create the shared-folder account: ${String(err)}`);
+        deps.log(
+          'warn',
+          `could not create the shared-folder account: ${String(err)}`,
+        );
       }
     }
     const before = await maxRev();
@@ -381,7 +466,11 @@ export async function createSharedFolders(deps: SharedFoldersDeps): Promise<Shar
         await scanRoot({ ...gated, still }, root, base);
       }
     }
-    if (still()) await restamp({ ...deps, roots, usable: (r) => api.usable(r), still }, unparsed);
+    if (still())
+      await restamp(
+        { ...deps, roots, usable: (r) => api.usable(r), still },
+        unparsed,
+      );
     if ((await maxRev()) !== before) fire();
   };
   const run = (): void => {
@@ -408,7 +497,14 @@ export async function createSharedFolders(deps: SharedFoldersDeps): Promise<Shar
   const retry = setInterval(() => {
     if (closed) return;
     if (transport && mode() === 'copy') kick();
-    else if (mode() === 'leader' && (unparsed.size > 0 || ROOT_NAMES.some((r) => roots[r] && (gates.get(r) !== 'ok' || owed.has(r))))) kick();
+    else if (
+      mode() === 'leader' &&
+      (unparsed.size > 0 ||
+        ROOT_NAMES.some(
+          (r) => roots[r] && (gates.get(r) !== 'ok' || owed.has(r)),
+        ))
+    )
+      kick();
   }, deps.retryMs ?? 60_000);
   retry.unref?.();
   deps.sync.onApplied((tables) => {
@@ -433,9 +529,10 @@ export async function createSharedFolders(deps: SharedFoldersDeps): Promise<Shar
   };
 
   const accountId = async (): Promise<string | null> => {
-    const rows = await deps.db.all(`SELECT id FROM accounts WHERE source = ? ORDER BY created_at LIMIT 1`, [
-      SHARED_SOURCE,
-    ]);
+    const rows = await deps.db.all(
+      `SELECT id FROM accounts WHERE source = ? ORDER BY created_at LIMIT 1`,
+      [SHARED_SOURCE],
+    );
     return rows[0] ? String(rows[0].id) : null;
   };
 
@@ -454,11 +551,13 @@ export async function createSharedFolders(deps: SharedFoldersDeps): Promise<Shar
     refuse: (root) => {
       if (!enabled) throw new SharedRootPaused(root, 'paused');
       if (owed.has(root)) throw new SharedRootPaused(root, 'owed');
-      if (roots[root] && gates.get(root) !== 'ok') throw new SharedRootPaused(root, 'paused');
+      if (roots[root] && gates.get(root) !== 'ok')
+        throw new SharedRootPaused(root, 'paused');
     },
     quick: async (root) => {
       const base = roots[root];
-      if (base && (await checkRoot(gated, root, base)) !== 'ok') throw new SharedRootPaused(root, 'paused');
+      if (base && (await checkRoot(gated, root, base)) !== 'ok')
+        throw new SharedRootPaused(root, 'paused');
     },
     kick,
   });
@@ -468,7 +567,13 @@ export async function createSharedFolders(deps: SharedFoldersDeps): Promise<Shar
       const still = stillAs('leader');
       await reconcileIfPending(still);
       const base = roots.incoming;
-      if (!still() || !base || (await checkRoot(gated, 'incoming', base)) !== 'ok' || !api.usable('incoming')) return [];
+      if (
+        !still() ||
+        !base ||
+        (await checkRoot(gated, 'incoming', base)) !== 'ok' ||
+        !api.usable('incoming')
+      )
+        return [];
       return listSortable(deps, base, parkedToo);
     });
   };
@@ -478,7 +583,10 @@ export async function createSharedFolders(deps: SharedFoldersDeps): Promise<Shar
       await starting;
       while (timer || running || queued > 0) {
         // eslint-disable-next-line no-await-in-loop
-        await (running ?? (queued > 0 ? tail : new Promise((r) => setTimeout(r, debounceMs + 1))));
+        await (running ??
+          (queued > 0
+            ? tail
+            : new Promise((r) => setTimeout(r, debounceMs + 1))));
       }
     },
     close: async () => {
@@ -496,7 +604,10 @@ export async function createSharedFolders(deps: SharedFoldersDeps): Promise<Shar
     onMode: (cb) => void modeListeners.push(cb),
     roots: () => ({ ...roots }),
     setRoots: async (next) => {
-      const clean: Roots = { incoming: next.incoming ?? null, sorted: next.sorted ?? null };
+      const clean: Roots = {
+        incoming: next.incoming ?? null,
+        sorted: next.sorted ?? null,
+      };
       await deps.db.run(
         `INSERT INTO meta(key, value) VALUES(?, ?)
          ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
@@ -525,7 +636,12 @@ export async function createSharedFolders(deps: SharedFoldersDeps): Promise<Shar
         if (!rel) continue;
         const row = await rowAt(deps.db, key, root, rel); // the manifest's spelling is the identity
         const relPath = row?.rel_path ?? rel;
-        return { accountId: id, externalId: `${root}/${relPath}`, root, relPath };
+        return {
+          accountId: id,
+          externalId: `${root}/${relPath}`,
+          root,
+          relPath,
+        };
       }
       return null;
     },
@@ -539,7 +655,8 @@ export async function createSharedFolders(deps: SharedFoldersDeps): Promise<Shar
       // only a paused root that withholds the path there.
       if (!base) return null;
       const status = rootStatus(root as SharedRoot);
-      if (status !== 'ok' && !(status === 'owed' && mode() === 'copy')) return null;
+      if (status !== 'ok' && !(status === 'owed' && mode() === 'copy'))
+        return null;
       try {
         const rel = normalizeRel(doc.externalId.slice(cut + 1));
         // Only for the version the manifest names: after a promotion the disk
@@ -551,12 +668,16 @@ export async function createSharedFolders(deps: SharedFoldersDeps): Promise<Shar
         const abs = await safeAbs(base, row.rel_path);
         const st = await fs.promises.stat(abs);
         if (!st.isFile()) return null;
-        const m = (await deps.db.all(`SELECT sha256, bytes, mtime_ms FROM shared_mirror WHERE root = ? AND rel_path = ?`, [
-          root,
-          row.rel_path,
-        ]))[0];
+        const m = (
+          await deps.db.all(
+            `SELECT sha256, bytes, mtime_ms FROM shared_mirror WHERE root = ? AND rel_path = ?`,
+            [root, row.rel_path],
+          )
+        )[0];
         const sha =
-          m && Number(m.bytes) === st.size && Number(m.mtime_ms) === Math.floor(st.mtimeMs)
+          m &&
+          Number(m.bytes) === st.size &&
+          Number(m.mtime_ms) === Math.floor(st.mtimeMs)
             ? String(m.sha256)
             : await deps.hashFile(abs);
         return sha === row.sha256 ? abs : null;
@@ -583,8 +704,14 @@ export async function createSharedFolders(deps: SharedFoldersDeps): Promise<Shar
     reattach: (root) =>
       enqueue(async () => {
         const base = roots[root];
-        if (!enabled) throw new Error('shared-folders: folders are shared only once another computer is in the account');
-        if (!base) throw new Error(`shared-folders: the ${root} folder is not set on this Mac`);
+        if (!enabled)
+          throw new Error(
+            'shared-folders: folders are shared only once another computer is in the account',
+          );
+        if (!base)
+          throw new Error(
+            `shared-folders: the ${root} folder is not set on this Mac`,
+          );
         await reinitialiseRoot(gated, root, base);
         // Every file is compared afresh: nothing on disk can be read as a deletion.
         await deps.db.run(`DELETE FROM shared_mirror WHERE root = ?`, [root]);
@@ -596,7 +723,8 @@ export async function createSharedFolders(deps: SharedFoldersDeps): Promise<Shar
         await checkRoot(gated, root, base);
         kick();
       }),
-    reportUnparsed: (refs) => reportUnparsed({ ...deps, roots }, unparsed, refs),
+    reportUnparsed: (refs) =>
+      reportUnparsed({ ...deps, roots }, unparsed, refs),
     listForSorting: () => listIncoming(false),
     listPresent: () => listIncoming(true),
     serve,

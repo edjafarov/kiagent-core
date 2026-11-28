@@ -1,5 +1,5 @@
 {
-  "$comment": "Release flow: `npm run release` bumps the version in BOTH package.json files (root via the npm plugin, release/app via @release-it/bumper — electron-builder and app.getVersion() read release/app), prepends the conventional-commits section to CHANGELOG.md, commits as chore(release), tags vX.Y.Z and pushes. Since 2026-07-13 the tag push triggers NO build — release builds were removed from this repo's CI (kiagent-core-package.yml deleted); the tag exists so consumers (alpha-cent core.lock) can pin it. Local unsigned builds: `npm run package:oss`.",
+  "$comment": "Release flow: `npm run release` bumps the version in BOTH package.json files (root via the npm plugin, release/app via @release-it/bumper — electron-builder and app.getVersion() read release/app — and the after:bump hook copies it into release/app/package-lock.json), prepends the conventional-commits section to CHANGELOG.md, commits as chore(release), tags vX.Y.Z and pushes. Since 2026-07-13 the tag push triggers NO build — release builds were removed from this repo's CI (kiagent-core-package.yml deleted); the tag exists so consumers (alpha-cent core.lock) can pin it. Local unsigned builds: `npm run package:oss`.",
   "git": {
     "requireBranch": "dev",
     "requireCleanWorkingDir": true,
@@ -27,5 +27,8 @@
       "infile": "CHANGELOG.md",
       "header": "# Changelog"
     }
+  },
+  "hooks": {
+    "after:bump": "node scripts/sync-app-lock-version.mjs"
   }
 }

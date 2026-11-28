@@ -15,7 +15,8 @@ export interface SharedFileItem {
 }
 
 /** A shared file's document id is the same on every Mac: root and path inside it. */
-export const sharedExternalId = (root: string, relPath: string): string => `${root}/${relPath}`;
+export const sharedExternalId = (root: string, relPath: string): string =>
+  `${root}/${relPath}`;
 
 /** `local-folder`'s mapping for everything but identity: no absolute path and
  *  no `file://` link (both differ per Mac), the manifest's root and path in
@@ -23,10 +24,18 @@ export const sharedExternalId = (root: string, relPath: string): string => `${ro
 export function toDocument(item: SharedFileItem): DocumentInput {
   const doc = localToDocument(item.file) as DocumentInput;
   const { url: _url, scopeRootId: _scope, metadata, ...rest } = doc;
-  const { absPath: _abs, ...kept } = (metadata ?? {}) as Record<string, unknown>;
+  const { absPath: _abs, ...kept } = (metadata ?? {}) as Record<
+    string,
+    unknown
+  >;
   return {
     ...rest,
     externalId: sharedExternalId(item.root, item.relPath),
-    metadata: { ...kept, root: item.root, relPath: item.relPath, sha256: item.sha256 },
+    metadata: {
+      ...kept,
+      root: item.root,
+      relPath: item.relPath,
+      sha256: item.sha256,
+    },
   };
 }

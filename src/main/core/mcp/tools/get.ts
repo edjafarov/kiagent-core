@@ -4,8 +4,8 @@
  * batch semantics: an array in, an order-preserving array out with `null`
  * per miss.
  */
-import { sourceUrlOf, type LocalPathOf } from './local-path';
 import type { Document, DocumentId, Query } from '@shared/contracts';
+import { sourceUrlOf, type LocalPathOf } from './local-path';
 
 /** Children inlined per document. Enough for a chat day's media or a normal
  *  thread; a 200-message thread is paged through `get_related` instead. */
@@ -107,7 +107,9 @@ export function makeGetTool(query: Query, localPathOf?: LocalPathOf) {
       const docs = await Promise.all(
         a.ids.map((id) => query.document(id as DocumentId)),
       );
-      return Promise.all(docs.map((d) => (d ? toMcpDoc(d, sourceOf, query, localPathOf) : null)));
+      return Promise.all(
+        docs.map((d) => (d ? toMcpDoc(d, sourceOf, query, localPathOf) : null)),
+      );
     }
 
     if (a.id == null) throw new Error('missing `id` (or `ids` for batch mode)');

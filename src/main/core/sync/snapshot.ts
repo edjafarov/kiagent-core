@@ -35,12 +35,21 @@ export function buildSnapshot(
     conn.unsafeMode(true);
     const target = conn.transaction((): SyncCursor => {
       const master = conn
-        .prepare(`SELECT type, name, tbl_name, sql FROM sqlite_master WHERE sql IS NOT NULL`)
-        .all() as { type: string; name: string; tbl_name: string; sql: string }[];
+        .prepare(
+          `SELECT type, name, tbl_name, sql FROM sqlite_master WHERE sql IS NOT NULL`,
+        )
+        .all() as {
+        type: string;
+        name: string;
+        tbl_name: string;
+        sql: string;
+      }[];
       const shadow = new Set(
         (
           conn
-            .prepare(`SELECT name FROM pragma_table_list WHERE schema='main' AND type='shadow'`)
+            .prepare(
+              `SELECT name FROM pragma_table_list WHERE schema='main' AND type='shadow'`,
+            )
             .all() as { name: string }[]
         ).map((r) => r.name),
       );
@@ -51,7 +60,8 @@ export function buildSnapshot(
         conn.exec(qualify(def.sql));
       }
       const virtuals = master.filter(
-        (m) => m.type === 'table' && isDerivedTable(m.name) && !shadow.has(m.name),
+        (m) =>
+          m.type === 'table' && isDerivedTable(m.name) && !shadow.has(m.name),
       );
       for (const v of virtuals) conn.exec(qualify(v.sql));
       for (const m of master) {
@@ -62,13 +72,17 @@ export function buildSnapshot(
       const rowidless = new Set(
         (
           conn
-            .prepare(`SELECT name FROM pragma_table_list WHERE schema='main' AND wr = 1`)
+            .prepare(
+              `SELECT name FROM pragma_table_list WHERE schema='main' AND wr = 1`,
+            )
             .all() as { name: string }[]
         ).map((r) => r.name),
       );
       for (const t of copied) {
         const cols = (
-          conn.prepare(`SELECT name FROM pragma_table_info(?)`).all(t) as { name: string }[]
+          conn.prepare(`SELECT name FROM pragma_table_info(?)`).all(t) as {
+            name: string;
+          }[]
         )
           .map((c) => `"${c.name}"`)
           .join(',');
@@ -80,7 +94,9 @@ export function buildSnapshot(
       }
       for (const s of shadow) {
         if (!isDerivedTable(s)) continue;
-        conn.exec(`DELETE FROM snap.${s}; INSERT INTO snap.${s} SELECT * FROM main.${s};`);
+        conn.exec(
+          `DELETE FROM snap.${s}; INSERT INTO snap.${s} SELECT * FROM main.${s};`,
+        );
       }
       const head = conn
         .prepare(
@@ -89,7 +105,12 @@ export function buildSnapshot(
                   (SELECT history_id FROM sync_state) AS history,
                   (SELECT epoch FROM sync_state) AS epoch`,
         )
-        .get() as { seq: number; cursor: number; history: string | null; epoch: number };
+        .get() as {
+        seq: number;
+        cursor: number;
+        history: string | null;
+        epoch: number;
+      };
       conn.exec(
         `CREATE TABLE snap.${SNAPSHOT_META}(after_seq INTEGER, after_cursor INTEGER, history_id TEXT, epoch INTEGER, copied TEXT)`,
       );
@@ -98,7 +119,13 @@ export function buildSnapshot(
       // master's list and not by the joiner's descriptors.
       conn
         .prepare(`INSERT INTO snap.${SNAPSHOT_META} VALUES(?, ?, ?, ?, ?)`)
-        .run(head.seq, head.cursor, head.history, head.epoch, JSON.stringify(copied));
+        .run(
+          head.seq,
+          head.cursor,
+          head.history,
+          head.epoch,
+          JSON.stringify(copied),
+        );
       return { seq: head.seq, cursor: head.cursor };
     })();
     conn.unsafeMode(false);

@@ -8,7 +8,10 @@ import { openDb } from '@main/db/app-db';
 import { openStore, type CoreStore } from '@main/core/store/store';
 import type { SyncService } from '@main/core/sync/service';
 
-import { createExtensionPlatform, type ExtensionPlatform } from '../extension-platform';
+import {
+  createExtensionPlatform,
+  type ExtensionPlatform,
+} from '../extension-platform';
 import { runExtensionHost } from '../extension-host-entry';
 import { createInMemoryHostPair } from '../transport';
 
@@ -16,12 +19,24 @@ jest.setTimeout(120_000);
 const FIXTURE = path.join(__dirname, 'fixtures', 'ext-fwd');
 
 /** The members `callUi` and `forwardCore` read, typed against the real service. */
-type PlatformSync = Pick<SyncService, 'readOnly' | 'forward' | 'enqueue' | 'onApplied'>;
+type PlatformSync = Pick<
+  SyncService,
+  'readOnly' | 'forward' | 'enqueue' | 'onApplied'
+>;
 type FakeSync = {
-  [K in keyof PlatformSync]: jest.Mock<ReturnType<PlatformSync[K]>, Parameters<PlatformSync[K]>>;
+  [K in keyof PlatformSync]: jest.Mock<
+    ReturnType<PlatformSync[K]>,
+    Parameters<PlatformSync[K]>
+  >;
 };
 
-const build = (tmp: string, store: CoreStore, sync: FakeSync, fixture = FIXTURE, id = 'test.fwd') => {
+const build = (
+  tmp: string,
+  store: CoreStore,
+  sync: FakeSync,
+  fixture = FIXTURE,
+  id = 'test.fwd',
+) => {
   fs.cpSync(fixture, path.join(tmp, 'bundled', id), { recursive: true });
   return createExtensionPlatform({
     extDir: path.join(tmp, 'extensions'),
@@ -30,8 +45,18 @@ const build = (tmp: string, store: CoreStore, sync: FakeSync, fixture = FIXTURE,
     attention: {} as never,
     // The platform's dep is the whole service; the fake carries what it reads.
     sync: sync as unknown as SyncService,
-    sources: { register: () => {}, get: () => undefined, list: () => [], unregister: () => {} },
-    senders: { register: () => {}, get: () => undefined, ids: () => [], unregister: () => {} },
+    sources: {
+      register: () => {},
+      get: () => undefined,
+      list: () => [],
+      unregister: () => {},
+    },
+    senders: {
+      register: () => {},
+      get: () => undefined,
+      ids: () => [],
+      unregister: () => {},
+    },
     scheduler: {
       register: jest.fn(),
       unregister: jest.fn(),
@@ -40,7 +65,12 @@ const build = (tmp: string, store: CoreStore, sync: FakeSync, fixture = FIXTURE,
       env: {},
     } as never,
     registerTool: () => () => {},
-    inference: { complete: async () => '', see: async () => '', read: async () => '', hear: async () => '' },
+    inference: {
+      complete: async () => '',
+      see: async () => '',
+      read: async () => '',
+      hear: async () => '',
+    },
     laneState: () => 'open',
     logSink: { log: () => {} },
     notify: () => {},
@@ -62,7 +92,12 @@ describe('forwarding through callUi', () => {
   let tmp: string;
   let store: CoreStore;
   let platform: ExtensionPlatform;
-  const sync: FakeSync = { readOnly: jest.fn(), forward: jest.fn(), enqueue: jest.fn(), onApplied: jest.fn() };
+  const sync: FakeSync = {
+    readOnly: jest.fn(),
+    forward: jest.fn(),
+    enqueue: jest.fn(),
+    onApplied: jest.fn(),
+  };
 
   beforeAll(async () => {
     tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kia-fwd-'));
@@ -73,7 +108,10 @@ describe('forwarding through callUi', () => {
     });
     platform = build(tmp, store, sync);
     await platform.start();
-    if (platform.snapshot().find((e) => e.id === 'test.fwd')?.status !== 'activated')
+    if (
+      platform.snapshot().find((e) => e.id === 'test.fwd')?.status !==
+      'activated'
+    )
       throw new Error('fixture did not activate');
   });
   afterAll(async () => {
@@ -86,10 +124,16 @@ describe('forwarding through callUi', () => {
     sync.forward.mockReset();
     sync.enqueue.mockReset();
   });
-  const calls = async () => (await platform.callUi('test.fwd', 'calls', null)) as { ok: true; value: unknown[] };
+  const calls = async () =>
+    (await platform.callUi('test.fwd', 'calls', null)) as {
+      ok: true;
+      value: unknown[];
+    };
 
   it('master runs a declared name locally', async () => {
-    await expect(platform.callUi('test.fwd', 'save', { id: 1 })).resolves.toEqual({
+    await expect(
+      platform.callUi('test.fwd', 'save', { id: 1 }),
+    ).resolves.toEqual({
       ok: true,
       value: { saved: { id: 1 } },
     });
@@ -100,7 +144,9 @@ describe('forwarding through callUi', () => {
     sync.readOnly.mockReturnValue(true);
     sync.forward.mockResolvedValue({ ok: true, value: { saved: 'by master' } });
     const before = (await calls()).value.length;
-    await expect(platform.callUi('test.fwd', 'save', { id: 2 })).resolves.toEqual({
+    await expect(
+      platform.callUi('test.fwd', 'save', { id: 2 }),
+    ).resolves.toEqual({
       ok: true,
       value: { saved: 'by master' },
     });
@@ -117,13 +163,20 @@ describe('forwarding through callUi', () => {
 
   it('follower runs an undeclared name locally', async () => {
     sync.readOnly.mockReturnValue(true);
-    await expect(platform.callUi('test.fwd', 'plain', 3)).resolves.toEqual({ ok: true, value: { plain: 3 } });
+    await expect(platform.callUi('test.fwd', 'plain', 3)).resolves.toEqual({
+      ok: true,
+      value: { plain: 3 },
+    });
     expect(sync.forward).not.toHaveBeenCalled();
   });
 
   it('no leader: EXT_SYNC_NO_MASTER, and no handler ran', async () => {
     sync.readOnly.mockReturnValue(true);
-    sync.forward.mockResolvedValue({ ok: false, code: 'no-master', message: 'no leader' });
+    sync.forward.mockResolvedValue({
+      ok: false,
+      code: 'no-master',
+      message: 'no leader',
+    });
     const before = (await calls()).value.length;
     const r = await platform.callUi('test.fwd', 'save', { id: 4 });
     expect(r).toMatchObject({ ok: false, code: 'EXT_SYNC_NO_MASTER' });
@@ -133,7 +186,11 @@ describe('forwarding through callUi', () => {
 
   it('a handler failure on the leader is EXT_HANDLER_FAILED with its message', async () => {
     sync.readOnly.mockReturnValue(true);
-    sync.forward.mockResolvedValue({ ok: false, code: 'handler', message: 'bad label' });
+    sync.forward.mockResolvedValue({
+      ok: false,
+      code: 'handler',
+      message: 'bad label',
+    });
     await expect(platform.callUi('test.fwd', 'save', {})).resolves.toEqual({
       ok: false,
       code: 'EXT_HANDLER_FAILED',
@@ -143,7 +200,9 @@ describe('forwarding through callUi', () => {
 
   it('a deliver name on a follower is queued, not refused', async () => {
     sync.readOnly.mockReturnValue(true);
-    await expect(platform.callUi('test.fwd', 'import', { m: 1 })).resolves.toEqual({
+    await expect(
+      platform.callUi('test.fwd', 'import', { m: 1 }),
+    ).resolves.toEqual({
       ok: true,
       value: { queued: true },
     });
@@ -157,7 +216,9 @@ describe('forwarding through callUi', () => {
   });
 
   it('a deliver name on the master runs locally', async () => {
-    await expect(platform.callUi('test.fwd', 'import', { m: 2 })).resolves.toEqual({
+    await expect(
+      platform.callUi('test.fwd', 'import', { m: 2 }),
+    ).resolves.toEqual({
       ok: true,
       value: { imported: { m: 2 } },
     });
@@ -167,7 +228,9 @@ describe('forwarding through callUi', () => {
   it('host.ui.call goes through callUi, so it forwards', async () => {
     sync.readOnly.mockReturnValue(true);
     sync.forward.mockResolvedValue({ ok: true, value: 'remote' });
-    await expect(platform.callUi('test.fwd', 'viaCall', { id: 5 })).resolves.toEqual({
+    await expect(
+      platform.callUi('test.fwd', 'viaCall', { id: 5 }),
+    ).resolves.toEqual({
       ok: true,
       value: { viaCall: 'remote' },
     });
@@ -180,7 +243,9 @@ describe('activation checks the sync names', () => {
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kia-fwd-bad-'));
     const bad = path.join(tmp, 'fixture');
     fs.cpSync(FIXTURE, bad, { recursive: true });
-    const m = JSON.parse(fs.readFileSync(path.join(bad, 'manifest.json'), 'utf8'));
+    const m = JSON.parse(
+      fs.readFileSync(path.join(bad, 'manifest.json'), 'utf8'),
+    );
     m.sync = { forward: ['save', 'ghost'] };
     fs.writeFileSync(path.join(bad, 'manifest.json'), JSON.stringify(m));
     const store = openStore(await openDb(path.join(tmp, 'kiagent.db')), {
@@ -188,7 +253,17 @@ describe('activation checks the sync names', () => {
       decrypt: (b) => b.toString('utf8'),
       detectLanguages: () => [],
     });
-    const platform = build(tmp, store, { readOnly: jest.fn(), forward: jest.fn(), enqueue: jest.fn(), onApplied: jest.fn() }, bad);
+    const platform = build(
+      tmp,
+      store,
+      {
+        readOnly: jest.fn(),
+        forward: jest.fn(),
+        enqueue: jest.fn(),
+        onApplied: jest.fn(),
+      },
+      bad,
+    );
     try {
       await platform.start();
       const snap = platform.snapshot().find((e) => e.id === 'test.fwd');

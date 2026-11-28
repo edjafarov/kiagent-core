@@ -1164,20 +1164,30 @@ describe('connect broker — startGroup', () => {
 
 describe('connect broker — on a read-only copy', () => {
   const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
-  function makeCopy(over: {
-    probe?: () => Promise<void>;
-    owns?: boolean;
-    rowAfterPulls?: number;
-    source?: Partial<Source>;
-    status?: Account['status'];
-  } = {}) {
-    const seeded: Account = { ...ACCOUNT, status: over.status ?? ACCOUNT.status };
+  function makeCopy(
+    over: {
+      probe?: () => Promise<void>;
+      owns?: boolean;
+      rowAfterPulls?: number;
+      source?: Partial<Source>;
+      status?: Account['status'];
+    } = {},
+  ) {
+    const seeded: Account = {
+      ...ACCOUNT,
+      status: over.status ?? ACCOUNT.status,
+    };
     const events: ConnectEvent[] = [];
     const order: string[] = [];
     let pulls = 0;
     let readOnly = true;
     const source = {
-      descriptor: { id: 'picky', name: 'Picky', documentTypes: ['t'], auth: 'none' },
+      descriptor: {
+        id: 'picky',
+        name: 'Picky',
+        documentTypes: ['t'],
+        auth: 'none',
+      },
       connect: jest.fn(async () => ({ identifier: 'me@example.com' })),
       reauthenticate: jest.fn(async () => {}),
       manageFolders: jest.fn(async () => ({
@@ -1383,7 +1393,9 @@ describe('connect broker — on a read-only copy', () => {
     expect(c.probe).toHaveBeenCalledWith('picky');
     expect(c.engine.applyScope).toHaveBeenCalledWith(
       ACCOUNT.id,
-      expect.objectContaining({ config: { folderRoots: [{ id: 'a', name: 'Alpha' }] } }),
+      expect.objectContaining({
+        config: { folderRoots: [{ id: 'a', name: 'Alpha' }] },
+      }),
       JSON.stringify(ACCOUNT.config),
     );
     expect(c.order).toEqual(['leader-scoped', 'pulled']);

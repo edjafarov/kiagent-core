@@ -112,6 +112,7 @@ function statusLine(
 const PROVIDER_NAMES: Record<string, string> = {
   'local-llm': 'Language model',
   'local-asr': 'Speech model',
+  'local-embed': 'Search model',
   'apple-vision': 'Vision (built in)',
   'windows-ocr': 'Text recognition (Windows)',
 };
@@ -204,7 +205,10 @@ export function LocalProcessing(): React.ReactElement {
       models.autoInstall,
   );
 
-  const attention = (providers ?? []).filter((p) => needsAttention(p, models));
+  const notInstalled = (providers ?? []).filter((p) => p.notInstalled);
+  const attention = (providers ?? []).filter(
+    (p) => !p.notInstalled && needsAttention(p, models),
+  );
   const last = stats?.recent[0];
 
   return (
@@ -219,7 +223,7 @@ export function LocalProcessing(): React.ReactElement {
         </div>
       )}
 
-      {(attention.length > 0 || providersError) && (
+      {(attention.length > 0 || notInstalled.length > 0 || providersError) && (
         <AttentionList aria-label="Providers that need you">
           {providersError && (
             <AttentionRow
@@ -232,6 +236,9 @@ export function LocalProcessing(): React.ReactElement {
                 </Button>
               }
             />
+          )}
+          {notInstalled.length > 0 && (
+            <NotInstalledAttention providers={notInstalled} />
           )}
           {attention.map((p) => (
             <ProviderAttention
@@ -360,6 +367,31 @@ function needsAttention(p: ProviderRow, models: ModelsPrefs): boolean {
   const { kind } = describeStatus(p.status);
   if (kind === 'error' || kind === 'downloading') return true;
   return kind === 'standby' && p.installable && !models.autoInstall;
+}
+
+/** One row for every provider whose bundled program is missing. A
+ *  development build names the command that fetches the prebuilt ones; a
+ *  package that lost them can only be reinstalled. */
+function NotInstalledAttention(props: {
+  providers: ProviderRow[];
+}): React.ReactElement {
+  const { providers } = props;
+  const names = [
+    ...new Set(providers.map((p) => PROVIDER_NAMES[p.id] ?? p.id)),
+  ].join(', ');
+  const devBuild = providers.some((p) => p.notInstalled?.devBuild);
+  return (
+    <AttentionRow
+      tone="err"
+      kind="Missing"
+      title="Local AI isn’t installed in this build"
+      sub={
+        devBuild
+          ? `${names}. Run npm run vendor:inference:prebuilt, then restart the app.`
+          : `${names}. Reinstall the app to restore them.`
+      }
+    />
+  );
 }
 
 function ProviderAttention(props: {

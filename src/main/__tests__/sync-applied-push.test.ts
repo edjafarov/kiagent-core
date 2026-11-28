@@ -6,7 +6,11 @@ const setup = () => {
   const sent: string[] = [];
   const hint = jest.fn();
   wireSyncAppliedPush(
-    { onApplied: (c) => void (cb = c) },
+    {
+      onApplied: (c) => {
+        cb = c;
+      },
+    },
     { attentionHint: hint, broadcast: (channel) => void sent.push(channel) },
   );
   return { fire: (t: string[]) => cb(t), sent, hint };
@@ -25,13 +29,22 @@ describe('a delta applied on a follower refreshes the open pages', () => {
     const t = setup();
     t.fire(['outbox']);
     t.fire(['event_drafts']);
-    expect(t.sent).toEqual(['push:outbox-changed', 'push:calendar-out-changed']);
+    expect(t.sent).toEqual([
+      'push:outbox-changed',
+      'push:calendar-out-changed',
+    ]);
     expect(t.hint).not.toHaveBeenCalled();
   });
 
   it('one delta of several tables does each push once, and an unrelated one none', () => {
     const t = setup();
-    t.fire(['documents', 'attention_items', 'attention_revisions', 'outbox', 'accounts']);
+    t.fire([
+      'documents',
+      'attention_items',
+      'attention_revisions',
+      'outbox',
+      'accounts',
+    ]);
     expect(t.hint).toHaveBeenCalledTimes(1);
     expect(t.sent).toEqual(['push:outbox-changed']);
     const u = setup();
@@ -47,7 +60,11 @@ describe('a delta that touches accounts or documents reads the app state again',
     const timers: (() => void)[] = [];
     const reproject = jest.fn();
     wireSyncAppliedPush(
-      { onApplied: (c) => void (cb = c) },
+      {
+        onApplied: (c) => {
+          cb = c;
+        },
+      },
       { attentionHint: () => undefined, broadcast: () => undefined, reproject },
       { setTimeout: (fn) => void timers.push(fn) },
     );

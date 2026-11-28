@@ -201,7 +201,9 @@ describe('one queue and recorded actions', () => {
     ]);
     const sync = mk(store, ops);
     let release!: () => void;
-    const gate = new Promise<void>((r) => (release = r));
+    const gate = new Promise<void>((r) => {
+      release = r;
+    });
     const act = sync.act(
       async () => {
         await gate;

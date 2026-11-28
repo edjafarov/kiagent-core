@@ -34,9 +34,15 @@ afterEach(async () => {
 });
 
 let n = 0;
-const write = () => store.createAccount({ source: 's', identifier: `i${(n += 1)}` });
+const write = () => {
+  n += 1;
+  return store.createAccount({ source: 's', identifier: `i${n}` });
+};
 const state = () =>
-  conn().prepare(`SELECT * FROM sync_state`).get() as Record<string, number | string | null>;
+  conn().prepare(`SELECT * FROM sync_state`).get() as Record<
+    string,
+    number | string | null
+  >;
 const follow = () =>
   conn()
     .prepare(
@@ -45,10 +51,14 @@ const follow = () =>
     )
     .run();
 const seqOf = (name: string) =>
-  ((conn().prepare(`SELECT seq FROM sqlite_sequence WHERE name = ?`).get(name) as { seq: number } | undefined)
-    ?.seq ?? 0);
+  (
+    conn()
+      .prepare(`SELECT seq FROM sqlite_sequence WHERE name = ?`)
+      .get(name) as { seq: number } | undefined
+  )?.seq ?? 0;
 const head = () =>
-  (conn().prepare(`SELECT max(seq) AS m FROM changes`).get() as { m: number }).m;
+  (conn().prepare(`SELECT max(seq) AS m FROM changes`).get() as { m: number })
+    .m;
 
 describe('promote', () => {
   it('raises both counters to the epoch range, and the next rows land above it', async () => {
@@ -66,7 +76,9 @@ describe('promote', () => {
     follow();
     promote(conn(), 3);
     for (const name of ['changes', 'sync_rows']) {
-      const rows = conn().prepare(`SELECT seq FROM sqlite_sequence WHERE name = ?`).all(name) as {
+      const rows = conn()
+        .prepare(`SELECT seq FROM sqlite_sequence WHERE name = ?`)
+        .all(name) as {
         seq: number;
       }[];
       expect(rows).toHaveLength(1);
@@ -78,7 +90,11 @@ describe('promote', () => {
 
   it('never lowers a counter that is already higher', () => {
     follow();
-    conn().prepare(`INSERT OR REPLACE INTO sqlite_sequence(name, seq) VALUES ('changes', ?)`).run(9 * GAP);
+    conn()
+      .prepare(
+        `INSERT OR REPLACE INTO sqlite_sequence(name, seq) VALUES ('changes', ?)`,
+      )
+      .run(9 * GAP);
     promote(conn(), 2);
     expect(seqOf('changes')).toBe(9 * GAP);
   });
@@ -99,20 +115,30 @@ describe('promote', () => {
       .prepare(`SELECT tbl, pk, cursor FROM sync_rows ORDER BY cursor LIMIT 1`)
       .all();
     expect(first).toMatchObject([{ tbl: 'sync_epochs', pk: '[3]' }]);
-    expect(Number((first[0] as { cursor: number }).cursor)).toBeGreaterThan(3 * GAP);
+    expect(Number((first[0] as { cursor: number }).cursor)).toBeGreaterThan(
+      3 * GAP,
+    );
   });
 
   it('keeps history_id, turns tracking on and clears the master', () => {
     follow();
     promote(conn(), 2);
-    expect(state()).toMatchObject({ role: 'normal', tracking: 1, history_id: 'h1', master_device_id: null });
+    expect(state()).toMatchObject({
+      role: 'normal',
+      tracking: 1,
+      history_id: 'h1',
+      master_device_id: null,
+    });
   });
 
   it("status reports the epoch and the grant of the device's own epoch", () => {
     follow();
     expect(readSyncStatus(conn())).toMatchObject({ epoch: 0, grant: null });
     promote(conn(), 3);
-    expect(readSyncStatus(conn())).toMatchObject({ epoch: 3, grant: { seq: 7, cursor: 5 } });
+    expect(readSyncStatus(conn())).toMatchObject({
+      epoch: 3,
+      grant: { seq: 7, cursor: 5 },
+    });
   });
 
   it('promoting twice with the same epoch changes nothing the second time', () => {
@@ -124,7 +150,11 @@ describe('promote', () => {
 
   it('deletes every consumer and their ledger rows so workers re-seed', () => {
     follow();
-    conn().prepare(`INSERT INTO consumers(name, cursor) VALUES ('worker:ocr:v1', 99)`).run();
+    conn()
+      .prepare(
+        `INSERT INTO consumers(name, cursor) VALUES ('worker:ocr:v1', 99)`,
+      )
+      .run();
     conn()
       .prepare(
         `INSERT INTO work_ledger(consumer, seq, attempts, outcome, updated_at) VALUES ('worker:ocr:v1', 4, 1, 'done', 'n')`,

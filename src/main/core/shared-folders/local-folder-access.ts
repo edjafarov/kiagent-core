@@ -8,7 +8,14 @@ import type { LocalFolderAccess } from './migrate';
 
 export interface LocalFolderHost {
   /** Every account in the table, other devices' included. */
-  accounts(): Promise<{ id: string; source: string; ownerDeviceId?: string | null; config?: unknown }[]>;
+  accounts(): Promise<
+    {
+      id: string;
+      source: string;
+      ownerDeviceId?: string | null;
+      config?: unknown;
+    }[]
+  >;
   /** This device's id; null while it has none. */
   deviceId(): string | null;
   /** The folders an account tracks (absolute). Throws on a malformed config. */
@@ -26,7 +33,11 @@ export function ownLocalFolders(h: LocalFolderHost): LocalFolderAccess {
     accounts: async () => {
       const me = h.deviceId();
       return (await h.accounts())
-        .filter((a) => a.source === 'local-folder' && (a.ownerDeviceId == null || a.ownerDeviceId === me))
+        .filter(
+          (a) =>
+            a.source === 'local-folder' &&
+            (a.ownerDeviceId == null || a.ownerDeviceId === me),
+        )
         .flatMap((a) => {
           try {
             return [{ id: a.id, roots: h.roots(a) }];

@@ -5,11 +5,16 @@ import type { Converter } from '../core/converter/converter';
 import { gmailSource, googleOAuthProfile, googleRefresher } from './gmail';
 import { createImapSource } from './imap';
 import { createLocalFolderSource } from './local-folder';
-import { createSharedFolderSource, type SharedFolderHost } from './shared-folder';
+import {
+  createSharedFolderSource,
+  type SharedFolderHost,
+} from './shared-folder';
 
 /** The folders `local-folder` leaves to the `shared-folder` source: none until
  *  this device shares folders. */
-export function sharedSubtrees(host: SharedFolderHost | null | undefined): string[] {
+export function sharedSubtrees(
+  host: SharedFolderHost | null | undefined,
+): string[] {
   if (!host?.sharedFolders.enabled()) return [];
   const roots = host.sharedFolders.roots();
   return [roots.incoming, roots.sorted].filter((r): r is string => !!r);

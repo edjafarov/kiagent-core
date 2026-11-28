@@ -48,9 +48,8 @@ jobs:
       - name: lint
         run: npm run lint
 
-      # jest's setup (.erb/scripts/check-build-exists.ts) requires the webpack
-      # main + renderer bundles to exist; `npm run build` produces them without
-      # the far slower electron-builder packaging step.
+      # Proves the main + renderer bundles build, without the far slower
+      # electron-builder packaging step. (jest no longer needs them.)
       #
       # OAuth client credentials are inlined into the main bundle at build
       # time (see .erb/configs/oauth-env.ts) — the repo hardcodes none. The
@@ -63,8 +62,9 @@ jobs:
           GOOGLE_OAUTH_CLIENT_SECRET: ${{ secrets.GOOGLE_OAUTH_CLIENT_SECRET }}
           MICROSOFT_OAUTH_CLIENT_ID: ${{ secrets.MICROSOFT_OAUTH_CLIENT_ID }}
 
-      # jest.config.dev.js = full base config minus a few heavyweight integration
-      # suites that flake on shared runners. --forceExit guards against a leaked
-      # handle after a green run; --ci pins snapshots.
+      # npm test = scripts/test.mjs: every suite in parallel except the ones
+      # that fork real extension hosts, then those one at a time (see
+      # jest.fork-suites.js). --forceExit guards against a leaked handle after
+      # a green run; --ci pins snapshots.
       - name: test
-        run: npm test -- -c jest.config.dev.js --ci --forceExit
+        run: npm test -- --ci --forceExit

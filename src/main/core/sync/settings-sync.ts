@@ -4,6 +4,7 @@
  *  changes arrive by the feed; connectors retry; a join's offer carries this
  *  device's settings. Main calls `installSettingsSync` once, after the
  *  preferences, the sync service and the extension platform exist. */
+// eslint-disable-next-line import/no-cycle -- runtime cycle with prefs (forwardOrQueue); both are only called after load, so it is safe
 import { pickUserKeys, type CorePrefs } from '../prefs';
 import type { ExtensionPlatform } from '../../platform/extension-platform';
 import {
@@ -34,7 +35,9 @@ export interface ForwardOrQueueOp {
 }
 
 const isNoMasterError = (err: unknown): boolean =>
-  !!err && typeof err === 'object' && (err as { code?: unknown }).code === 'EXT_SYNC_NO_MASTER';
+  !!err &&
+  typeof err === 'object' &&
+  (err as { code?: unknown }).code === 'EXT_SYNC_NO_MASTER';
 
 export async function forwardOrQueue(
   op: ForwardOrQueueOp,
@@ -85,7 +88,9 @@ export interface SettingsSyncDeps {
   handlers: Record<string, (req: unknown) => unknown>;
   /** Verbs the leader runs that are not in the forwarded-channel table: the
    *  account changes a copy relays (`accounts-relay`). */
-  extraRunner?: (name: string) => ((req: unknown) => Promise<unknown>) | undefined;
+  extraRunner?: (
+    name: string,
+  ) => ((req: unknown) => Promise<unknown>) | undefined;
   afterPromote: (hook: () => void | Promise<void>) => void;
   syncExtensions: () => Promise<void>;
   onNoMaster: (message: string) => void;
@@ -100,7 +105,10 @@ export interface SettingsSyncDeps {
 
 function installOfflineSettings(
   prefs: CorePrefs,
-  sync: Pick<SyncService, 'forward' | 'enqueue' | 'onQueueChange' | 'discardQueued'>,
+  sync: Pick<
+    SyncService,
+    'forward' | 'enqueue' | 'onQueueChange' | 'discardQueued'
+  >,
   opts: {
     nowMs: () => number;
     /** Brings the running connectors in line with the mirrored extension set.
@@ -124,7 +132,10 @@ function installOfflineSettings(
   });
   sync.onQueueChange((e) => {
     prefs.onQueueChange(e);
-    if (e.kind === 'discarded' && e.coalesceKey?.startsWith('core.extensions.')) {
+    if (
+      e.kind === 'discarded' &&
+      e.coalesceKey?.startsWith('core.extensions.')
+    ) {
       void Promise.resolve()
         .then(() => opts.reconcile?.())
         .catch(() => undefined);
@@ -147,13 +158,15 @@ function installOfflineSettings(
         return local as { ok: boolean };
       },
       enqueue: () => prefs.queueExtensionEnabled(id, enabled),
-      apply: { forwarded: () => prefs.ackForwarded(key, enabled), queued: () => undefined },
+      apply: {
+        forwarded: () => prefs.ackForwarded(key, enabled),
+        queued: () => undefined,
+      },
     });
     return how === 'forwarded' || how === 'forward-refused' ? out : local;
   };
   return { 'extension:set-enabled': setEnabled };
 }
-
 
 export function installSettingsSync(d: SettingsSyncDeps): {
   forwardedLocal: Map<string, (req: unknown) => unknown>;
@@ -164,7 +177,11 @@ export function installSettingsSync(d: SettingsSyncDeps): {
     extensions
       .reconcileExtensions()
       .catch((err) =>
-        d.log('extensions', 'warn', `extension reconcile failed: ${String(err)}`),
+        d.log(
+          'extensions',
+          'warn',
+          `extension reconcile failed: ${String(err)}`,
+        ),
       );
   const offlineHandlers = installOfflineSettings(prefs, sync, {
     nowMs: d.nowMs,
@@ -198,7 +215,11 @@ export function installSettingsSync(d: SettingsSyncDeps): {
         })
         .then(() => extensions.reconcileExtensions())
         .catch((err) =>
-          d.log('extensions', 'warn', `extension reconcile failed: ${String(err)}`),
+          d.log(
+            'extensions',
+            'warn',
+            `extension reconcile failed: ${String(err)}`,
+          ),
         );
     }
   });

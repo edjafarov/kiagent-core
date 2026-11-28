@@ -11,7 +11,10 @@ import {
 
 function store(initial?: ExtensionsSet, writable = true) {
   let value = initial;
-  const s: ExtensionSetStore & { value(): ExtensionsSet | undefined; writable: boolean } = {
+  const s: ExtensionSetStore & {
+    value(): ExtensionsSet | undefined;
+    writable: boolean;
+  } = {
     writable,
     value: () => value,
     get: () => value,
@@ -33,9 +36,17 @@ const ops = (local: LocalExtension[]): ExtensionOps => ({
 });
 
 const slack: LocalExtension = {
-  id: 'kia.slack', origin: 'marketplace', enabled: true, ref: 'github:kia-plugins/slack@v2',
+  id: 'kia.slack',
+  origin: 'marketplace',
+  enabled: true,
+  ref: 'github:kia-plugins/slack@v2',
 };
-const dev: LocalExtension = { id: 'kia.mine', origin: 'dev', enabled: true, ref: '/Users/me/plugin' };
+const dev: LocalExtension = {
+  id: 'kia.mine',
+  origin: 'dev',
+  enabled: true,
+  ref: '/Users/me/plugin',
+};
 
 describe('offer', () => {
   it('lists marketplace installs with their refs and switched bundled ones, never a dev install', () => {
@@ -44,7 +55,12 @@ describe('offer', () => {
       ops: ops([
         slack,
         dev,
-        { id: 'kiagent.people', origin: 'bundled', enabled: false, explicit: true },
+        {
+          id: 'kiagent.people',
+          origin: 'bundled',
+          enabled: false,
+          explicit: true,
+        },
         { id: 'kiagent.messages', origin: 'bundled', enabled: true },
       ]),
       log: () => {},
@@ -61,7 +77,9 @@ describe('union', () => {
     createExtensionSync({ store: st, ops: ops(local), log: () => {} });
 
   it('adds the connectors the set lacks and keeps every entry it has', async () => {
-    const st = store({ 'kia.slack': { enabled: false, ref: 'github:kia-plugins/slack@v3' } });
+    const st = store({
+      'kia.slack': { enabled: false, ref: 'github:kia-plugins/slack@v3' },
+    });
     const added = await mk(st).union({
       'kia.slack': { enabled: true, ref: 'github:kia-plugins/slack@v2' },
       'kia.notion': { enabled: true, ref: 'github:kia-plugins/notion@v1' },
@@ -86,7 +104,10 @@ describe('union', () => {
   });
 
   it('is a no-op when nothing is missing, and never removes by absence', async () => {
-    const st = store({ 'kia.slack': { enabled: true, ref: 'x' }, 'kia.gone': { enabled: true } });
+    const st = store({
+      'kia.slack': { enabled: true, ref: 'x' },
+      'kia.gone': { enabled: true },
+    });
     expect(await mk(st).union({ 'kia.slack': { enabled: false } })).toEqual([]);
     expect(Object.keys(st.value()!).sort()).toEqual(['kia.gone', 'kia.slack']);
     expect(st.value()!['kia.slack']).toEqual({ enabled: true, ref: 'x' });
@@ -107,6 +128,8 @@ describe('union', () => {
   });
 
   it('rejects on a device that can not write the set', async () => {
-    await expect(mk(store({}, false)).union({ 'kia.a': { enabled: true } })).rejects.toThrow();
+    await expect(
+      mk(store({}, false)).union({ 'kia.a': { enabled: true } }),
+    ).rejects.toThrow();
   });
 });

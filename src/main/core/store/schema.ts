@@ -1,6 +1,5 @@
 import type BetterSqlite3 from 'better-sqlite3';
 
-import { SHARED_FOLDERS_DDL, SHARED_PENDING_DDL } from '../shared-folders/schema';
 import { PDF_OCR_AFTER_STATUSES } from '@main/workers/convert/outcome';
 import { VISUAL_EXTS } from '@main/workers/vision/classify';
 import {
@@ -12,6 +11,10 @@ import {
   isUnder,
   normalizePathSeparators,
 } from '@shared/folder-paths';
+import {
+  SHARED_FOLDERS_DDL,
+  SHARED_PENDING_DDL,
+} from '../shared-folders/schema';
 
 import { buildStemView } from '../stemming';
 import { ensureSyncTriggers } from '../sync/tracking';
@@ -1284,7 +1287,9 @@ const MIGRATIONS: Migration[] = [
     // Idempotent: the tests that rewind `schemaVersion` re-run it on a
     // database that already has the columns.
     const addColumn = (table: string, column: string, ddl: string) => {
-      const have = db.prepare(`SELECT 1 FROM pragma_table_info(?) WHERE name = ?`).get(table, column);
+      const have = db
+        .prepare(`SELECT 1 FROM pragma_table_info(?) WHERE name = ?`)
+        .get(table, column);
       if (!have) db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${ddl}`);
     };
     addColumn('sync_state', 'joining', 'INTEGER NOT NULL DEFAULT 0');
@@ -1308,9 +1313,14 @@ const MIGRATIONS: Migration[] = [
   // until Task 3 moves it into the copied set.
   (db) => {
     const have = db
-      .prepare(`SELECT 1 FROM pragma_table_info('sync_state') WHERE name = 'epoch'`)
+      .prepare(
+        `SELECT 1 FROM pragma_table_info('sync_state') WHERE name = 'epoch'`,
+      )
       .get();
-    if (!have) db.exec(`ALTER TABLE sync_state ADD COLUMN epoch INTEGER NOT NULL DEFAULT 0`);
+    if (!have)
+      db.exec(
+        `ALTER TABLE sync_state ADD COLUMN epoch INTEGER NOT NULL DEFAULT 0`,
+      );
     db.exec(`
       CREATE TABLE IF NOT EXISTS sync_epochs (
         epoch INTEGER PRIMARY KEY,
@@ -1324,10 +1334,14 @@ const MIGRATIONS: Migration[] = [
   // (0, 0) is a row that has never been stamped.
   (db) => {
     const cols = new Set(
-      (db.prepare(`PRAGMA table_info(vault)`).all() as { name: string }[]).map((c) => c.name),
+      (db.prepare(`PRAGMA table_info(vault)`).all() as { name: string }[]).map(
+        (c) => c.name,
+      ),
     );
-    if (!cols.has('epoch')) db.exec(`ALTER TABLE vault ADD COLUMN epoch INTEGER NOT NULL DEFAULT 0`);
-    if (!cols.has('n')) db.exec(`ALTER TABLE vault ADD COLUMN n INTEGER NOT NULL DEFAULT 0`);
+    if (!cols.has('epoch'))
+      db.exec(`ALTER TABLE vault ADD COLUMN epoch INTEGER NOT NULL DEFAULT 0`);
+    if (!cols.has('n'))
+      db.exec(`ALTER TABLE vault ADD COLUMN n INTEGER NOT NULL DEFAULT 0`);
   },
   // v17: edits from any device (alpha-cent spec 7.8, step 3). `sync_outbound`
   // is the one durable delivery queue for what a device-owned account or an
@@ -1354,7 +1368,9 @@ const MIGRATIONS: Migration[] = [
   // suffixed and claimed (once, on a device that has never joined).
   (db) => {
     const addColumn = (table: string, column: string, ddl: string) => {
-      const have = db.prepare(`SELECT 1 FROM pragma_table_info(?) WHERE name = ?`).get(table, column);
+      const have = db
+        .prepare(`SELECT 1 FROM pragma_table_info(?) WHERE name = ?`)
+        .get(table, column);
       if (!have) db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${ddl}`);
     };
     addColumn('sync_state', 'device_id', 'TEXT');
@@ -1374,9 +1390,12 @@ const MIGRATIONS: Migration[] = [
   // since. NULL for a device that never led. Local, not synced.
   (db) => {
     const have = db
-      .prepare(`SELECT 1 FROM pragma_table_info('sync_state') WHERE name = 'pre_demote_epoch'`)
+      .prepare(
+        `SELECT 1 FROM pragma_table_info('sync_state') WHERE name = 'pre_demote_epoch'`,
+      )
       .get();
-    if (!have) db.exec(`ALTER TABLE sync_state ADD COLUMN pre_demote_epoch INTEGER`);
+    if (!have)
+      db.exec(`ALTER TABLE sync_state ADD COLUMN pre_demote_epoch INTEGER`);
   },
   // v21: relaying. The keys (table, primary key as a JSON array) a follower
   // applied from a delta, including deletions, kept until it leads. Its
@@ -1397,9 +1416,12 @@ const MIGRATIONS: Migration[] = [
   // row, which are never coalesced. Local, not synced.
   (db) => {
     const have = db
-      .prepare(`SELECT 1 FROM pragma_table_info('sync_outbound') WHERE name = 'coalesce_key'`)
+      .prepare(
+        `SELECT 1 FROM pragma_table_info('sync_outbound') WHERE name = 'coalesce_key'`,
+      )
       .get();
-    if (!have) db.exec(`ALTER TABLE sync_outbound ADD COLUMN coalesce_key TEXT`);
+    if (!have)
+      db.exec(`ALTER TABLE sync_outbound ADD COLUMN coalesce_key TEXT`);
     db.exec(
       `CREATE UNIQUE INDEX IF NOT EXISTS sync_outbound_coalesce ON sync_outbound(coalesce_key) WHERE coalesce_key IS NOT NULL`,
     );
@@ -1409,9 +1431,14 @@ const MIGRATIONS: Migration[] = [
   // not synced.
   (db) => {
     const have = db
-      .prepare(`SELECT 1 FROM pragma_table_info('sync_state') WHERE name = 'head_pending'`)
+      .prepare(
+        `SELECT 1 FROM pragma_table_info('sync_state') WHERE name = 'head_pending'`,
+      )
       .get();
-    if (!have) db.exec(`ALTER TABLE sync_state ADD COLUMN head_pending INTEGER NOT NULL DEFAULT 0`);
+    if (!have)
+      db.exec(
+        `ALTER TABLE sync_state ADD COLUMN head_pending INTEGER NOT NULL DEFAULT 0`,
+      );
   },
   // v24: shared folders (phone phase 3). The leader's manifest of the Incoming
   // and Sorted folders and the registered scan captures are copied; the mirror

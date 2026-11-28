@@ -8,8 +8,8 @@
  * 200-message thread's full bodies would blow the response budget; callers
  * that need a full body follow up with `get`.
  */
-import { sourceUrlOf, type LocalPathOf } from './local-path';
 import type { Document, DocumentId, Query } from '@shared/contracts';
+import { sourceUrlOf, type LocalPathOf } from './local-path';
 
 export const GET_RELATED_RELATIONS = ['children', 'parent'] as const;
 export type GetRelatedRelation = (typeof GET_RELATED_RELATIONS)[number];
@@ -105,7 +105,9 @@ export function makeGetRelatedTool(query: Query, localPathOf?: LocalPathOf) {
       const offset = resolveOffset(a.offset);
       const children = await query.children(id);
       return Promise.all(
-        children.slice(offset, offset + limit).map((d) => toSummary(d, sourceOf, localPathOf)),
+        children
+          .slice(offset, offset + limit)
+          .map((d) => toSummary(d, sourceOf, localPathOf)),
       );
     }
     if (a.relation === 'parent') {

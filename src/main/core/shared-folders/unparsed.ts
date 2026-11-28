@@ -32,8 +32,15 @@ const EVERY_MS = 60_000;
 export async function loadUnparsed(db: AppDb): Promise<Unparsed> {
   const m: Unparsed = new Map();
   try {
-    const j: unknown = JSON.parse(String((await db.all(`SELECT value FROM meta WHERE key = ?`, [KEY]))[0]?.value ?? '[]'));
-    if (Array.isArray(j)) for (const e of j) if (e && typeof e.key === 'string') m.set(e.key, e as UnparsedEntry);
+    const j: unknown = JSON.parse(
+      String(
+        (await db.all(`SELECT value FROM meta WHERE key = ?`, [KEY]))[0]
+          ?.value ?? '[]',
+      ),
+    );
+    if (Array.isArray(j))
+      for (const e of j)
+        if (e && typeof e.key === 'string') m.set(e.key, e as UnparsedEntry);
   } catch {
     // an unreadable note is the same as none
   }
@@ -43,10 +50,10 @@ export async function loadUnparsed(db: AppDb): Promise<Unparsed> {
 const persist = async (db: AppDb, m: Unparsed): Promise<void> => {
   if (m.size === 0) await db.run(`DELETE FROM meta WHERE key = ?`, [KEY]);
   else
-    await db.run(`INSERT INTO meta(key, value) VALUES(?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`, [
-      KEY,
-      JSON.stringify([...m.values()]),
-    ]);
+    await db.run(
+      `INSERT INTO meta(key, value) VALUES(?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
+      [KEY, JSON.stringify([...m.values()])],
+    );
 };
 
 const sigOf = async (abs: string): Promise<string> => {
@@ -67,10 +74,12 @@ export async function reportUnparsed(
     const base = d.roots[ref.root];
     if (!base) continue;
     // eslint-disable-next-line no-await-in-loop
-    const row = (await d.db.all(`SELECT sha256, deleted, missing_here FROM shared_files WHERE root = ? AND rel_path = ?`, [
-      ref.root,
-      ref.relPath,
-    ]))[0];
+    const row = (
+      await d.db.all(
+        `SELECT sha256, deleted, missing_here FROM shared_files WHERE root = ? AND rel_path = ?`,
+        [ref.root, ref.relPath],
+      )
+    )[0];
     if (!row || row.deleted || row.missing_here) continue;
     let abs: string;
     try {
@@ -81,14 +90,25 @@ export async function reportUnparsed(
     }
     const key = `${ref.root}/${ref.relPath}`;
     // eslint-disable-next-line no-await-in-loop
-    m.set(key, { key, root: ref.root, rel: ref.relPath, sha: String(row.sha256), sig: await sigOf(abs), at: d.now() });
+    m.set(key, {
+      key,
+      root: ref.root,
+      rel: ref.relPath,
+      sha: String(row.sha256),
+      sig: await sigOf(abs),
+      at: d.now(),
+    });
   }
   await persist(d.db, m);
 }
 
 /** One round: give the reported rows that can be tried again a new revision. */
 export async function restamp(
-  d: Pick<SharedFoldersDeps, 'db' | 'now'> & { roots: Roots; usable(root: SharedRoot): boolean; still(): boolean },
+  d: Pick<SharedFoldersDeps, 'db' | 'now'> & {
+    roots: Roots;
+    usable(root: SharedRoot): boolean;
+    still(): boolean;
+  },
   m: Unparsed,
 ): Promise<void> {
   if (m.size === 0) return;
@@ -97,11 +117,18 @@ export async function restamp(
     const base = d.roots[e.root];
     if (!base || !d.usable(e.root)) continue; // not now; kept
     // eslint-disable-next-line no-await-in-loop
-    const row = (await d.db.all(`SELECT sha256, deleted, missing_here FROM shared_files WHERE root = ? AND rel_path = ?`, [
-      e.root,
-      e.rel,
-    ]))[0];
-    if (!row || row.deleted || row.missing_here || String(row.sha256) !== e.sha) {
+    const row = (
+      await d.db.all(
+        `SELECT sha256, deleted, missing_here FROM shared_files WHERE root = ? AND rel_path = ?`,
+        [e.root, e.rel],
+      )
+    )[0];
+    if (
+      !row ||
+      row.deleted ||
+      row.missing_here ||
+      String(row.sha256) !== e.sha
+    ) {
       m.delete(e.key); // gone, or the scan has listed a newer version already
       changed = true;
       continue;

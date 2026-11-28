@@ -31,7 +31,8 @@ export function createPluginAuthorizer(options: PluginAuthorizerOptions) {
     owned.add(pluginIdentifier(options.pluginId, n).replaceAll('"', ''));
   for (const n of options.triggers ?? [])
     owned.add(pluginIdentifier(options.pluginId, n).replaceAll('"', ''));
-  const physical = (n: string) => pluginIdentifier(options.pluginId, n).replaceAll('"', '');
+  const physical = (n: string) =>
+    pluginIdentifier(options.pluginId, n).replaceAll('"', '');
   const syncedTables = new Set((options.synced ?? []).map(physical));
   const captured = new Set((options.ownerCapture ?? []).map(physical));
   let refusedByRole: string | null = null;
@@ -80,7 +81,11 @@ export function createPluginAuthorizer(options: PluginAuthorizerOptions) {
     // The change tracker's own triggers write what they track and read the
     // switch, whoever fired them.
     if (trigger.startsWith('sync_')) {
-      if (table === 'sync_rows' && (action === 18 || action === 9 || action === 23 || action === 20)) return 0;
+      if (
+        table === 'sync_rows' &&
+        (action === 18 || action === 9 || action === 23 || action === 20)
+      )
+        return 0;
       if (table === 'sync_state' && action === 20) return 0;
       if (table === 'sqlite_sequence') return 0;
     }

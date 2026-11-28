@@ -16,9 +16,15 @@ export function groupByName<
   F extends { rel: string },
   M extends { rel_path: string },
   R extends { rel_path: string; deleted: number },
->(key: NameKey, files: Iterable<F>, mirror: Iterable<M>, rows: Iterable<R>): Map<string, Group<F, M, R>> {
+>(
+  key: NameKey,
+  files: Iterable<F>,
+  mirror: Iterable<M>,
+  rows: Iterable<R>,
+): Map<string, Group<F, M, R>> {
   const groups = new Map<string, Group<F, M, R>>();
-  const at = (k: string): Group<F, M, R> => groups.get(k) ?? groups.set(k, {}).get(k)!;
+  const at = (k: string): Group<F, M, R> =>
+    groups.get(k) ?? groups.set(k, {}).get(k)!;
   // Two on one side (a case-sensitive volume, or an old duplicate): kept apart, nothing is lost.
   for (const f of files) {
     const g = at(key(f.rel));

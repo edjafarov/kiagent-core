@@ -207,12 +207,14 @@ interface LoopbackAllowance {
 }
 
 /** Characters a genuinely relative redirect may not start with. */
+// eslint-disable-next-line no-control-regex -- a redirect starting with a C0 control or space is never relative
 const NOT_RELATIVE_START = /^[\\/\s\u0000-\u001f]/;
 
 /** Any C0 control (TAB, CR, LF...) or space anywhere in the raw string. WHATWG
  *  `URL` silently strips tab/CR/LF from inside a URL (`ht\ttp://127.1:1/` and
  *  `/\t/127.1:1/` both resolve to http://127.0.0.1:1/), so such input can never
  *  keep the allowance. */
+// eslint-disable-next-line no-control-regex -- detects any C0 control or space on purpose
 const HAS_CONTROL_OR_SPACE = /[\u0000-\u0020]/;
 
 /** True when the raw string is exactly `http://127.0.0.1:<port>` followed by

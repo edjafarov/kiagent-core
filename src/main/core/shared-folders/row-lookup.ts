@@ -12,14 +12,24 @@ export type FoundRow = {
   parked: number;
 };
 
-export async function rowAt(db: AppDb, key: NameKey, root: SharedRoot, rel: string): Promise<FoundRow | undefined> {
+export async function rowAt(
+  db: AppDb,
+  key: NameKey,
+  root: SharedRoot,
+  rel: string,
+): Promise<FoundRow | undefined> {
   const COLS = `rel_path, sha256, deleted, missing_here, parked`;
-  const exact = (await db.all(`SELECT ${COLS} FROM shared_files WHERE root = ? AND rel_path = ?`, [root, rel]))[0] as
-    | FoundRow
-    | undefined;
+  const exact = (
+    await db.all(
+      `SELECT ${COLS} FROM shared_files WHERE root = ? AND rel_path = ?`,
+      [root, rel],
+    )
+  )[0] as FoundRow | undefined;
   if (key('Ab') === 'Ab' || (exact && !exact.deleted)) return exact;
   const k = key(rel);
-  const all = (await db.all(`SELECT ${COLS} FROM shared_files WHERE root = ?`, [root])) as unknown as FoundRow[];
+  const all = (await db.all(`SELECT ${COLS} FROM shared_files WHERE root = ?`, [
+    root,
+  ])) as unknown as FoundRow[];
   const hits = all.filter((r) => key(r.rel_path) === k);
   return hits.find((r) => !r.deleted) ?? hits[0];
 }

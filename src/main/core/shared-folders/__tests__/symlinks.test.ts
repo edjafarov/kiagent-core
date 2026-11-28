@@ -6,7 +6,12 @@ import { mirrorPass } from '../mirror';
 import { safeAbs } from '../paths';
 import { listSortable } from '../promote';
 import { closeDevices, device, withRoots } from './helpers/device';
-import { serveTransport, sha, stubServe, tmpDir } from './helpers/fake-transport';
+import {
+  serveTransport,
+  sha,
+  stubServe,
+  tmpDir,
+} from './helpers/fake-transport';
 
 afterEach(closeDevices);
 
@@ -23,7 +28,9 @@ describe('safeAbs', () => {
     fs.symlinkSync(real, link);
     write(path.join(real, 'a', 'b.txt'), 'x');
     expect(await safeAbs(link, 'a/b.txt')).toBe(path.join(link, 'a', 'b.txt'));
-    expect(await safeAbs(link, 'new/dir/c.txt')).toBe(path.join(link, 'new', 'dir', 'c.txt'));
+    expect(await safeAbs(link, 'new/dir/c.txt')).toBe(
+      path.join(link, 'new', 'dir', 'c.txt'),
+    );
   });
 
   it('rejects a symlinked directory below the root, even one that points back inside', async () => {
@@ -33,7 +40,9 @@ describe('safeAbs', () => {
     fs.mkdirSync(path.join(root, 'real'));
     fs.symlinkSync(path.join(root, 'real'), path.join(root, 'alias'));
     await expect(safeAbs(root, 'Tax/report.pdf')).rejects.toThrow(/symlink/);
-    await expect(safeAbs(root, 'Tax/deeper/new/report.pdf')).rejects.toThrow(/symlink/);
+    await expect(safeAbs(root, 'Tax/deeper/new/report.pdf')).rejects.toThrow(
+      /symlink/,
+    );
     await expect(safeAbs(root, 'alias/x.pdf')).rejects.toThrow(/symlink/);
   });
 
@@ -44,9 +53,12 @@ describe('safeAbs', () => {
     const lstat = fs.promises.lstat.bind(fs.promises);
     const spy = jest
       .spyOn(fs.promises, 'lstat')
-      .mockImplementation(((p: fs.PathLike, o?: object) => lstat(String(p).endsWith('Tax') ? root : p, o as never)) as never);
+      .mockImplementation(((p: fs.PathLike, o?: object) =>
+        lstat(String(p).endsWith('Tax') ? root : p, o as never)) as never);
     try {
-      await expect(safeAbs(root, 'Tax/report.pdf')).rejects.toThrow(/leaves the folder/);
+      await expect(safeAbs(root, 'Tax/report.pdf')).rejects.toThrow(
+        /leaves the folder/,
+      );
     } finally {
       spy.mockRestore();
     }
@@ -77,26 +89,56 @@ describe('a path from another device through a symlinked directory', () => {
     const tmp = await d.svc.serve.stagingFile('sorted');
     fs.writeFileSync(tmp, 'new');
     await expect(
-      d.svc.serve.offer({ root: 'sorted', relPath: 'Tax/fresh.pdf', sha256: sha('new'), base: null, captureId: null }, tmp, 'Air'),
+      d.svc.serve.offer(
+        {
+          root: 'sorted',
+          relPath: 'Tax/fresh.pdf',
+          sha256: sha('new'),
+          base: null,
+          captureId: null,
+        },
+        tmp,
+        'Air',
+      ),
     ).rejects.toThrow(/symlink/);
     const tmp2 = await d.svc.serve.stagingFile('sorted');
     fs.writeFileSync(tmp2, 'new');
     await expect(
-      d.svc.serve.offer({ root: 'sorted', relPath: 'Tax/report.pdf', sha256: sha('new'), base: sha('outside'), captureId: null }, tmp2, 'Air'),
+      d.svc.serve.offer(
+        {
+          root: 'sorted',
+          relPath: 'Tax/report.pdf',
+          sha256: sha('new'),
+          base: sha('outside'),
+          captureId: null,
+        },
+        tmp2,
+        'Air',
+      ),
     ).rejects.toThrow(/symlink/);
     expect(fs.readdirSync(out)).toEqual(['report.pdf']);
-    expect(fs.readFileSync(path.join(out, 'report.pdf'), 'utf8')).toBe('outside');
+    expect(fs.readFileSync(path.join(out, 'report.pdf'), 'utf8')).toBe(
+      'outside',
+    );
     expect(fs.existsSync(tmp2)).toBe(false); // the refused upload is dropped
   });
 
   it('open and remove do not follow it', async () => {
     const { d, out } = await leaderWithLink();
-    await expect(d.svc.serve.open({ root: 'sorted', relPath: 'Tax/report.pdf', sha256: sha('outside') })).rejects.toThrow(
-      /symlink/,
-    );
-    await expect(d.svc.serve.remove({ root: 'sorted', relPath: 'Tax/report.pdf', sha256: sha('outside') })).rejects.toThrow(
-      /symlink/,
-    );
+    await expect(
+      d.svc.serve.open({
+        root: 'sorted',
+        relPath: 'Tax/report.pdf',
+        sha256: sha('outside'),
+      }),
+    ).rejects.toThrow(/symlink/);
+    await expect(
+      d.svc.serve.remove({
+        root: 'sorted',
+        relPath: 'Tax/report.pdf',
+        sha256: sha('outside'),
+      }),
+    ).rejects.toThrow(/symlink/);
     expect(d.trashed).toEqual([]);
     expect(fs.existsSync(path.join(out, 'report.pdf'))).toBe(true);
   });
@@ -110,7 +152,10 @@ describe('a path from another device through a symlinked directory', () => {
       `INSERT INTO shared_files(root, rel_path, sha256, bytes, mtime, rev) VALUES('sorted','Tax/report.pdf',?,5,'2026-01-01T00:00:00.000Z',3)`,
       [sha('hello')],
     );
-    const lead = { incoming: path.join(tmpDir(), 'i'), sorted: path.join(tmpDir(), 's') };
+    const lead = {
+      incoming: path.join(tmpDir(), 'i'),
+      sorted: path.join(tmpDir(), 's'),
+    };
     write(path.join(lead.sorted, 'Tax', 'report.pdf'), 'hello');
     const t = serveTransport(stubServe(lead));
     await mirrorPass({ ...c.deps, roots: c.svc.roots() }, t);
@@ -132,6 +177,8 @@ describe('a path from another device through a symlinked directory', () => {
         `INSERT INTO shared_files(root, rel_path, sha256, bytes, mtime, rev) VALUES('incoming',?,?,1,'t',90)`,
         [rel, sha('x')],
       );
-    expect(await listSortable(d.deps, incoming)).toEqual([path.join(incoming, 'ok.pdf')]);
+    expect(await listSortable(d.deps, incoming)).toEqual([
+      path.join(incoming, 'ok.pdf'),
+    ]);
   });
 });

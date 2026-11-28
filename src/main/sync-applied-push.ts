@@ -43,8 +43,10 @@ export function wireSyncAppliedPush(
   };
   sync.onApplied((tables) => {
     if (tables.some((t) => t.startsWith('attention_'))) push.attentionHint();
-    if (tables.includes('outbox')) push.broadcast('push:outbox-changed', undefined);
-    if (tables.includes('event_drafts')) push.broadcast('push:calendar-out-changed', undefined);
+    if (tables.includes('outbox'))
+      push.broadcast('push:outbox-changed', undefined);
+    if (tables.includes('event_drafts'))
+      push.broadcast('push:calendar-out-changed', undefined);
     if (tables.some((t) => APP_STATE_TABLES.includes(t))) reproject();
   });
 }

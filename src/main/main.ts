@@ -721,6 +721,9 @@ function registerIpc(h: RuntimeHandles): void {
         status: prov.status(),
         remote: prov.remote === true,
         installable: installable.installable(prov.id),
+        ...(bundled.missingBinaries.includes(prov.id)
+          ? { notInstalled: { devBuild: !app.isPackaged } }
+          : {}),
         ...(prov.id === 'local-asr'
           ? { variants: bundled.localAsr.variants() }
           : {}),
