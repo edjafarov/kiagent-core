@@ -1,5 +1,7 @@
 # Changelog
 
+## [0.138.0](https://github.com/edjafarov/kiagent-core/compare/v0.137.0...v0.138.0) (2026-11-28)
+
 ## [0.137.0](https://github.com/edjafarov/kiagent-core/compare/v0.136.0...v0.137.0) (2026-11-24)
 
 ### ⚠ BREAKING CHANGES
