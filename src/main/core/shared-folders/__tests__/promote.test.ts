@@ -518,14 +518,19 @@ describe('a reconcile that could not finish is still owed', () => {
   });
 
   it('a Trash that fails once is retried on the timer: the root becomes ok with no other event', async () => {
-    let failing = true;
+    // The retry is held inside its Trash until the owed state is checked:
+    // a 20 ms timer otherwise finishes the retry first on a loaded machine.
+    let calls = 0;
+    let release!: () => void;
+    const held = new Promise<void>((r) => {
+      release = r;
+    });
     const d = await device('copy', {
       retryMs: 20,
       trash: async (p) => {
-        if (failing) {
-          failing = false;
-          throw new Error('busy');
-        }
+        calls += 1;
+        if (calls === 1) throw new Error('busy');
+        await held;
         d.trashed.push(p);
         fs.rmSync(p, { force: true });
       },
@@ -539,12 +544,14 @@ describe('a reconcile that could not finish is still owed', () => {
     await d.svc.settled();
     expect(await owed(d)).toHaveLength(1);
     expect(d.svc.rootStatus('incoming')).toBe('owed');
+    release();
     // no kick, no file event: only the timer
-    for (let i = 0; i < 100 && d.svc.rootStatus('incoming') !== 'ok'; i += 1) {
+    while (d.svc.rootStatus('incoming') !== 'ok') {
       // eslint-disable-next-line no-await-in-loop
       await new Promise((r) => setTimeout(r, 20));
     }
     await d.svc.settled();
+    expect(calls).toBe(2);
     expect(d.svc.rootStatus('incoming')).toBe('ok');
     expect(d.svc.usable('incoming')).toBe(true);
     expect(d.trashed).toEqual([f]);
