@@ -19,11 +19,11 @@ flowchart TB
     end
 
     subgraph EXT["Extension — own process, untrusted"]
-        CODE["activate(host)<br/>Source · Worker · McpTool · Provider"]
+        CODE["activate(host)<br/>Source · McpTool · Sender · CalendarWriter"]
     end
 
     UI -->|IPC| PLAT
-    CLIENT <-->|MCP / stdio| MCP
+    CLIENT <-->|MCP| MCP
 
     PLAT -->|fork + activate| CODE
     PLAT -->|register tools| MCP
@@ -46,7 +46,8 @@ rendering, the HTTP retry ladder, a test kit). It ships as a GitHub-release tgz 
 (`sdk-vX.Y.Z`); connectors pin it as a devDependency and compile against it. See
 [`docs/connectors-authoring-guide.md`](../connectors-authoring-guide.md) and
 [`sdk/connector-sdk/README.md`](../../sdk/connector-sdk/README.md). The platform checks the
-manifest's `engine` semver range against `PLATFORM_API_VERSION` (`src/shared/extension-rpc.ts`).
+manifest's `engine` semver range against `PLATFORM_API_VERSION` (`src/shared/extension-rpc.ts`, currently `2.21.0`);
+an extension that needs a newer platform is refused with `requires platform <range>; this build is <version>`.
 
 An extension is a CJS bundle whose default export is:
 
@@ -54,7 +55,7 @@ An extension is a CJS bundle whose default export is:
 const extension: ExtensionModule<Caps> = {
   async activate(host) {
     // host has ONLY the namespaces you declared in caps
-    return { sources: [...], tools: [...], senders: {...} };
+    return { sources: [...], tools: [...], senders: {...}, calendarWriters: {...} };
   },
   async deactivate() { /* optional */ },
 };
@@ -62,10 +63,14 @@ const extension: ExtensionModule<Caps> = {
 
 **Contributions are return values, not registrations.** `activate()` returns contributions; the
 main process wraps each in an RPC proxy and registers the proxy into the real registries
-(SourceRegistry, MCP Handle). The extension never holds a reference to anything trusted.
+(SourceRegistry, MCP Handle, the outbound and calendar pipelines). The extension never holds a reference to anything trusted.
 
-> Note: the contract type and the wire protocol (`Contributions` in `extension-rpc.ts`) agree
-> since platform 2.0.0: `{ sources, tools, senders }` is the whole contribution surface.
+> Note: the contract type and the wire protocol (`Contributions` in `extension-rpc.ts`) agree:
+> `{ sources, tools, senders, calendarWriters }` is the whole contribution surface. `senders` and
+> `calendarWriters` are keyed by source id and must also be listed in the manifest's
+> `contributes.senders` / `contributes.calendarWriters`. A `CalendarWriter` has `listCalendars`,
+> `createEvent` and an optional `updateEvent` (platform 2.21.0; a connector without it gets an
+> `unsupported:` error from the host). Renderer screens are declared in `contributes.ui`, not returned.
 
 > A contributed tool may set `overview: true`: `digital_memory_info` then calls it with `{}`
 > (3 s timeout, 12,000-char cap) and includes the result under `more[<tool name>]`. The flag
@@ -73,29 +78,49 @@ main process wraps each in an RPC proxy and registers the proxy into the real re
 
 ## Capabilities
 
-These eight caps each map 1:1 to a host namespace (`CapSurfaces` in contracts.ts):
+Twelve caps map 1:1 to a host namespace (`CapSurfaces` in contracts.ts; the list is `CAPS` in `src/main/platform/manifest.ts`):
 
 | Cap         | Host surface             | Grants                                                                                                       |
 | ----------- | ------------------------ | ------------------------------------------------------------------------------------------------------------ |
 | `query`     | `host.query`             | Read the corpus: `document`, `children`, `byExternalId`, `search`, `count`, `countBy`, `accounts`            |
-| `net`       | `host.net.fetch`         | Outbound HTTP                                                                                                |
-| `files`     | `host.files`             | Scoped file access: `list`, `read`, `write`, `move` — _declared in the contract, rejected at runtime today_  |
-| `db`        | `host.db`                | A **private** SQLite db (`private.db` in the extension's data dir): `exec`, `query` — never the shared store |
-| `ui`        | `host.ui.notify`         | User notifications                                                                                           |
-| `commands`  | `host.commands.register` | Register invokable commands — _declared in the contract, rejected at runtime today_                          |
-| `inference` | `host.inference`         | Local AI: `complete`, `see`, `read`, `hear`, plus `lane()` (the background lane's current `LaneState`, so a caller can wait for `'open'` instead of hammering a closed lane; **Contract (platform 2.8.0): only `'open'` permits background admission — every other value, including values added later, means closed.** `'until-synced'` (2.8.0) = a weak host while an account is still in its first sync; it stays closed until each source's backfill is followed by a committed `'live'` batch, so a source must commit `live` right after its last backfill batch rather than blocking until the next change) and `describe(kind)` (the provider that would answer `kind` right now — `{ providerId, modelId, generation }`, or `null` when none is ready). `complete`'s widened opts: `profile: 'deterministic'` (temperature 0, seed 0, `maxTokens` required and capped at 512) gives classification-style callers repeatable output — checked by hand, not in CI: 20 runs of one prompt against one model produce identical text on one machine; bitwise determinism across hardware is NOT promised, repeatability comes from the caller's own persisted result, not the sampler — `system` (a separate system message, not concatenated into the prompt), and `generation` (the token `describe()` returned). A `lane: 'background'` call fails fast with `LaneClosedError` while the processing window is closed, exactly like a core worker; passing a stale `generation` to `complete()` fails with `ModelChangedError` (`{ expected, actual, modelId, source: 'generation' \| 'model-drift' }`) before any request reaches the model. **Both errors cross the extension RPC boundary by `name`, never `instanceof`** — class identity does not survive the fork (`src/shared/extension-rpc.ts`), so a caller discriminates on `err.name` plus, for `ModelChangedError`, its plain `expected`/`actual`/`modelId`/`source` fields. **Caching rationale**: a persisted result cache should be keyed on the canonical effective request plus the `modelId` obtained from `describe()` _before_ the lookup; the `generation` token turns a model switch between that lookup and the eventual `complete()` call into a rejected call the caller repeats, rather than a silently wrong cache hit. The richer `completeWithMeta()` (`{ text, providerId, modelId, generation, profile, promptTokens, completionTokens, truncated }`) exists on the plane (`src/main/core/inference.ts`) but is deliberately NOT lifted onto the extension surface in this wave. `complete()` resolves to the completion TEXT and echoes nothing back, so an extension learns the model identity from `describe()` and then *proves* it still held at call time by passing that `generation` to `complete()` — a call that resolves is itself the assertion, enforced twice (the plane's generation check before the provider is called, and the provider's own `expectModelId` backstop). What an extension therefore cannot see is the rest of the meta: `providerId`, the resolved `modelId`, `profile`, token usage, and — the one that matters for a persisted cache — `truncated`, so a ceiling-truncated answer is indistinguishable from a complete one. The `platform.lane` event (delivered via the `events` cap, payload `{ state: LaneState }`) fires on every real transition — **and once more, unconditionally, the first time its trigger runs (main.ts's 5 s publisher)**, since its dedup state starts `null`: that first delivery announces the lane's already-current state rather than reporting a transition, which is correct and deliberate, not a bug. |
-| `events`    | `host.events`            | Cross-extension pub/sub: `on`, `emit` — a listener receives `(payload, meta)`; `meta.from` is host-stamped and cannot be forged by a payload field (or by any argument the emitter passes); there is no filtering, ACL, persistence or replay — a listener now has the information to accept or reject what it receives |
+| `net`       | `host.net.fetch`         | Outbound HTTP to public internet destinations only: loopback, LAN, link-local and other reserved ranges are refused (`net-guard.ts`), and a response is capped in size |
+| `files`     | `host.files`             | Scoped file access (`roots`, `stat`, `list`, `read`, `write`, `move`, `remove`, `watch`, handles) inside roots the manifest declares in `fileRoots` (home-relative, at most 8, consented at install). Bundled extensions get roots from `mainApi.grantRoot` instead |
+| `db`        | `host.db`                | The extension's **own tables** in the shared plugin database, reached through the database worker: `exec`, `query`, `batch`, `transaction`, `migrate`, `identifier`. The manifest must declare `database.schema` (a descriptor of objects and append-only migrations; it may name tables copied between devices). Names are prefixed per extension and a native authorizer limits SQL to them. Not the corpus. A legacy `private.db` in the data dir is imported once |
+| `ui`        | `host.ui`                | `notify` for any tier. `handle`, `unhandle`, `broadcast` and `call` (renderer-callable handlers on the `ext:invoke` / `ext:push` channels) are denied to external-tier extensions. Screens are declared in `contributes.ui` and are allowed at any tier |
+| `commands`  | `host.commands.register` | Declared in the contract and the manifest, **rejected at runtime today** (`unsupported('commands')`)         |
+| `inference` | `host.inference`         | Local AI — see below                                                                                         |
+| `events`    | `host.events`            | Cross-extension pub/sub: `on`, `emit` — a listener receives `(payload, meta)`; `meta.from` is host-stamped and cannot be forged by a payload field; names starting `extension.` or `platform.` are reserved for the platform. No filtering, ACL, persistence or replay |
+| `attention` | `host.attention`         | `publish` and `resolve` items in the app's attention list; items are validated and scoped to the publisher    |
+| `prefs`     | `host.prefs`             | `get`, `set`, `onChange` on the extension's own settings, stored as `<extension id>.<name>` in `user_prefs`, which follows the user to every device. On a follower the leader stores the value |
+| `secrets`   | `host.secrets`           | **Bundled tier only.** One account-wide secret per name (`get`, `put`, `onChange`), stored in the vault so it travels to other devices like a login |
+| `sync`      | `host.sync`              | **Bundled tier only.** The multi-device sync service: `status`, deltas and snapshots, swap/restore, join, lead/demote, forwarded writes, the AI and work lenders. The method list is `SYNC_SURFACE_METHODS` |
 
-Two further caps grant **no host namespace at all** — they gate what the main process will accept
-_back_ from the extension rather than what the extension may call:
+`inference` in detail. `complete` (text), `completeWithMeta` (`{ text, providerId, modelId, firstTokens? }` — who answered, not token usage or truncation), `see`, `read`, `hear`, and `embed` (text to vectors; background lane only), plus:
+
+- `lane()` — the background lane's current `LaneState`, so a caller can wait for `'open'` instead of calling into a closed lane. **Only `'open'` permits background admission; every other value, including ones added later, means closed.** `'until-synced'` is a weak host still in an account's first sync: it stays closed until each source's backfill is followed by a committed `'live'` batch, so a source must commit `live` right after its last backfill batch.
+- `describe(kind, { lane? })` — the provider that would answer `kind` now: `{ providerId, modelId, generation }`, or `null`.
+- `complete` options: `lane`, `maxTokens`, `system` (a separate system message), `schema` or `grammar` (constrain local decoding; remote providers ignore them), `task`, `budgetKey`, `profile: 'deterministic'` (temperature 0, seed 0, `maxTokens` required and at most 512; repeatable on one machine, not bitwise across hardware) and `generation` (the token `describe()` returned).
+- A `lane: 'background'` call fails with `LaneClosedError` while the processing window is closed; a stale `generation` fails with `ModelChangedError` (`{ expected, actual, modelId, source: 'generation' | 'model-drift' }`) before any request reaches the model. **Both cross the RPC boundary by `name`, never `instanceof`** (`src/shared/extension-rpc.ts`), so a caller discriminates on `err.name` and the plain fields.
+- Caching: key a persisted result on the canonical request plus the `modelId` from `describe()` taken before the lookup, and pass its `generation` to `complete()`, so a model switch in between becomes a rejected call to repeat rather than a silently wrong hit.
+- The `platform.lane` event (via `events`, payload `{ state: LaneState }`) fires on every real transition and once, unconditionally, the first time the publisher runs: that first delivery announces the already-current state.
+
+Three further caps grant **no host namespace at all**:
 
 | Cap                  | Grants                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
 | -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `send`               | Registration of the extension's `contributes.senders` as outbound transports. Main calls _in_ (`callSender`), past a confirmation gate; the extension gets no new surface. Bundled senders shadow it. An extension sender's auth-failure `Error.message` ending `reconnect the account in Settings` is classified as retryable-auth by the app's outbound error copy (`src/main/outbound/error-copy.ts`) — a phrasing contract shipped connectors depend on. |
+| `send`               | Registration of the extension's `contributes.senders` as outbound transports. Main calls _in_ (`callSender`, and the draft-mirror ops `create` / `update` / `read` / `remove` / `send` for providers that keep drafts), past a confirmation gate; the extension gets no new surface. Bundled senders shadow it. An extension sender's auth-failure `Error.message` ending `reconnect the account in Settings` is classified as retryable-auth by the app's outbound error copy (`src/main/outbound/error-copy.ts`) — a phrasing contract shipped connectors depend on. |
+| `calendar.write`     | Registration of the extension's `contributes.calendarWriters`. Main calls `listCalendars`, `createEvent` and `updateEvent` _in_, only after the user confirmed the event (the Outbox or a confirm link); extensions never create events on their own (platform 2.16.0). |
 | `unsafe.mainProcess` | Bundled tier only: `activate()` receives `extras.mainProcess`, and the extension runs in-process instead of a forked child.                                                                                                                                                                                                                                                                                                                                  |
 
-Always present, no cap needed: `host.self` (`id`, `dataDir`) and `host.log(level, msg)`.
-Real implementations live in `src/main/platform/host-surfaces.ts`.
+Privileged caps (`PRIVILEGED_CAPS` in `manifest.ts`) are `unsafe.mainProcess`, `sync` and `secrets`; an external manifest declaring one is a `ManifestError`.
+
+Always present, no cap needed: `host.self` (`id`, `dataDir`), `host.log(level, msg)` and `host.role.get()`, the one leader fact (`{ leader, follower, multiDevice, epoch, … }`); the platform event `sync.role` fires on every change. Real implementations live in `src/main/platform/host-surfaces.ts`.
+
+### Source options and OAuth providers
+
+A source's runtime `SourceDescriptor` may declare up to 8 boolean `options` (`SourceOption`: `key`, `label`, `description?`, `default`). Core renders each as a toggle on the account page and stores it at `accounts.config.options.<key>`; the connector reads it in `pull`. A source that originates mail sets `compose: 'email'` so `draft_message` can use it.
+
+A `contributes.sources` entry may be `{ id, oauth }`, binding the source to a platform OAuth provider: `google`, `microsoft` or `github` (`OAUTH_PROVIDER_IDS`). The platform owns the provider's profile and token refresh; client secrets stay main-side (`oauth-providers.ts`). Only packages from the store may bind an OAuth provider: a package installed from another GitHub repository or a URL is refused at preview.
 
 Two things worth internalizing:
 
@@ -117,7 +142,7 @@ sequenceDiagram
     participant E as Extension code
 
     M->>P: install (preview → consent → commit)
-    P->>P: validate manifest (zod), pin integrity (TOFU SRI)
+    P->>P: validate manifest (zod), pin integrity (TOFU SRI), install guard
     M->>P: enable
     P->>H: fork utilityProcess (extension-host-entry)
     P->>H: bootstrap (extensionId, entry, dataDir, caps)
@@ -125,7 +150,7 @@ sequenceDiagram
     E-->>H: { sources, tools, senders }
     H-->>P: contribution descriptors
     P->>P: register RPC proxies (SourceRegistry, MCP Handle, ...)
-    Note over P,E: running — host calls gate-checked per call
+    Note over P,E: running — host calls gate-checked per call<br/>(allowlisted utility hosts may go dormant when idle)
     M->>P: disable / uninstall
     P->>E: deactivate() (best effort)
     P->>H: kill process, unregister proxies
@@ -134,6 +159,15 @@ sequenceDiagram
 Sources contributed by extensions are **demand-driven**: the main-side proxy sends `src-next`,
 the child advances the async iterator exactly one step, and replies `src-batch` / `src-done` /
 `src-error`. The Engine's backpressure applies to extension sources for free.
+
+**Dormant utility hosts.** A product build may list extension ids in `product.json`
+`dormantExtensions` (an audited allowlist of connectors that run no timers, sockets or file
+watchers outside a pull). After `DORMANT_AFTER_MS` (5 min) with no call in flight, the platform
+soft-stops such a host: the process exits, but its registrations (sources, tools, UI handlers)
+stay, and the snapshot reports `dormant`. The next call into it (a pull, a tool, sender or UI call)
+respawns the host and waits for `activated`, giving up with `extension is not running` after 60 s.
+Bundled and in-process extensions never go dormant; neither does a package installed from outside
+the store that claims an allowlisted id. `KIA_DORMANT_HOSTS=0` disables dormancy.
 
 ## Runtime files
 
@@ -144,30 +178,67 @@ the child advances the async iterator exactly one step, and replies `src-batch` 
 | `src/main/platform/host-process.ts`         | Per-extension process supervisor: fork → handshake → activate; crash-loop breaker (3 crashes / 60s)                                                                     |
 | `src/main/platform/host-router.ts`          | **The gate**: namespace → cap table, `granted: ReadonlySet<Cap>`, throws `CAP_DENIED`, audit log                                                                        |
 | `src/main/platform/host-surfaces.ts`        | Real implementations behind each cap namespace                                                                                                                          |
-| `src/main/platform/manifest.ts`             | zod manifest validation; unknown caps rejected; legacy manifests rejected; `engine` semver check; entry containment                                                     |
-| `src/main/platform/extensions.ts`           | Disk state only: `installed.json`, `state.json`, manifest-only discovery — never loads extension code                                                                   |
-| `src/main/platform/oauth-providers.ts`      | OAuth provider profiles/refreshers (e.g. `google`) — client secrets stay main-side                                                                                      |
+| `src/main/platform/manifest.ts`             | Strict zod manifest validation (unknown keys and caps rejected); `engine` semver check; tier rules for privileged caps; `fileRoots`, `contributes.ui`, `sync` and `database` checks; entry containment |
+| `src/main/platform/extensions.ts`           | Disk state only: `installed.json` (ref, integrity, `repoId`), `state.json`, manifest-only discovery — never loads extension code                                         |
+| `src/main/platform/extension-set.ts`        | The user's extension set (`core.extensions` in `user_prefs`): what every device installs and enables, with `removed` tombstones for uninstalls                           |
+| `src/main/platform/ext-invoke.ts`, `ui-registry.ts` | Renderer-callable handlers (`host.ui.handle`) and contributed screens                                                                                          |
+| `src/main/platform/net-guard.ts`, `scoped-files.ts`, `file-roots.ts`, `plugin-db-proxy.ts` | The checks and proxies behind `net`, `files` and `db`                                                          |
+| `src/main/platform/oauth-providers.ts`      | OAuth provider profiles/refreshers (`google`, `microsoft`, `github`) — client secrets stay main-side                                                                                      |
 | `src/main/platform/source-proxy.ts`         | Demand-driven Source proxying (`src-next` / `src-batch`)                                                                                                                |
 | `src/main/platform/transport.ts`            | `utilityProcess` / `fork` / in-memory transports + symmetric RPC endpoint                                                                                               |
 | `src/shared/extension-rpc.ts`               | Wire message unions, bootstrap handshake, `PLATFORM_API_VERSION`                                                                                                        |
 
-## Marketplace
+## Marketplace and other install sources
 
-The catalog is a GitHub org query (`org:kia-plugins topic:kia-plugin`). Install is three-phase
-(two IPC calls, with the consent modal in between on the renderer side):
+The store catalog is a GitHub org query (`org:kia-plugins topic:kia-plugin`, 5-minute cache). An
+extension can come from three places, and the consent sheet says which (`provenanceOf` in
+`src/shared/install-link.ts`):
 
-1. **Preview** (`extension:install-preview`) — download tarball, verify/pin integrity
-   (TOFU sha512 SRI; plaintext `http:` refs rejected), staged extract, validate manifest,
-   check source-id collisions. No extension code executes.
+- **The store** — a repo in the `kia-plugins` org.
+- **Any GitHub repo** — pasted as an address in "Add from GitHub", or opened from a
+  `kiagent://install?repo=owner/repo[&tag=…]` link (product-gated: the scheme is `urlScheme` in
+  `product.json`; the OSS build handles no links). A link never installs anything: it only
+  prefills the sheet. The sheet shows **"Not reviewed by KIAgent"** and the publisher's name for
+  anything outside the store.
+- **A local directory or `.tgz`** — the dev loop (`origin: 'dev'`).
+
+Install is three-phase (two IPC calls, with the consent modal in between on the renderer side):
+
+1. **Preview** (`extension:install-preview`) — download the release `.tgz`, verify/pin integrity
+   (TOFU sha512 SRI; plaintext `http:` refs rejected), extract with bounds (entry and byte limits,
+   no links), validate manifest, check source-id collisions. No extension code executes.
 2. **Consent** — the renderer shows the cap list from the preview; the user approves.
 3. **Commit** (`extension:install-commit`) — move staging into `extensions/<id>` (preserving
    `data/`), record the consent row (append-only, in the store), hot-activate.
 
-Re-installing the same id+version with different bytes is rejected against the pinned integrity.
-Files: `src/main/marketplace/{catalog,github-source,github-cache,github-ref,installer,update-check}.ts`;
-the IPC handlers live inline in `src/main/main.ts`.
+The installer's guard runs at preview, again before a running extension is stopped, and once more
+inside commit:
 
-Authoritative design doc: [`docs/superpowers/specs/2026-07-03-extension-marketplace-design.md`](../superpowers/specs/2026-07-03-extension-marketplace-design.md).
+- A bundled id can't be replaced.
+- A package from outside the store can't bind an OAuth provider (`contributes.sources[].oauth`);
+  that needs KIAgent's own Google or Microsoft access, which only store connectors get.
+- An id already installed from one GitHub repo can't be replaced by another (compared by GitHub's
+  numeric repo id, `repoId` in `installed.json`).
+- Re-installing the same id+version with different bytes is rejected against the pinned integrity.
+
+**Approved bytes are installed bytes.** On a multi-device account only the leader installs a
+store or GitHub package. A follower's commit forwards the pinned ref and the integrity the user
+approved (`extension:install`); the leader installs, and if the release asset changed since the
+approval it refuses rather than install under the old consent. The other devices follow through
+the extension set.
+
+**Uninstall leaves tombstones.** Removing an extension drops its files and, in the extension set,
+records `{ enabled: false, removed: true }` so every other device uninstalls it too and a stale
+device cannot re-enable it (it must reinstall first). Plugin storage is tombstoned separately
+(`plugin_reset_tombstones`) so a retained legacy `private.db` is never imported again. An
+extension that still has accounts can't be uninstalled until their sources are removed.
+
+Files: `src/main/marketplace/{catalog,github-source,github-cache,github-ref,installer,update-check}.ts`,
+`src/shared/install-link.ts`, `src/main/install-links.ts`; the IPC handlers live inline in
+`src/main/main.ts`. The renderer side is `src/renderer/extensions/`.
+
+Authoritative design docs: [`docs/superpowers/specs/2026-07-03-extension-marketplace-design.md`](../superpowers/specs/2026-07-03-extension-marketplace-design.md)
+and [`docs/superpowers/specs/2026-11-15-github-install-design.md`](../superpowers/specs/2026-11-15-github-install-design.md).
 
 ## Bundled extensions (privileged tier)
 
@@ -188,20 +259,21 @@ Each found entry is tagged `origin: 'bundled'` and gets special treatment:
 
 - **Manifest tier `'bundled'`.** `parseManifest`/`validateManifestDir` take
   an `opts.tier: 'external' | 'bundled'`. Only manifests validated at tier
-  `'bundled'` may declare privileged caps (today just `unsafe.mainProcess`,
+  `'bundled'` may declare privileged caps (`unsafe.mainProcess`, `sync`, `secrets`;
   `PRIVILEGED_CAPS` in `manifest.ts`); an external manifest declaring one is
   a hard `ManifestError` at parse time: _"this extension requires
-  unsafe.mainProcess — only extensions bundled with the app may use it"_.
+  unsafe.mainProcess — only extensions bundled with the app may use it"_
+  (the cap names are listed).
 - **Auto-consent.** `activate()` skips the consent check entirely for
   `origin === 'bundled'` (`e.origin !== 'bundled' && !(await
 consentCovers(...))`). Trust model: consent is a proxy for "the user chose
   to install this"; a bundled extension was never installed — it shipped
   inside the signed app bundle the user already trusted by installing the
   app. There's no separate approval step, ever.
-- **No uninstall, no marketplace replace.** `uninstall()` and
-  `installCommit()` reject any id whose live entry has `origin ===
-'bundled'` with a user-facing error ("bundled extensions are part of the
-  app and cannot be uninstalled" / "...cannot be replaced from the
+- **No uninstall, no marketplace replace.** `uninstall()` rejects any id
+  whose live entry has `origin === 'bundled'` ("bundled extensions are
+  part of the app and cannot be uninstalled"), and the installer's guard
+  refuses a package whose id is bundled ("...cannot be replaced from the
   marketplace"). A bundled extension _can_ still be disabled
   (`setEnabled(id, false)`) — disable is not uninstall, and `setEnabled` has
   no origin check.
@@ -228,13 +300,13 @@ consentCovers(...))`). Trust model: consent is a proxy for "the user chose
   `bundled-extensions-data` directory sibling of `extDir` and is overridable
   via `ExtensionPlatformDeps.bundledDataDir` (`main.ts` points it at
   `userData/bundled-extensions-data`).
-- **Marketplace UI.** The catalog row/detail subtitle gets a `· bundled`
-  suffix (alongside the existing `· dev install`) and the Uninstall button
-  is hidden when `origin === 'bundled'` (`src/renderer/screens/Marketplace/{rows.ts,Detail.tsx}`).
+- **Settings UI.** The installed-extensions list in Settings leaves out
+  bundled entries (`src/renderer/screens/Settings/Extensions.tsx`), so
+  there is nothing to uninstall from there.
 
 ### The `unsafe.mainProcess` cap
 
-The one privileged cap defined so far. It is **not** a host namespace —
+One of three privileged caps (with `sync` and `secrets`, which are host namespaces). It is **not** a host namespace —
 `CapSurfaces['unsafe.mainProcess']` is `{}`, and the child runtime's
 `NS_METHODS` table (`extension-host-entry.ts`) has no entry for it, so it
 never appears on `host` itself. Instead:
@@ -245,13 +317,14 @@ never appears on `host` itself. Instead:
   `e.manifest.caps.includes('unsafe.mainProcess')` and, if true, runs the
   extension **in-process** (next section) instead of forking a
   `utilityProcess`/`child_process.fork` host.
-- If the platform was given a `mainApi`
-  (`ExtensionPlatformDeps.mainApi` — Stage 1 wires the plumbing only and
-  `main.ts` never sets it yet; Stage 2 defines the real handle) _and_ the
-  extension declared the cap, `activate(host, extras)` receives `extras =
-{ mainProcess: mainApi }` as its second argument. Otherwise `extras` is
-  `undefined` — including always for out-of-process (forked) children,
-  which never receive `mainApi` regardless of caps.
+- If the platform has a main-process handle for it
+  (`ExtensionPlatformDeps.mainApiForPlugin(id)`, which the runtime wires
+  to `buildMainApi` in `src/main/main-api.ts` with the caller's id bound;
+  the plain `mainApi` dep is the fallback) _and_ the extension declared
+  the cap, `activate(host, extras)` receives `extras = { mainProcess:
+  mainApi }` as its second argument. Otherwise `extras` is `undefined` —
+  including always for out-of-process (forked) children, which never
+  receive `mainApi` regardless of caps.
 - Consent copy (`CAP_CATALOG['unsafe.mainProcess']`,
   `src/renderer/components/cap-catalog.ts`): label _"Full app access
   (bundled only)"_, risk `elevated`, icon `settings` — _"Runs inside the app
@@ -341,6 +414,10 @@ identity: `product.json`, resolved by `loadProductConfig()`
 | `updateFeedUrl`        | string (URL) | Overrides the electron-builder-baked `app-update.yml` feed (`autoUpdater.setFeedURL`).                                                                              |
 | `bundledExtensionsDir` | string       | Overrides the bundled-extensions directory name/path (default `'bundled-extensions'`), resolved relative to the resource root.                                      |
 | `macUpdatesEnabled`    | boolean      | Opens the macOS auto-update eligibility gate. Absent/`false` → macOS updates stay `disabled`/`unsigned-macos`. Only a Developer ID-signed product build sets `true`. |
+| `dormantExtensions`    | string[]     | Ids of store connectors allowed to go dormant when idle (see Lifecycle). Absent/empty: none.                                                                       |
+| `urlScheme`            | string       | The URL scheme the product claims for install links (`<scheme>://install?repo=…`). Absent: no links are handled and nothing is registered with the OS.             |
+| `headless`             | boolean      | Runs the same runtime with no window, tray or dialogs (a server).                                                                                                  |
+| `testNetExtensionId`   | string       | The one extension allowed the compiled test-build loopback allowance for `net`. Absent: none.                                                                      |
 
 `loadProductConfig(candidates, log?)` **never throws**: it takes the first
 candidate whose `product.json` exists (a candidate ending in `.json` is
@@ -362,3 +439,14 @@ on `DEFAULT_PRODUCT` and (absent a populated `bundled-extensions/`
 directory) has nothing for the bundled scan to find — the whole privileged
 tier is dormant unless a product build supplies both the config and the
 extensions.
+
+### Product composition
+
+Beyond `product.json`, a product shapes the UI by replacing two files that core ships with empty
+defaults: `src/shared/composition.ts` and `src/renderer/composition.tsx`. They declare the
+product's routes and screens, the first view, the attention allow-list and the Sources policy, and
+its shell (sign-in screen, sidebar, window gate) through `PRODUCT_SHELL`. A product also declares
+the IPC channels its extensions answer or push, as `ProductInvokes` and `ProductPushes` (with the
+data lists `PRODUCT_INVOKE_CHANNELS` / `PRODUCT_PUSH_CHANNELS`): the window may call or receive
+them, core registers no handler for them, and the extension supplies one with `host.ui.handle` and
+`host.ui.broadcast` when it activates. Core's copies declare none.

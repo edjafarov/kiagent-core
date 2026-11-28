@@ -19,7 +19,7 @@
 </p>
 
 <p align="center">
-  <img src="docs/assets/readme/hero.png" alt="KIAgent main window — Sources screen with Gmail and HubSpot syncing" width="100%">
+  <img src="docs/assets/readme/hero.png" alt="KIAgent main window — Sources: mail, chats, docs, calendar, CRM, files and AI sessions synced locally (sample data)" width="100%">
 </p>
 
 If you think of a local AI model as the CPU, KIAgent is the rest of the operating system: it gives that model — or any assistant you choose — access to your personal data and to a small set of tools, so it can help with the growing complexity of everyday life.
