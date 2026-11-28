@@ -48,9 +48,8 @@ jobs:
       - name: lint
         run: npm run lint
 
-      # jest's setup (.erb/scripts/check-build-exists.ts) requires the webpack
-      # main + renderer bundles to exist; `npm run build` produces them without
-      # the far slower electron-builder packaging step.
+      # Proves the main + renderer bundles build, without the far slower
+      # electron-builder packaging step. (jest no longer needs them.)
       #
       # OAuth client credentials are inlined into the main bundle at build
       # time (see .erb/configs/oauth-env.ts) — the repo hardcodes none. The
