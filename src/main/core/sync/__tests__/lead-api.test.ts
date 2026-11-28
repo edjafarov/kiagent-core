@@ -34,7 +34,8 @@ async function device(
   setup: (c: import('better-sqlite3').Database) => void = () => undefined,
   existingDir?: string,
 ): Promise<Device> {
-  const dir = existingDir ?? fs.mkdtempSync(path.join(os.tmpdir(), 'lead-api-'));
+  const dir =
+    existingDir ?? fs.mkdtempSync(path.join(os.tmpdir(), 'lead-api-'));
   const db = await openDb(path.join(dir, 'a.db'));
   migrate(db._conn!);
   setup(db._conn!);
@@ -91,17 +92,27 @@ const runnerCount = (d: Device): (() => number) => {
 };
 /** Records every proc call; a fence post reads `syncFence:on|off`. */
 const procLog = (d: Device): string[] => {
-  const real = (d.db as unknown as { proc: (n: string, a: unknown) => Promise<unknown> }).proc;
+  const real = (
+    d.db as unknown as { proc: (n: string, a: unknown) => Promise<unknown> }
+  ).proc;
   const log: string[] = [];
-  (d.db as unknown as { proc: unknown }).proc = async (n: string, a: unknown) => {
-    log.push(n === 'syncFence' ? `syncFence:${(a as { on: boolean }).on ? 'on' : 'off'}` : n);
+  (d.db as unknown as { proc: unknown }).proc = async (
+    n: string,
+    a: unknown,
+  ) => {
+    log.push(
+      n === 'syncFence'
+        ? `syncFence:${(a as { on: boolean }).on ? 'on' : 'off'}`
+        : n,
+    );
     return real(n, a);
   };
   return log;
 };
 const state = (d: Device) =>
   d.conn().prepare(`SELECT * FROM sync_state`).get() as Record<string, unknown>;
-const epochs = (d: Device) => d.conn().prepare(`SELECT * FROM sync_epochs`).all();
+const epochs = (d: Device) =>
+  d.conn().prepare(`SELECT * FROM sync_epochs`).all();
 
 afterEach(async () => {
   for (const d of devices.splice(0)) {
@@ -116,19 +127,37 @@ describe('lead', () => {
     await d.svc.setLease(lease({ reason: 'holder', isMaster: true }));
     await d.svc.lead({ epoch: 2 });
     expect(epochs(d)).toEqual([{ epoch: 2, grant_seq: 7, grant_cursor: 5 }]);
-    expect(state(d)).toMatchObject({ role: 'normal', tracking: 1, epoch: 2, head_pending: 1 });
+    expect(state(d)).toMatchObject({
+      role: 'normal',
+      tracking: 1,
+      epoch: 2,
+      head_pending: 1,
+    });
     expect(d.svc.readOnly()).toBe(true);
-    expect(d.svc.role()).toMatchObject({ leader: false, follower: false, reason: 'holder' });
+    expect(d.svc.role()).toMatchObject({
+      leader: false,
+      follower: false,
+      reason: 'holder',
+    });
     expect(readSyncStatus(d.conn()).headPending).toBe(true);
   });
 
   it('fences (readOnly, syncFence on posted) before the syncLead proc runs', async () => {
     const d = await device(follower);
-    const real = (d.db as unknown as { proc: (n: string, a: unknown) => Promise<unknown> }).proc;
+    const real = (
+      d.db as unknown as { proc: (n: string, a: unknown) => Promise<unknown> }
+    ).proc;
     const log: string[] = [];
     let readOnlyAtLead: boolean | null = null;
-    (d.db as unknown as { proc: unknown }).proc = async (n: string, a: unknown) => {
-      log.push(n === 'syncFence' ? `syncFence:${(a as { on: boolean }).on ? 'on' : 'off'}` : n);
+    (d.db as unknown as { proc: unknown }).proc = async (
+      n: string,
+      a: unknown,
+    ) => {
+      log.push(
+        n === 'syncFence'
+          ? `syncFence:${(a as { on: boolean }).on ? 'on' : 'off'}`
+          : n,
+      );
       if (n === 'syncLead') readOnlyAtLead = d.svc.readOnly();
       return real(n, a);
     };
@@ -173,8 +202,13 @@ describe('lead', () => {
 
   it('on a follower whose proc throws restores the pre-call fence', async () => {
     const d = await device(follower);
-    const real = (d.db as unknown as { proc: (n: string, a: unknown) => Promise<unknown> }).proc;
-    (d.db as unknown as { proc: unknown }).proc = async (n: string, a: unknown) => {
+    const real = (
+      d.db as unknown as { proc: (n: string, a: unknown) => Promise<unknown> }
+    ).proc;
+    (d.db as unknown as { proc: unknown }).proc = async (
+      n: string,
+      a: unknown,
+    ) => {
       if (n === 'syncLead') throw new Error('boom');
       return real(n, a);
     };
@@ -186,7 +220,11 @@ describe('lead', () => {
   it('on the seed enables tracking, writes sync_epochs, does not fence and leaves head_pending 0', async () => {
     const d = await device();
     await d.svc.lead({ epoch: 1 });
-    expect(state(d)).toMatchObject({ role: 'normal', tracking: 1, head_pending: 0 });
+    expect(state(d)).toMatchObject({
+      role: 'normal',
+      tracking: 1,
+      head_pending: 0,
+    });
     expect(epochs(d)).toEqual([{ epoch: 1, grant_seq: 0, grant_cursor: 0 }]);
     expect(d.svc.readOnly()).toBe(false);
   });
@@ -194,17 +232,24 @@ describe('lead', () => {
   it('a seed whose lead() is overtaken by a non-master lease ends tracking AND fenced: readOnly true, role not leader, one syncFence on', async () => {
     const d = await device();
     const log = procLog(d);
-    const real = (d.db as unknown as { proc: (n: string, a: unknown) => Promise<unknown> }).proc;
+    const real = (
+      d.db as unknown as { proc: (n: string, a: unknown) => Promise<unknown> }
+    ).proc;
     let release!: () => void;
     const held = new Promise<void>((r) => (release = r));
-    (d.db as unknown as { proc: unknown }).proc = async (n: string, a: unknown) => {
+    (d.db as unknown as { proc: unknown }).proc = async (
+      n: string,
+      a: unknown,
+    ) => {
       if (n === 'syncLead') await held;
       return real(n, a);
     };
     const p = d.svc.lead({ epoch: 1 });
     await new Promise((r) => setTimeout(r, 20));
     // Tracking is still 0: setLease exempts the seed and closes nothing.
-    await d.svc.setLease(lease({ isMaster: false, reason: 'fenced', holder: 'me' }));
+    await d.svc.setLease(
+      lease({ isMaster: false, reason: 'fenced', holder: 'me' }),
+    );
     expect(d.svc.readOnly()).toBe(false);
     release();
     await p;
@@ -217,20 +262,30 @@ describe('lead', () => {
 
   it('fences an overtaken seed before the final refresh can report it as leader', async () => {
     const d = await device();
-    const real = (d.db as unknown as { proc: (n: string, a: unknown) => Promise<unknown> }).proc;
+    const real = (
+      d.db as unknown as { proc: (n: string, a: unknown) => Promise<unknown> }
+    ).proc;
     let release!: () => void;
     const held = new Promise<void>((r) => (release = r));
-    (d.db as unknown as { proc: unknown }).proc = async (n: string, a: unknown) => {
+    (d.db as unknown as { proc: unknown }).proc = async (
+      n: string,
+      a: unknown,
+    ) => {
       if (n === 'syncLead') await held;
       return real(n, a);
     };
     const p = d.svc.lead({ epoch: 1 });
     await new Promise((r) => setTimeout(r, 20));
-    await d.svc.setLease(lease({ isMaster: false, reason: 'fenced', holder: 'me' }));
+    await d.svc.setLease(
+      lease({ isMaster: false, reason: 'fenced', holder: 'me' }),
+    );
     // From here on, record the role seen at the first await of the final refresh.
     const seen: boolean[] = [];
     const realAll = d.db.all.bind(d.db);
-    (d.db as unknown as { all: unknown }).all = (sql: string, ...rest: unknown[]) => {
+    (d.db as unknown as { all: unknown }).all = (
+      sql: string,
+      ...rest: unknown[]
+    ) => {
       if (sql.includes('master_device_id')) seen.push(d.svc.role().leader);
       return (realAll as (...a: unknown[]) => unknown)(sql, ...rest);
     };
@@ -244,16 +299,23 @@ describe('lead', () => {
 
   it("the same device recovers on a fresh master grant: setLease(holder) then open('head-acked') -> readOnly false", async () => {
     const d = await device();
-    const real = (d.db as unknown as { proc: (n: string, a: unknown) => Promise<unknown> }).proc;
+    const real = (
+      d.db as unknown as { proc: (n: string, a: unknown) => Promise<unknown> }
+    ).proc;
     let release!: () => void;
     const held = new Promise<void>((r) => (release = r));
-    (d.db as unknown as { proc: unknown }).proc = async (n: string, a: unknown) => {
+    (d.db as unknown as { proc: unknown }).proc = async (
+      n: string,
+      a: unknown,
+    ) => {
       if (n === 'syncLead') await held;
       return real(n, a);
     };
     const p = d.svc.lead({ epoch: 1 });
     await new Promise((r) => setTimeout(r, 20));
-    await d.svc.setLease(lease({ isMaster: false, reason: 'fenced', holder: 'me' }));
+    await d.svc.setLease(
+      lease({ isMaster: false, reason: 'fenced', holder: 'me' }),
+    );
     release();
     await p;
     expect(d.svc.readOnly()).toBe(true);
@@ -265,7 +327,9 @@ describe('lead', () => {
 
   it('a seed with a non-master lease cached BEFORE lead() (the rig: alone, undecided) still leads, unfenced', async () => {
     const d = await device();
-    await d.svc.setLease(lease({ isMaster: false, reason: 'unjoined', holder: null }));
+    await d.svc.setLease(
+      lease({ isMaster: false, reason: 'unjoined', holder: null }),
+    );
     await d.svc.lead({ epoch: 1 });
     expect(state(d)).toMatchObject({ tracking: 1 });
     expect(d.svc.readOnly()).toBe(false);
@@ -273,12 +337,19 @@ describe('lead', () => {
 
   it("the rig's takeover: follower with a non-master lease, setLease(master) then lead() with the same master lease arriving mid-lead, open('head-acked') succeeds", async () => {
     const d = await device(follower);
-    await d.svc.setLease(lease({ isMaster: false, reason: 'follower', holder: 'm1' }));
+    await d.svc.setLease(
+      lease({ isMaster: false, reason: 'follower', holder: 'm1' }),
+    );
     await d.svc.setLease(lease());
-    const real = (d.db as unknown as { proc: (n: string, a: unknown) => Promise<unknown> }).proc;
+    const real = (
+      d.db as unknown as { proc: (n: string, a: unknown) => Promise<unknown> }
+    ).proc;
     let release!: () => void;
     const held = new Promise<void>((r) => (release = r));
-    (d.db as unknown as { proc: unknown }).proc = async (n: string, a: unknown) => {
+    (d.db as unknown as { proc: unknown }).proc = async (
+      n: string,
+      a: unknown,
+    ) => {
       if (n === 'syncLead') await held;
       return real(n, a);
     };
@@ -323,7 +394,12 @@ describe('open', () => {
   it("'head-acked' clears head_pending, lifts the fence, runs onOpen and drains once; a second open is a no-op", async () => {
     const d = await device(follower);
     const ran = runnerCount(d);
-    await d.svc.enqueue({ kind: 'ui', extensionId: 'x', name: 'n', payload: {} });
+    await d.svc.enqueue({
+      kind: 'ui',
+      extensionId: 'x',
+      name: 'n',
+      payload: {},
+    });
     await d.svc.lead({ epoch: 2 });
     expect(ran()).toBe(0);
     await Promise.all([d.svc.open('head-acked'), d.svc.open('head-acked')]);
@@ -334,17 +410,28 @@ describe('open', () => {
     expect(d.onOpen).toHaveBeenCalledTimes(1);
     expect(d.svc.role().leader).toBe(true);
     expect(ran()).toBe(1);
-    expect(d.conn().prepare(`SELECT count(*) n FROM sync_outbound`).get()).toEqual({ n: 0 });
+    expect(
+      d.conn().prepare(`SELECT count(*) n FROM sync_outbound`).get(),
+    ).toEqual({ n: 0 });
   });
 });
 
 describe('setLease', () => {
   const closers: [string, Partial<LeaseSnapshot>][] = [
     ['fenced', { reason: 'fenced', isMaster: false }],
-    ['another holder', { isMaster: false, reason: 'follower', holder: 'other' }],
-    ['a self-granted handover', { isMaster: false, reason: 'follower', holder: 'me' }],
+    [
+      'another holder',
+      { isMaster: false, reason: 'follower', holder: 'other' },
+    ],
+    [
+      'a self-granted handover',
+      { isMaster: false, reason: 'follower', holder: 'me' },
+    ],
     ['a null holder', { isMaster: false, reason: 'unjoined', holder: null }],
-    ['an unknown holder', { isMaster: false, reason: 'stale-root', holder: '???' }],
+    [
+      'an unknown holder',
+      { isMaster: false, reason: 'stale-root', holder: '???' },
+    ],
   ];
   it.each(closers)('%s closes a tracking leader at once', async (_n, o) => {
     const d = await device(leader);
@@ -359,7 +446,9 @@ describe('setLease', () => {
     const d = await device(leader);
     await d.svc.open('lease');
     expect(d.svc.readOnly()).toBe(false);
-    const p = d.svc.setLease(lease({ isMaster: false, reason: 'follower', holder: 'other' }));
+    const p = d.svc.setLease(
+      lease({ isMaster: false, reason: 'follower', holder: 'other' }),
+    );
     expect(d.svc.readOnly()).toBe(true);
     await p;
     expect(d.svc.readOnly()).toBe(true);
@@ -397,13 +486,18 @@ describe('setLease', () => {
 it("a lease loss during open('head-acked') leaves the device fenced and never runs onOpen", async () => {
   const d = await device(follower);
   await d.svc.lead({ epoch: 2 });
-  const real = (d.db as unknown as { proc: (n: string, a: unknown) => Promise<unknown> }).proc;
+  const real = (
+    d.db as unknown as { proc: (n: string, a: unknown) => Promise<unknown> }
+  ).proc;
   let release: () => void = () => undefined;
   const gate = new Promise<void>((r) => (release = r));
   let entered = false;
   const ran = runnerCount(d);
   await d.svc.enqueue({ kind: 'ui', extensionId: 'x', name: 'n', payload: {} });
-  (d.db as unknown as { proc: unknown }).proc = async (n: string, a: unknown) => {
+  (d.db as unknown as { proc: unknown }).proc = async (
+    n: string,
+    a: unknown,
+  ) => {
     if (n === 'syncOpen') {
       entered = true;
       await gate;
@@ -429,7 +523,11 @@ it('demote sets head_pending to 0 and fences', async () => {
   await d.svc.lead({ epoch: 2 });
   expect(state(d)).toMatchObject({ head_pending: 1 });
   await d.svc.demote('m2');
-  expect(state(d)).toMatchObject({ role: 'follower', head_pending: 0, master_device_id: 'm2' });
+  expect(state(d)).toMatchObject({
+    role: 'follower',
+    head_pending: 0,
+    master_device_id: 'm2',
+  });
   expect(d.svc.readOnly()).toBe(true);
 });
 

@@ -1,4 +1,8 @@
-import { isPlainObject, optionValue, validateSourceOptions } from '../source-options';
+import {
+  isPlainObject,
+  optionValue,
+  validateSourceOptions,
+} from '../source-options';
 import type { SourceOption } from '../contracts';
 
 const opt = (o: Partial<SourceOption> = {}): SourceOption => ({
@@ -42,10 +46,7 @@ describe('validateSourceOptions', () => {
   });
   it.each([
     ['not an array', {}],
-    [
-      'more than 8',
-      Array.from({ length: 9 }, (_, i) => opt({ key: `k${i}` })),
-    ],
+    ['more than 8', Array.from({ length: 9 }, (_, i) => opt({ key: `k${i}` }))],
     ['duplicate key', [opt(), opt()]],
     ['bad key pattern', [opt({ key: 'Skip' })]],
     ['bad key pattern (proto)', [opt({ key: '__proto__' })]],

@@ -9,8 +9,8 @@
  * back into the legacy `SearchHit` wire shape so existing client configs /
  * prompts keep working.
  */
-import { sourceUrlOf, type LocalPathOf } from './local-path';
 import type { Account, AccountId, Document, Query } from '@shared/contracts';
+import { sourceUrlOf, type LocalPathOf } from './local-path';
 import { DEFAULT_CONTEXT_LINES } from '../../store/line-window';
 import { parseOperators } from './search-operators';
 
@@ -186,22 +186,25 @@ export function makeSearchTool(query: Query, localPathOf?: LocalPathOf) {
       docs = docs.slice(0, limit);
     }
 
-    return Promise.all(docs.map(async (d, i) => ({
-      id: d.id,
-      title: d.title ?? '',
-      source: sourceOf.get(d.accountId) ?? 'unknown',
-      type: d.type,
-      // 'snippet' projection: the store always sets it.
-      snippet: d.snippet ?? '',
-      source_url: (await sourceUrlOf(d, sourceOf.get(d.accountId), localPathOf)) ?? '',
-      created_at: d.createdAt ?? d.ingestedAt,
-      // Query.search doesn't expose its internal bm25 score; approximate a
-      // monotonic "higher is better" rank so the field stays populated.
-      score:
-        docs.length > 1
-          ? Math.round(((docs.length - i) / docs.length) * 100) / 100
-          : 1,
-    })));
+    return Promise.all(
+      docs.map(async (d, i) => ({
+        id: d.id,
+        title: d.title ?? '',
+        source: sourceOf.get(d.accountId) ?? 'unknown',
+        type: d.type,
+        // 'snippet' projection: the store always sets it.
+        snippet: d.snippet ?? '',
+        source_url:
+          (await sourceUrlOf(d, sourceOf.get(d.accountId), localPathOf)) ?? '',
+        created_at: d.createdAt ?? d.ingestedAt,
+        // Query.search doesn't expose its internal bm25 score; approximate a
+        // monotonic "higher is better" rank so the field stays populated.
+        score:
+          docs.length > 1
+            ? Math.round(((docs.length - i) / docs.length) * 100) / 100
+            : 1,
+      })),
+    );
   }
 
   return async function search(

@@ -3,7 +3,12 @@ import path from 'path';
 
 import { mirrorPass } from '../mirror';
 import { closeDevices, device, withRoots, type Device } from './helpers/device';
-import { serveTransport, sha, stubServe, tmpDir } from './helpers/fake-transport';
+import {
+  serveTransport,
+  sha,
+  stubServe,
+  tmpDir,
+} from './helpers/fake-transport';
 
 afterEach(closeDevices);
 
@@ -18,12 +23,17 @@ const row = (c: Device, rel: string, text: string) =>
     [rel, sha(text), Buffer.byteLength(text)],
   );
 const entries = async (c: Device) =>
-  (await c.db.all(`SELECT rel_path FROM shared_mirror ORDER BY rel_path`)).map((r) => String(r.rel_path));
+  (await c.db.all(`SELECT rel_path FROM shared_mirror ORDER BY rel_path`)).map(
+    (r) => String(r.rel_path),
+  );
 
 async function setup() {
   const c = await device('copy');
   const { sorted } = await withRoots(c);
-  const lead = { incoming: path.join(tmpDir(), 'i'), sorted: path.join(tmpDir(), 's') };
+  const lead = {
+    incoming: path.join(tmpDir(), 'i'),
+    sorted: path.join(tmpDir(), 's'),
+  };
   fs.mkdirSync(lead.incoming, { recursive: true });
   fs.mkdirSync(lead.sorted, { recursive: true });
   const t = serveTransport(stubServe(lead));
@@ -61,7 +71,11 @@ describe('a copy that cannot reach the leader', () => {
     expect(c.hashed.filter((p) => p.endsWith('other.txt'))).toHaveLength(1);
     // a change is seen
     put(path.join(sorted, 'new.txt'), 'ONLY HERE'); // same size, other time
-    fs.utimesSync(path.join(sorted, 'new.txt'), new Date('2030-01-01'), new Date('2030-01-01'));
+    fs.utimesSync(
+      path.join(sorted, 'new.txt'),
+      new Date('2030-01-01'),
+      new Date('2030-01-01'),
+    );
     await run();
     expect(c.hashed.filter((p) => p.endsWith('new.txt'))).toHaveLength(2);
     t.fail = false;

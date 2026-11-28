@@ -47,7 +47,9 @@ export async function freshCredentials(deps: {
     // network blip. Fail the pull as transient instead (uncoded: the engine
     // backs off and retries the refresh).
     if (Date.parse(creds.expiresAt!) <= Date.now()) {
-      throw new Error(`token refresh failed and the token has expired: ${String(err)}`);
+      throw new Error(
+        `token refresh failed and the token has expired: ${String(err)}`,
+      );
     }
   }
   return creds;

@@ -3,7 +3,12 @@ import path from 'path';
 
 import { mirrorPass } from '../mirror';
 import { closeDevices, device, withRoots, type Device } from './helpers/device';
-import { serveTransport, sha, stubServe, tmpDir } from './helpers/fake-transport';
+import {
+  serveTransport,
+  sha,
+  stubServe,
+  tmpDir,
+} from './helpers/fake-transport';
 
 afterEach(closeDevices);
 
@@ -16,15 +21,29 @@ const scan = async (d: Device) => {
   await d.svc.settled();
 };
 const pending = async (d: Device) =>
-  (await d.db.all(`SELECT kind, root, rel_path, capture_id FROM shared_pending ORDER BY id`)) as unknown as {
-    kind: string; root: string; rel_path: string; capture_id: string | null;
+  (await d.db.all(
+    `SELECT kind, root, rel_path, capture_id FROM shared_pending ORDER BY id`,
+  )) as unknown as {
+    kind: string;
+    root: string;
+    rel_path: string;
+    capture_id: string | null;
   }[];
 const live = async (d: Device, root: string) =>
-  (await d.db.all(`SELECT rel_path, deleted FROM shared_files WHERE root = ? ORDER BY rel_path`, [root])) as unknown as {
-    rel_path: string; deleted: number;
+  (await d.db.all(
+    `SELECT rel_path, deleted FROM shared_files WHERE root = ? ORDER BY rel_path`,
+    [root],
+  )) as unknown as {
+    rel_path: string;
+    deleted: number;
   }[];
 const captureOf = async (d: Device, root: string, rel: string) => {
-  const row = (await d.db.all(`SELECT capture_id FROM shared_mirror WHERE root = ? AND rel_path = ?`, [root, rel]))[0];
+  const row = (
+    await d.db.all(
+      `SELECT capture_id FROM shared_mirror WHERE root = ? AND rel_path = ?`,
+      [root, rel],
+    )
+  )[0];
   return row ? row.capture_id : 'NO ENTRY';
 };
 async function leader() {
@@ -41,14 +60,26 @@ describe('moves and removals are remembered until the scan that commits them', (
     await scan(d);
     d.sync.set('copy'); // nothing scans while the Mac is not the leader
     fs.mkdirSync(path.join(sorted, 'tax'));
-    fs.renameSync(path.join(incoming, 'in.pdf'), path.join(sorted, 'tax', 'in.pdf'));
-    await d.svc.moved(path.join(incoming, 'in.pdf'), path.join(sorted, 'tax', 'in.pdf'));
-    expect(await pending(d)).toMatchObject([{ kind: 'moved', root: 'incoming', rel_path: 'in.pdf' }]);
+    fs.renameSync(
+      path.join(incoming, 'in.pdf'),
+      path.join(sorted, 'tax', 'in.pdf'),
+    );
+    await d.svc.moved(
+      path.join(incoming, 'in.pdf'),
+      path.join(sorted, 'tax', 'in.pdf'),
+    );
+    expect(await pending(d)).toMatchObject([
+      { kind: 'moved', root: 'incoming', rel_path: 'in.pdf' },
+    ]);
     const again = await d.restart();
     d.sync.set('leader');
     await again.settled();
-    expect(await live(d, 'incoming')).toEqual([{ rel_path: 'in.pdf', deleted: 1 }]);
-    expect(await live(d, 'sorted')).toEqual([{ rel_path: 'tax/in.pdf', deleted: 0 }]);
+    expect(await live(d, 'incoming')).toEqual([
+      { rel_path: 'in.pdf', deleted: 1 },
+    ]);
+    expect(await live(d, 'sorted')).toEqual([
+      { rel_path: 'tax/in.pdf', deleted: 0 },
+    ]);
     expect(await again.listForSorting()).toEqual([]);
     expect(await pending(d)).toEqual([]); // consumed with the tombstone
   });
@@ -59,10 +90,17 @@ describe('moves and removals are remembered until the scan that commits them', (
     await scan(d);
     fs.renameSync(path.join(incoming, 'in.pdf'), path.join(sorted, 'in.pdf'));
     await scan(d); // the folder is really here (its marker), so the gap is a deletion
-    expect(await live(d, 'incoming')).toEqual([{ rel_path: 'in.pdf', deleted: 1 }]);
-    await d.svc.moved(path.join(incoming, 'in.pdf'), path.join(sorted, 'in.pdf'));
+    expect(await live(d, 'incoming')).toEqual([
+      { rel_path: 'in.pdf', deleted: 1 },
+    ]);
+    await d.svc.moved(
+      path.join(incoming, 'in.pdf'),
+      path.join(sorted, 'in.pdf'),
+    );
     await d.svc.settled();
-    expect(await live(d, 'incoming')).toEqual([{ rel_path: 'in.pdf', deleted: 1 }]);
+    expect(await live(d, 'incoming')).toEqual([
+      { rel_path: 'in.pdf', deleted: 1 },
+    ]);
     expect(await d.svc.listForSorting()).toEqual([]);
     expect(await pending(d)).toEqual([]);
   });
@@ -73,9 +111,17 @@ describe('moves and removals are remembered until the scan that commits them', (
     await scan(d);
     d.sync.set('copy');
     d.sync.set('leader'); // a role flap: the queue and the pass restart
-    expect(await d.svc.serve.remove({ root: 'sorted', relPath: 'a.txt', sha256: sha('one') })).toBe(true);
+    expect(
+      await d.svc.serve.remove({
+        root: 'sorted',
+        relPath: 'a.txt',
+        sha256: sha('one'),
+      }),
+    ).toBe(true);
     await d.svc.settled();
-    expect(await live(d, 'sorted')).toEqual([{ rel_path: 'a.txt', deleted: 1 }]);
+    expect(await live(d, 'sorted')).toEqual([
+      { rel_path: 'a.txt', deleted: 1 },
+    ]);
     expect(await pending(d)).toEqual([]);
   });
 });
@@ -86,7 +132,14 @@ describe('capture notes outlive the scan', () => {
     const abs = path.join(incoming, 'scan.pdf');
     write(abs, 'bytes');
     expect(await d.svc.noteCapture('c1', abs, sha('bytes'))).toBe(true);
-    expect(await pending(d)).toMatchObject([{ kind: 'note', root: 'incoming', rel_path: 'scan.pdf', capture_id: 'c1' }]);
+    expect(await pending(d)).toMatchObject([
+      {
+        kind: 'note',
+        root: 'incoming',
+        rel_path: 'scan.pdf',
+        capture_id: 'c1',
+      },
+    ]);
     d.sync.set('copy'); // the Mac quits before it lists the scan
     const again = await d.restart();
     d.sync.set('leader');
@@ -99,7 +152,11 @@ describe('capture notes outlive the scan', () => {
     const { d, incoming } = await leader();
     write(path.join(incoming, 'scan.pdf'), 'bytes');
     write(path.join(incoming, 'user-copy.pdf'), 'bytes');
-    await d.svc.noteCapture('c1', path.join(incoming, 'scan.pdf'), sha('bytes'));
+    await d.svc.noteCapture(
+      'c1',
+      path.join(incoming, 'scan.pdf'),
+      sha('bytes'),
+    );
     await scan(d);
     expect(await captureOf(d, 'incoming', 'scan.pdf')).toBe('c1');
     expect(await captureOf(d, 'incoming', 'user-copy.pdf')).toBeNull();
@@ -107,8 +164,20 @@ describe('capture notes outlive the scan', () => {
 
   it('noteCapture refuses a path outside the roots', async () => {
     const { d, incoming } = await leader();
-    expect(await d.svc.noteCapture('c1', path.join(d.dir, 'elsewhere.pdf'), sha('x'))).toBe(false);
-    expect(await d.svc.noteCapture('c1', path.join(incoming, '.kia-sync', 'x'), sha('x'))).toBe(false);
+    expect(
+      await d.svc.noteCapture(
+        'c1',
+        path.join(d.dir, 'elsewhere.pdf'),
+        sha('x'),
+      ),
+    ).toBe(false);
+    expect(
+      await d.svc.noteCapture(
+        'c1',
+        path.join(incoming, '.kia-sync', 'x'),
+        sha('x'),
+      ),
+    ).toBe(false);
     expect(await pending(d)).toEqual([]);
   });
 
@@ -136,10 +205,18 @@ describe('capture notes outlive the scan', () => {
     const abs = path.join(mine.incoming, 'scan.pdf');
     write(abs, 'bytes');
     await copy.svc.noteCapture('c1', abs, sha('bytes'));
-    const lead = { incoming: path.join(tmpDir(), 'i'), sorted: path.join(tmpDir(), 's') };
+    const lead = {
+      incoming: path.join(tmpDir(), 'i'),
+      sorted: path.join(tmpDir(), 's'),
+    };
     const serve = stubServe(lead, () => 'written');
-    await mirrorPass({ ...copy.deps, roots: copy.svc.roots() }, serveTransport(serve));
-    expect(serve.offers).toMatchObject([{ relPath: 'scan.pdf', captureId: 'c1' }]);
+    await mirrorPass(
+      { ...copy.deps, roots: copy.svc.roots() },
+      serveTransport(serve),
+    );
+    expect(serve.offers).toMatchObject([
+      { relPath: 'scan.pdf', captureId: 'c1' },
+    ]);
     expect(await captureOf(copy, 'incoming', 'scan.pdf')).toBe('c1');
     expect(await pending(copy)).toEqual([]);
   });
@@ -147,7 +224,9 @@ describe('capture notes outlive the scan', () => {
 
 describe('the table', () => {
   it('is local, and a factory reset clears it', async () => {
-    const { COPIED_CORE_TABLES, LOCAL_CORE_TABLES } = await import('../../sync/tables');
+    const { COPIED_CORE_TABLES, LOCAL_CORE_TABLES } = await import(
+      '../../sync/tables'
+    );
     expect(LOCAL_CORE_TABLES).toContain('shared_pending');
     expect(COPIED_CORE_TABLES).not.toContain('shared_pending');
   });

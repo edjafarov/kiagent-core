@@ -6,7 +6,9 @@ import { closeDevices, device, withRoots } from './helpers/device';
 afterEach(closeDevices);
 
 const rels = async (d: Awaited<ReturnType<typeof device>>) =>
-  (await d.db.all(`SELECT rel_path FROM shared_files ORDER BY rel_path`)).map((r) => String(r.rel_path));
+  (await d.db.all(`SELECT rel_path FROM shared_files ORDER BY rel_path`)).map(
+    (r) => String(r.rel_path),
+  );
 
 it('the leader scans once at start and on kick', async () => {
   const fake = { events: [] as (() => void)[] };
@@ -37,7 +39,9 @@ it('a watcher event for either root runs a scan', async () => {
   });
   const { incoming } = await withRoots(d);
   await d.svc.settled();
-  expect([...handlers.keys()].sort()).toEqual([incoming, path.join(d.dir, 'sorted')].sort());
+  expect([...handlers.keys()].sort()).toEqual(
+    [incoming, path.join(d.dir, 'sorted')].sort(),
+  );
   fs.writeFileSync(path.join(incoming, 'b.txt'), 'x');
   handlers.get(incoming)!();
   await d.svc.settled();
@@ -45,7 +49,10 @@ it('a watcher event for either root runs a scan', async () => {
 });
 
 it('a copy does not write the manifest', async () => {
-  const d = await device('copy', { watch: () => ({ close: async () => {} }), debounceMs: 0 });
+  const d = await device('copy', {
+    watch: () => ({ close: async () => {} }),
+    debounceMs: 0,
+  });
   const { sorted } = await withRoots(d);
   fs.writeFileSync(path.join(sorted, 'a.txt'), 'x');
   d.svc.kick();

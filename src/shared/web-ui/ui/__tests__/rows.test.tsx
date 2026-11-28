@@ -35,7 +35,10 @@ describe('Row', () => {
     expect(screen.getByText('Single line').closest('li')).not.toHaveClass(
       'has-sub',
     );
-    const css = fs.readFileSync(path.resolve(__dirname, '../../ui.css'), 'utf8');
+    const css = fs.readFileSync(
+      path.resolve(__dirname, '../../ui.css'),
+      'utf8',
+    );
     const rule = css.match(/\.ui-row\.has-sub\s*\{([^}]*)\}/);
     expect(rule?.[1]).toMatch(/height:\s*auto/);
     expect(rule?.[1]).toMatch(/min-height:\s*var\(--h\)/);

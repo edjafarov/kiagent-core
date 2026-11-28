@@ -28,9 +28,10 @@ export const FORWARDED_CHANNELS = [
 
 /** Compile-time: every forwarded channel but `prefs:set-ext` (a core-runner
  *  verb, not an IPC channel) has a handler in main's `InvokeHandlers` table. */
-type ChannelsHaveHandlers = Exclude<ForwardedChannel, 'prefs:set-ext'> extends keyof InvokeHandlers
-  ? true
-  : false;
+type ChannelsHaveHandlers =
+  Exclude<ForwardedChannel, 'prefs:set-ext'> extends keyof InvokeHandlers
+    ? true
+    : false;
 type MustBeTrue<T extends true> = T;
 /** Instantiating this is the check: it does not compile when a channel is missing. */
 export type ForwardedHaveHandlers = MustBeTrue<ChannelsHaveHandlers>;
@@ -39,14 +40,18 @@ export type ForwardedHaveHandlers = MustBeTrue<ChannelsHaveHandlers>;
  *  request and forwards only the part that belongs to the leader (a mixed
  *  `prefs:patch` applies its device keys here). They stay in the returned map,
  *  so the leader can still run them for a forwarded request. */
-export const SELF_FORWARDING_CHANNELS: readonly ForwardedChannel[] = ['prefs:patch'];
-
+export const SELF_FORWARDING_CHANNELS: readonly ForwardedChannel[] = [
+  'prefs:patch',
+];
 
 export const isForwardedChannel = (c: string): c is ForwardedChannel =>
   (FORWARDED_CHANNELS as readonly string[]).includes(c);
 
 /** The renderer push that carries the refusal sentence (`ext:push`). */
-export const SYNC_REFUSED_PUSH = { extensionId: 'core.sync', name: 'refused' } as const;
+export const SYNC_REFUSED_PUSH = {
+  extensionId: 'core.sync',
+  name: 'refused',
+} as const;
 
 /** What a user sees when a follower's edit finds no leader. */
 export const NO_MASTER_MESSAGE =
@@ -54,6 +59,7 @@ export const NO_MASTER_MESSAGE =
 
 export class SyncNoMaster extends Error {
   readonly code = 'EXT_SYNC_NO_MASTER';
+
   constructor() {
     super(NO_MASTER_MESSAGE);
     this.name = 'SyncNoMaster';
@@ -114,11 +120,16 @@ export function wrapForwardedChannels(
       // case (applied here and queued), and the refusal sentence is not shown.
       table[channel] = async (req) => {
         if (!sync.readOnly()) return fn(req);
-        return whenOffline(req, () => fn(req), () => forwardCore(sync, channel, req));
+        return whenOffline(
+          req,
+          () => fn(req),
+          () => forwardCore(sync, channel, req),
+        );
       };
       continue;
     }
-    table[channel] = (req) => (sync.readOnly() ? forwardCore(sync, channel, req, onNoMaster) : fn(req));
+    table[channel] = (req) =>
+      sync.readOnly() ? forwardCore(sync, channel, req, onNoMaster) : fn(req);
   }
   return local;
 }

@@ -39,7 +39,7 @@ const writer = (tag) => ({
     if (patch.title === 'BOOM') throw new Error('permission: not yours');
     return {
       eventId: patch.eventId,
-      htmlLink: 'https://cal.test/' + patch.eventId,
+      htmlLink: `https://cal.test/${patch.eventId}`,
     };
   },
 });
@@ -67,7 +67,8 @@ module.exports = {
       tools: [
         {
           name: 'writer_calls',
-          description: 'reports every calendar writer op that reached the child',
+          description:
+            'reports every calendar writer op that reached the child',
           inputSchema: { type: 'object' },
           call: async () => ({ calls }),
         },

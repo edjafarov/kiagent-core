@@ -388,7 +388,11 @@ export async function bootCore(deps: BootDeps): Promise<CorePlatform> {
   // Earlier versions kept a set-aside device's old database; nothing reads it.
   const sweptArchives = sweepPassedOverArchives(dbPath);
   if (sweptArchives > 0) {
-    sink.log('sync', 'info', `removed ${sweptArchives} old recovery archive(s)`);
+    sink.log(
+      'sync',
+      'info',
+      `removed ${sweptArchives} old recovery archive(s)`,
+    );
   }
   const db = await openDbInWorker(dbPath, deps.dbWorkerFile);
   // Read once, before anything starts: only the boot swap changes it. A

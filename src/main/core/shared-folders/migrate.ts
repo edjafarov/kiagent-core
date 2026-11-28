@@ -36,15 +36,21 @@ export interface MigrateDeps {
 
 /** The migration of one shared root, once per account. A failure is logged and
  *  left for the next time the roots are set (archiving is idempotent). */
-export async function migrateLocalFolders(d: MigrateDeps, rootAbs: string): Promise<void> {
+export async function migrateLocalFolders(
+  d: MigrateDeps,
+  rootAbs: string,
+): Promise<void> {
   const root = posix(rootAbs);
   const accounts = await d.localFolders.accounts();
   for (const account of accounts) {
-    const covers = account.roots.some((r) => isUnder(root, posix(r)) || isUnder(posix(r), root));
+    const covers = account.roots.some(
+      (r) => isUnder(root, posix(r)) || isUnder(posix(r), root),
+    );
     if (!covers) continue;
     const key = `${MIGRATED_PREFIX}${account.id}:${rootAbs}`;
     // eslint-disable-next-line no-await-in-loop
-    if ((await d.db.all(`SELECT 1 FROM meta WHERE key = ?`, [key])).length > 0) continue;
+    if ((await d.db.all(`SELECT 1 FROM meta WHERE key = ?`, [key])).length > 0)
+      continue;
     try {
       // First the pull: one under way with the old (empty) exclusions could
       // otherwise commit a document under the root after it was looked for.
@@ -53,15 +59,27 @@ export async function migrateLocalFolders(d: MigrateDeps, rootAbs: string): Prom
       // eslint-disable-next-line no-await-in-loop
       const archived = await archiveUnder(d, account.id, root);
       // eslint-disable-next-line no-await-in-loop
-      await d.db.run(`INSERT OR IGNORE INTO meta(key, value) VALUES(?, '1')`, [key]);
-      d.log('info', `moved ${archived} local-folder document(s) under ${rootAbs} to the shared folders`);
+      await d.db.run(`INSERT OR IGNORE INTO meta(key, value) VALUES(?, '1')`, [
+        key,
+      ]);
+      d.log(
+        'info',
+        `moved ${archived} local-folder document(s) under ${rootAbs} to the shared folders`,
+      );
     } catch (err) {
-      d.log('warn', `could not move the local-folder documents under ${rootAbs}: ${String(err)}`);
+      d.log(
+        'warn',
+        `could not move the local-folder documents under ${rootAbs}: ${String(err)}`,
+      );
     }
   }
 }
 
-async function archiveUnder(d: MigrateDeps, accountId: string, root: string): Promise<number> {
+async function archiveUnder(
+  d: MigrateDeps,
+  accountId: string,
+  root: string,
+): Promise<number> {
   const prefix = `${root}/`;
   const fold = (col: string): string => (caseFold ? `lower(${col})` : col);
   let afterId = '';
@@ -78,7 +96,9 @@ async function archiveUnder(d: MigrateDeps, accountId: string, root: string): Pr
       [accountId, afterId, afterType, prefix.length, prefix, PAGE],
     )) as unknown as { external_id: string; type: string }[];
     if (rows.length === 0) return total;
-    const refs = rows.map((r): ExternalRef => ({ externalId: r.external_id, type: r.type }));
+    const refs = rows.map(
+      (r): ExternalRef => ({ externalId: r.external_id, type: r.type }),
+    );
     // eslint-disable-next-line no-await-in-loop
     await d.localFolders.archive(accountId, refs);
     total += refs.length;

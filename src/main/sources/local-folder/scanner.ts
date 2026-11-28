@@ -51,7 +51,10 @@ const comparable = (p: string): string => {
 /** THE predicate for the shared subtrees: the walk (it does not descend), the
  *  watcher's `ignored`, the event batch filter and `fetchBytes` all ask it.
  *  True for a path that is one of `dirs` or lies anywhere under one. */
-export function isExcluded(abs: string, dirs: ExcludedDirs | undefined): boolean {
+export function isExcluded(
+  abs: string,
+  dirs: ExcludedDirs | undefined,
+): boolean {
   if (!dirs || dirs.length === 0) return false;
   const p = comparable(abs);
   return dirs.some((d) => isUnder(p, comparable(d)));

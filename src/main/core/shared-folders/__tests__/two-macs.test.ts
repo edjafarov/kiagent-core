@@ -13,7 +13,12 @@ interface Mac {
   sorted: string;
 }
 
-async function pair(): Promise<{ a: Mac; b: Mac; sync(from: Mac, to: Mac): Promise<void>; lead(x: Mac, y: Mac): Promise<void> }> {
+async function pair(): Promise<{
+  a: Mac;
+  b: Mac;
+  sync(from: Mac, to: Mac): Promise<void>;
+  lead(x: Mac, y: Mac): Promise<void>;
+}> {
   const mk = async (mode: 'leader' | 'copy'): Promise<Mac> => {
     const d = await device(mode);
     return { d, ...(await withRoots(d)) };
@@ -148,7 +153,9 @@ it('a same-path conflict keeps both', async () => {
   put(b.incoming, 'c.txt', 'from B, longer');
   await scan(b); // offered before B has seen the leader's rows
   expect(read(a.incoming, 'c.txt')).toBe('from A');
-  const kept = fs.readdirSync(a.incoming).filter((n) => /^c \(from .*\)\.txt$/.test(n));
+  const kept = fs
+    .readdirSync(a.incoming)
+    .filter((n) => /^c \(from .*\)\.txt$/.test(n));
   expect(kept).toHaveLength(1);
   expect(read(a.incoming, kept[0])).toBe('from B, longer');
   await scan(a);

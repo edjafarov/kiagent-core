@@ -232,23 +232,42 @@ describe('the restamp bound survives more than one takeover', () => {
    *  third device at 15; the Mac, away, wrote m1 at its old numbering. */
   async function twoTakeovers() {
     enableTracking(mac.conn());
-    const a = await mac.store.createAccount({ source: 'test', identifier: 'shared' });
+    const a = await mac.store.createAccount({
+      source: 'test',
+      identifier: 'shared',
+    });
     await mac.store.commit({
       account: a.id as never,
       documents: [doc('d1', 'one'), doc('d2', 'two')],
       cursor: null,
     });
-    for (const d of [vm, third]) d.conn().prepare(`UPDATE sync_state SET role = 'follower'`).run();
+    for (const d of [vm, third])
+      d.conn().prepare(`UPDATE sync_state SET role = 'follower'`).run();
     pull(mac, vm);
     pull(mac, third);
     promote(vm.conn(), 14);
-    await vm.store.commit({ account: a.id as never, documents: [doc('v1', 'vm')], cursor: null });
+    await vm.store.commit({
+      account: a.id as never,
+      documents: [doc('v1', 'vm')],
+      cursor: null,
+    });
     pull(vm, third);
     expect(state(third).epoch).toBe(14);
     promote(third.conn(), 15);
-    await third.store.commit({ account: a.id as never, documents: [doc('t1', 'third')], cursor: null });
-    const b = await mac.store.createAccount({ source: 'test', identifier: 'mac-only' });
-    await mac.store.commit({ account: b.id as never, documents: [doc('m1', 'unseen')], cursor: null });
+    await third.store.commit({
+      account: a.id as never,
+      documents: [doc('t1', 'third')],
+      cursor: null,
+    });
+    const b = await mac.store.createAccount({
+      source: 'test',
+      identifier: 'mac-only',
+    });
+    await mac.store.commit({
+      account: b.id as never,
+      documents: [doc('m1', 'unseen')],
+      cursor: null,
+    });
     return { a, b };
   }
 
@@ -269,7 +288,12 @@ describe('the restamp bound survives more than one takeover', () => {
   it('a demote remembers the epoch it left, once, and a promotion clears it', async () => {
     await twoTakeovers();
     const pre = () =>
-      (mac.conn().prepare(`SELECT pre_demote_epoch AS e FROM sync_state`).get() as { e: number | null }).e;
+      (
+        mac
+          .conn()
+          .prepare(`SELECT pre_demote_epoch AS e FROM sync_state`)
+          .get() as { e: number | null }
+      ).e;
     expect(pre()).toBeNull();
     demote(mac.conn(), 'third');
     expect(pre()).toBe(0);
@@ -287,41 +311,76 @@ describe('a follower that skipped an epoch asks a relaying leader', () => {
     // Mac leads at 0; the VM leads at 14 (a grant at the Mac's position) and
     // writes; the Mac, never told, asks the VM with a position above that grant.
     enableTracking(mac.conn());
-    const a = await mac.store.createAccount({ source: 'test', identifier: 'shared' });
-    await mac.store.commit({ account: a.id as never, documents: [doc('d1')], cursor: null });
+    const a = await mac.store.createAccount({
+      source: 'test',
+      identifier: 'shared',
+    });
+    await mac.store.commit({
+      account: a.id as never,
+      documents: [doc('d1')],
+      cursor: null,
+    });
     vm.conn().prepare(`UPDATE sync_state SET role = 'follower'`).run();
     pull(mac, vm);
     promote(vm.conn(), 14);
-    await mac.store.commit({ account: a.id as never, documents: [doc('m1')], cursor: null });
+    await mac.store.commit({
+      account: a.id as never,
+      documents: [doc('m1')],
+      cursor: null,
+    });
     const s = state(mac);
-    const r = buildDelta(vm.reader, { seq: s.seq + 50, cursor: s.cursor + 50 }, 0, stage, 250 * 1024 * 1024);
+    const r = buildDelta(
+      vm.reader,
+      { seq: s.seq + 50, cursor: s.cursor + 50 },
+      0,
+      stage,
+      250 * 1024 * 1024,
+    );
     expect(r.status).toBe('ok');
     if (r.status !== 'ok') return;
     const grant = vm
       .conn()
-      .prepare(`SELECT grant_seq AS seq, grant_cursor AS cursor FROM sync_epochs WHERE epoch = 14`)
+      .prepare(
+        `SELECT grant_seq AS seq, grant_cursor AS cursor FROM sync_epochs WHERE epoch = 14`,
+      )
       .get() as { seq: number; cursor: number };
     expect(r.from).toEqual(grant);
   });
 });
 
 describe('relaying to a third device (codex review point 5)', () => {
-  it('a device that merely applied an interim leader\'s changes sends them on: an account, a pref change and a deletion', async () => {
+  it("a device that merely applied an interim leader's changes sends them on: an account, a pref change and a deletion", async () => {
     const third = await open('relay-third');
     try {
       enableTracking(mac.conn());
-      const a = await mac.store.createAccount({ source: 'test', identifier: 'shared' });
-      const gone = await mac.store.createAccount({ source: 'test', identifier: 'doomed' });
-      await mac.store.commit({ account: a.id as never, documents: [doc('d1')], cursor: null });
-      mac.conn().prepare(`INSERT INTO user_prefs(key, value_json) VALUES('p1', '1')`).run();
-      for (const d of [vm, third]) d.conn().prepare(`UPDATE sync_state SET role = 'follower'`).run();
+      const a = await mac.store.createAccount({
+        source: 'test',
+        identifier: 'shared',
+      });
+      const gone = await mac.store.createAccount({
+        source: 'test',
+        identifier: 'doomed',
+      });
+      await mac.store.commit({
+        account: a.id as never,
+        documents: [doc('d1')],
+        cursor: null,
+      });
+      mac
+        .conn()
+        .prepare(`INSERT INTO user_prefs(key, value_json) VALUES('p1', '1')`)
+        .run();
+      for (const d of [vm, third])
+        d.conn().prepare(`UPDATE sync_state SET role = 'follower'`).run();
       pull(mac, vm);
       pull(mac, third);
       expect(names(third)).toContain('doomed');
       // The VM leads at 14 and changes things that are not documents.
       promote(vm.conn(), 14);
       await vm.store.createAccount({ source: 'test', identifier: 'vm-only' });
-      vm.conn().prepare(`UPDATE user_prefs SET value_json = '2' WHERE key = 'p1'`).run();
+      vm.conn()
+        .prepare(`UPDATE user_prefs SET value_json = '2' WHERE key = 'p1'`)
+        .run();
       vm.conn().prepare(`DELETE FROM accounts WHERE id = ?`).run(gone.id);
       // The Mac applies it as a follower, then leads at 15.
       demote(mac.conn(), 'vm');
@@ -335,7 +394,10 @@ describe('relaying to a third device (codex review point 5)', () => {
       expect(names(third)).toContain('vm-only');
       expect(names(third)).not.toContain('doomed');
       expect(
-        third.conn().prepare(`SELECT value_json AS v FROM user_prefs WHERE key = 'p1'`).get(),
+        third
+          .conn()
+          .prepare(`SELECT value_json AS v FROM user_prefs WHERE key = 'p1'`)
+          .get(),
       ).toEqual({ v: '2' });
       // The imported set is spent: a second promotion has nothing left to send.
       expect(
@@ -348,31 +410,49 @@ describe('relaying to a third device (codex review point 5)', () => {
   });
 
   const relayRun = async (relay: boolean | undefined) => {
-      const third = await open(`relay-opt-${String(relay)}`);
-      try {
-        enableTracking(mac.conn());
-        const a = await mac.store.createAccount({ source: 'test', identifier: 'shared' });
-        await mac.store.commit({ account: a.id as never, documents: [doc('d1')], cursor: null });
-        vm.conn().prepare(`UPDATE sync_state SET role = 'follower'`).run();
-        pull(mac, vm);
-        promote(vm.conn(), 14);
-        await vm.store.createAccount({ source: 'test', identifier: 'vm-only' });
-        demote(mac.conn(), 'vm');
-        pull(vm, mac);
-        const imported = () =>
-          (mac.conn().prepare(`SELECT count(*) AS n FROM sync_imported`).get() as { n: number }).n;
-        expect(imported()).toBeGreaterThan(0);
-        promote(mac.conn(), 15, relay === undefined ? undefined : { relayImported: relay });
-        expect(imported()).toBe(0);
-        const above = mac
-          .conn()
-          .prepare(`SELECT count(*) AS n FROM sync_rows WHERE cursor >= ? AND tbl = 'accounts'`)
-          .get(15 * EPOCH_GAP) as { n: number };
-        return above.n;
-      } finally {
-        third.reader.close();
-        await third.db.close();
-      }
+    const third = await open(`relay-opt-${String(relay)}`);
+    try {
+      enableTracking(mac.conn());
+      const a = await mac.store.createAccount({
+        source: 'test',
+        identifier: 'shared',
+      });
+      await mac.store.commit({
+        account: a.id as never,
+        documents: [doc('d1')],
+        cursor: null,
+      });
+      vm.conn().prepare(`UPDATE sync_state SET role = 'follower'`).run();
+      pull(mac, vm);
+      promote(vm.conn(), 14);
+      await vm.store.createAccount({ source: 'test', identifier: 'vm-only' });
+      demote(mac.conn(), 'vm');
+      pull(vm, mac);
+      const imported = () =>
+        (
+          mac
+            .conn()
+            .prepare(`SELECT count(*) AS n FROM sync_imported`)
+            .get() as { n: number }
+        ).n;
+      expect(imported()).toBeGreaterThan(0);
+      promote(
+        mac.conn(),
+        15,
+        relay === undefined ? undefined : { relayImported: relay },
+      );
+      expect(imported()).toBe(0);
+      const above = mac
+        .conn()
+        .prepare(
+          `SELECT count(*) AS n FROM sync_rows WHERE cursor >= ? AND tbl = 'accounts'`,
+        )
+        .get(15 * EPOCH_GAP) as { n: number };
+      return above.n;
+    } finally {
+      third.reader.close();
+      await third.db.close();
+    }
   };
   it('relayImported false clears the imported set and publishes nothing', async () => {
     expect(await relayRun(false)).toBe(0);
@@ -388,15 +468,31 @@ describe('relaying to a third device (codex review point 5)', () => {
     const third = await open('relay-third-doc');
     try {
       enableTracking(mac.conn());
-      const a = await mac.store.createAccount({ source: 'test', identifier: 'shared' });
-      await mac.store.commit({ account: a.id as never, documents: [doc('d1')], cursor: null });
-      for (const d of [vm, third]) d.conn().prepare(`UPDATE sync_state SET role = 'follower'`).run();
+      const a = await mac.store.createAccount({
+        source: 'test',
+        identifier: 'shared',
+      });
+      await mac.store.commit({
+        account: a.id as never,
+        documents: [doc('d1')],
+        cursor: null,
+      });
+      for (const d of [vm, third])
+        d.conn().prepare(`UPDATE sync_state SET role = 'follower'`).run();
       pull(mac, vm);
       pull(mac, third);
       promote(vm.conn(), 14);
       // Updates that leave seq alone (and a deletion) are tracked, not seq-fed.
-      vm.conn().prepare(`UPDATE documents SET title = 'renamed' WHERE external_id = 'd1'`).run();
-      await vm.store.commit({ account: a.id as never, documents: [doc('d2')], cursor: null });
+      vm.conn()
+        .prepare(
+          `UPDATE documents SET title = 'renamed' WHERE external_id = 'd1'`,
+        )
+        .run();
+      await vm.store.commit({
+        account: a.id as never,
+        documents: [doc('d2')],
+        cursor: null,
+      });
       vm.conn().prepare(`DELETE FROM documents WHERE external_id = 'd2'`).run();
       demote(mac.conn(), 'vm');
       pull(vm, mac);
@@ -404,7 +500,12 @@ describe('relaying to a third device (codex review point 5)', () => {
       demote(third.conn(), 'mac');
       pull(mac, third);
       const titles = (d: Dev) =>
-        d.conn().prepare(`SELECT external_id AS e, title AS t FROM documents ORDER BY e`).all();
+        d
+          .conn()
+          .prepare(
+            `SELECT external_id AS e, title AS t FROM documents ORDER BY e`,
+          )
+          .all();
       expect(titles(third)).toEqual(titles(mac));
       expect(titles(third)).toEqual([{ e: 'd1', t: 'renamed' }]);
     } finally {

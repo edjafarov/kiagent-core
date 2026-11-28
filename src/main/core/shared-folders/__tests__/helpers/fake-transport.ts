@@ -4,12 +4,19 @@ import os from 'node:os';
 import path from 'node:path';
 
 import type { AppDb } from '../../../../db/app-db';
-import type { FileQuery, OfferAnswer, OfferMeta, SharedFoldersApi, SharedTransport } from '../../service';
+import type {
+  FileQuery,
+  OfferAnswer,
+  OfferMeta,
+  SharedFoldersApi,
+  SharedTransport,
+} from '../../service';
 import type { SharedRoot } from '../../paths';
 
 type Serve = SharedFoldersApi['serve'];
 
-export const sha = (text: string | Buffer): string => createHash('sha256').update(text).digest('hex');
+export const sha = (text: string | Buffer): string =>
+  createHash('sha256').update(text).digest('hex');
 
 /** A leader that is only a pair of folders: it holds whatever files are there
  *  and answers every offer with `answer`. Task 5's mirror tests use it; the
@@ -17,7 +24,11 @@ export const sha = (text: string | Buffer): string => createHash('sha256').updat
 export function stubServe(
   roots: Record<SharedRoot, string>,
   answer: (meta: OfferMeta) => OfferAnswer = () => 'written',
-): Serve & { offers: OfferMeta[]; removed: FileQuery[]; offered: Map<string, string> } {
+): Serve & {
+  offers: OfferMeta[];
+  removed: FileQuery[];
+  offered: Map<string, string>;
+} {
   const offers: OfferMeta[] = [];
   const removed: FileQuery[] = [];
   const offered = new Map<string, string>();
@@ -67,7 +78,10 @@ export interface FakeTransport extends SharedTransport {
 }
 
 /** A transport that calls the leader's `serve`, as the app's will over the network. */
-export function serveTransport(leader: Serve, deviceName = 'Air'): FakeTransport {
+export function serveTransport(
+  leader: Serve,
+  deviceName = 'Air',
+): FakeTransport {
   const t: FakeTransport = {
     calls: [],
     fetch: async (q, dest, offset) => {
@@ -107,14 +121,17 @@ export function serveTransport(leader: Serve, deviceName = 'Air'): FakeTransport
 /** The sync service's job for the two copied tables: the copy's rows become the leader's. */
 export async function copyRows(from: AppDb, to: AppDb): Promise<void> {
   for (const [table, cols] of [
-    ['shared_files', 'root, rel_path, sha256, bytes, mtime, missing_here, deleted, parked, rev'],
+    [
+      'shared_files',
+      'root, rel_path, sha256, bytes, mtime, missing_here, deleted, parked, rev',
+    ],
     ['shared_capture_files', 'capture_id, sha256'],
   ] as const) {
     const rows = await from.all(`SELECT ${cols} FROM ${table}`);
     await to.run(`DELETE FROM ${table}`);
     const names = cols.split(', ');
+    // eslint-disable-next-line no-await-in-loop
     for (const r of rows)
-      // eslint-disable-next-line no-await-in-loop
       await to.run(
         `INSERT INTO ${table}(${cols}) VALUES(${names.map(() => '?').join(',')})`,
         names.map((n) => r[n] as never),
@@ -122,4 +139,5 @@ export async function copyRows(from: AppDb, to: AppDb): Promise<void> {
   }
 }
 
-export const tmpDir = (): string => fs.mkdtempSync(path.join(os.tmpdir(), 'shared-t-'));
+export const tmpDir = (): string =>
+  fs.mkdtempSync(path.join(os.tmpdir(), 'shared-t-'));

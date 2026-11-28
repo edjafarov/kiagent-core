@@ -59,7 +59,8 @@ module.exports = {
       tools: [
         {
           name: 'writer_calls',
-          description: 'reports every calendar writer op that reached the child',
+          description:
+            'reports every calendar writer op that reached the child',
           inputSchema: { type: 'object' },
           call: async () => ({ calls }),
         },

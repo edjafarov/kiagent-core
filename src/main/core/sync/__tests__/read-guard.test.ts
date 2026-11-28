@@ -52,7 +52,9 @@ it('the outbox refuses a write on a follower and works after the role flips, wit
   const a = await draft();
   ro = true;
   await expect(draft()).rejects.toBeInstanceOf(SyncReadOnly);
-  await expect(store.outbox.transition(a.id, ['draft'], 'cancelled' as never)).rejects.toBeInstanceOf(SyncReadOnly);
+  await expect(
+    store.outbox.transition(a.id, ['draft'], 'cancelled' as never),
+  ).rejects.toBeInstanceOf(SyncReadOnly);
   expect((await store.outbox.get(a.id))?.id).toBe(a.id); // reads work
   ro = false;
   await expect(draft()).resolves.toBeDefined();
@@ -68,16 +70,20 @@ it('the maintenance sweeps are quiet on a follower: the leader owns expiry', asy
 
 it('event drafts refuse a write on a follower', async () => {
   ro = true;
-  await expect(
-    store.eventDrafts.discard('nope'),
-  ).rejects.toBeInstanceOf(SyncReadOnly);
+  await expect(store.eventDrafts.discard('nope')).rejects.toBeInstanceOf(
+    SyncReadOnly,
+  );
 });
 
 it('readGuardedDb lets reads and WITH-selects through, refuses every other statement', async () => {
   const g = readGuardedDb(db, () => true);
   await expect(g.all('SELECT 1 AS x')).resolves.toEqual([{ x: 1 }]);
-  await expect(g.all('WITH t AS (SELECT 1 AS x) SELECT x FROM t')).resolves.toEqual([{ x: 1 }]);
-  await expect(g.run(`INSERT INTO meta(key,value) VALUES('k','v')`)).rejects.toBeInstanceOf(SyncReadOnly);
+  await expect(
+    g.all('WITH t AS (SELECT 1 AS x) SELECT x FROM t'),
+  ).resolves.toEqual([{ x: 1 }]);
+  await expect(
+    g.run(`INSERT INTO meta(key,value) VALUES('k','v')`),
+  ).rejects.toBeInstanceOf(SyncReadOnly);
   await expect(g.exec(`DELETE FROM meta`)).rejects.toBeInstanceOf(SyncReadOnly);
   await expect(
     g.batch([{ sql: 'SELECT 1' }, { sql: ` update meta SET value='x'` }]),

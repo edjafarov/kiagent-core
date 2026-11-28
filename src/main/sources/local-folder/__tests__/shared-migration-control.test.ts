@@ -43,8 +43,10 @@ beforeEach(async () => {
   parent = path.join(dir, 'Documents');
   shared = path.join(parent, 'Scans', 'Sorted');
   fs.mkdirSync(shared, { recursive: true });
-  for (let i = 0; i < SIBLINGS; i += 1) fs.writeFileSync(path.join(parent, `s${i}.txt`), `sibling ${i}`);
-  for (let i = 0; i < SHARED; i += 1) fs.writeFileSync(path.join(shared, `f${i}.txt`), `shared ${i}`);
+  for (let i = 0; i < SIBLINGS; i += 1)
+    fs.writeFileSync(path.join(parent, `s${i}.txt`), `sibling ${i}`);
+  for (let i = 0; i < SHARED; i += 1)
+    fs.writeFileSync(path.join(shared, `f${i}.txt`), `shared ${i}`);
   excluded = [];
   db = await openDb(path.join(dir, 'test.db'));
   store = await openStore(db, {
@@ -60,31 +62,48 @@ afterEach(async () => {
 });
 
 const source = () =>
-  createLocalFolderSource({ converter: createInlineConverter(), excluded: () => excluded });
+  createLocalFolderSource({
+    converter: createInlineConverter(),
+    excluded: () => excluded,
+  });
 let engineOnce: ReturnType<typeof createEngine> | null = null;
 /** ONE engine per test, as in the app: applyScope restarts the account on it. */
 const makeEngine = () => {
   engineOnce ??= createEngine({
     store,
-    sources: { get: (id: string) => (id === 'local-folder' ? source() : undefined) },
-    inference: { complete: async () => 's', see: async () => 's', read: async () => 's', hear: async () => 's' },
+    sources: {
+      get: (id: string) => (id === 'local-folder' ? source() : undefined),
+    },
+    inference: {
+      complete: async () => 's',
+      see: async () => 's',
+      read: async () => 's',
+      hear: async () => 's',
+    },
     convert: async (input: never) => input,
     logs: noopLogs,
   } as never);
   return { engine: engineOnce };
 };
-const live = async (accountId: AccountId) => (await store.read.count({ account: accountId })) as number;
+const live = async (accountId: AccountId) =>
+  (await store.read.count({ account: accountId })) as number;
 
 /** One engine cycle: runs until the reconcile pass has recorded its outcome
  *  (and `until` holds), then stops it. */
-const cycle = async (account: Account, until: () => Promise<boolean> = async () => true) => {
+const cycle = async (
+  account: Account,
+  until: () => Promise<boolean> = async () => true,
+) => {
   const { engine } = makeEngine();
   const status = jest.spyOn(store, 'setAccountStatus');
   const handle = engine.run(account);
-  await waitFor(async () =>
-    status.mock.calls.some(
-      ([, patch]) => (patch as { errorScope?: string }).errorScope === 'reconcile' || Boolean((patch as { error?: string }).error),
-    ) && (await until()),
+  await waitFor(
+    async () =>
+      status.mock.calls.some(
+        ([, patch]) =>
+          (patch as { errorScope?: string }).errorScope === 'reconcile' ||
+          Boolean((patch as { error?: string }).error),
+      ) && (await until()),
   );
   await handle.stop();
   status.mockRestore();
@@ -95,13 +114,20 @@ async function indexEverything() {
   const account = await store.createAccount({
     source: 'local-folder',
     identifier: 'this-machine',
-    config: { ...folderScopedConfig({}, [{ id: parent, name: 'Documents' }]), watch: false },
+    config: {
+      ...folderScopedConfig({}, [{ id: parent, name: 'Documents' }]),
+      watch: false,
+    },
     status: 'connecting',
   });
-  await cycle(account, async () => (await live(account.id)) === SIBLINGS + SHARED);
+  await cycle(
+    account,
+    async () => (await live(account.id)) === SIBLINGS + SHARED,
+  );
   return account;
 }
-const reconcileOnce = async (accountId: AccountId) => cycle((await store.account(accountId))!);
+const reconcileOnce = async (accountId: AccountId) =>
+  cycle((await store.account(accountId))!);
 it('control: skipping the shared subtree without the migration is refused by the engine', async () => {
   const account = await indexEverything();
   excluded = [shared];
@@ -109,4 +135,3 @@ it('control: skipping the shared subtree without the migration is refused by the
   expect(after.lastError).toMatch(/refusing to archive/);
   expect(await live(account.id)).toBe(SIBLINGS + SHARED);
 });
-

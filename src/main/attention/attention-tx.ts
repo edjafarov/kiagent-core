@@ -316,7 +316,10 @@ export function createAttentionTx(
     options.readOnly?.()
       ? {
           ok: false,
-          error: { message: 'this device is a read-only copy: attention', name: 'SyncReadOnly' },
+          error: {
+            message: 'this device is a read-only copy: attention',
+            name: 'SyncReadOnly',
+          },
           rowFailures: [],
         }
       : null;

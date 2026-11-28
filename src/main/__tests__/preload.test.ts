@@ -116,6 +116,8 @@ describe('preload contextBridge surface', () => {
   it('lets Settings ask which connectors failed to install here', async () => {
     const { api } = loadPreload();
     expect(INVOKE_CHANNELS).toContain('extension:failed');
-    await expect(api.invoke('extension:failed' as never, undefined as never)).resolves.toBe('ok');
+    await expect(
+      api.invoke('extension:failed' as never, undefined as never),
+    ).resolves.toBe('ok');
   });
 });

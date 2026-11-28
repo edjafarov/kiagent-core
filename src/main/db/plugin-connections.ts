@@ -108,7 +108,9 @@ export async function openPluginConnection(
     } catch (e) {
       // The authorizer can only say no; say why when the reason was the role.
       const refused = (
-        authorizer as typeof authorizer & { takeRoleRefusal?: () => string | null }
+        authorizer as typeof authorizer & {
+          takeRoleRefusal?: () => string | null;
+        }
       ).takeRoleRefusal?.();
       if (refused) throw new SyncReadOnly('a table copied from the master');
       throw e;

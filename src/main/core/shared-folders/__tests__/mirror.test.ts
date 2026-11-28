@@ -3,23 +3,39 @@ import path from 'path';
 
 import { mirrorPass } from '../mirror';
 import { closeDevices, device, withRoots, type Device } from './helpers/device';
-import { serveTransport, sha, stubServe, tmpDir } from './helpers/fake-transport';
+import {
+  serveTransport,
+  sha,
+  stubServe,
+  tmpDir,
+} from './helpers/fake-transport';
 import type { OfferAnswer, OfferMeta } from '../service';
 
 /** What is left in a root's staging folder, besides the marker. */
-const staged = (root: string) => fs.readdirSync(path.join(root, '.kia-sync')).filter((n) => n !== 'root');
+const staged = (root: string) =>
+  fs.readdirSync(path.join(root, '.kia-sync')).filter((n) => n !== 'root');
 
 afterEach(closeDevices);
 
-type Mac = Device & { incoming: string; sorted: string; lead: { incoming: string; sorted: string } };
+type Mac = Device & {
+  incoming: string;
+  sorted: string;
+  lead: { incoming: string; sorted: string };
+};
 
 /** A copy with its two folders, and a leader that is two folders of files. */
-async function setup(answer?: (m: OfferMeta) => OfferAnswer, over: Parameters<typeof device>[1] = {}) {
+async function setup(
+  answer?: (m: OfferMeta) => OfferAnswer,
+  over: Parameters<typeof device>[1] = {},
+) {
   const c = (await device('copy', over)) as Mac;
   const roots = await withRoots(c);
   c.incoming = roots.incoming;
   c.sorted = roots.sorted;
-  const lead = { incoming: path.join(tmpDir(), 'incoming'), sorted: path.join(tmpDir(), 'sorted') };
+  const lead = {
+    incoming: path.join(tmpDir(), 'incoming'),
+    sorted: path.join(tmpDir(), 'sorted'),
+  };
   fs.mkdirSync(lead.incoming, { recursive: true });
   fs.mkdirSync(lead.sorted, { recursive: true });
   const serve = stubServe(lead, answer);
@@ -33,27 +49,58 @@ const put = (file: string, text: string, mtime?: Date) => {
   if (mtime) fs.utimesSync(file, mtime, mtime);
 };
 const MT = '2026-01-02T03:04:05.000Z';
-const row = (c: Device, root: string, rel: string, text: string, flags: { deleted?: number; missing_here?: number } = {}) =>
+const row = (
+  c: Device,
+  root: string,
+  rel: string,
+  text: string,
+  flags: { deleted?: number; missing_here?: number } = {},
+) =>
   c.db.run(
     `INSERT OR REPLACE INTO shared_files(root, rel_path, sha256, bytes, mtime, missing_here, deleted, parked, rev)
      VALUES(?, ?, ?, ?, ?, ?, ?, 0, 1)`,
-    [root, rel, sha(text), Buffer.byteLength(text), MT, flags.missing_here ?? 0, flags.deleted ?? 0],
+    [
+      root,
+      rel,
+      sha(text),
+      Buffer.byteLength(text),
+      MT,
+      flags.missing_here ?? 0,
+      flags.deleted ?? 0,
+    ],
   );
 /** The mirror entry for a file that is on disk with exactly `text`. */
-const mir = async (c: Device, root: string, abs: string, rel: string, text: string, capture: string | null = null) => {
+const mir = async (
+  c: Device,
+  root: string,
+  abs: string,
+  rel: string,
+  text: string,
+  capture: string | null = null,
+) => {
   const st = fs.statSync(abs);
-  await c.db.run(`INSERT OR REPLACE INTO shared_mirror(root, rel_path, sha256, bytes, mtime_ms, capture_id) VALUES(?,?,?,?,?,?)`, [
-    root, rel, sha(text), st.size, Math.floor(st.mtimeMs), capture,
-  ]);
+  await c.db.run(
+    `INSERT OR REPLACE INTO shared_mirror(root, rel_path, sha256, bytes, mtime_ms, capture_id) VALUES(?,?,?,?,?,?)`,
+    [root, rel, sha(text), st.size, Math.floor(st.mtimeMs), capture],
+  );
 };
 const entries = async (c: Device) =>
-  (await c.db.all(`SELECT root, rel_path, sha256, capture_id FROM shared_mirror ORDER BY root, rel_path`)) as unknown as {
-    root: string; rel_path: string; sha256: string; capture_id: string | null;
+  (await c.db.all(
+    `SELECT root, rel_path, sha256, capture_id FROM shared_mirror ORDER BY root, rel_path`,
+  )) as unknown as {
+    root: string;
+    rel_path: string;
+    sha256: string;
+    capture_id: string | null;
   }[];
-const run = (c: Device, t: ReturnType<typeof serveTransport>, over: Partial<Device['deps']> = {}) =>
-  mirrorPass({ ...c.deps, ...over, roots: c.svc.roots() }, t);
+const run = (
+  c: Device,
+  t: ReturnType<typeof serveTransport>,
+  over: Partial<Device['deps']> = {},
+) => mirrorPass({ ...c.deps, ...over, roots: c.svc.roots() }, t);
 /** The volume disconnects: the folder is an empty mount point again. */
-const unmount = (root: string) => fs.rmSync(path.join(root, '.kia-sync'), { recursive: true, force: true });
+const unmount = (root: string) =>
+  fs.rmSync(path.join(root, '.kia-sync'), { recursive: true, force: true });
 const read = (f: string) => fs.readFileSync(f, 'utf8');
 
 describe('the table, row by row', () => {
@@ -90,7 +137,9 @@ describe('the table, row by row', () => {
     const f = path.join(c.sorted, 'a.txt');
     put(f, 'old');
     await mir(c, 'sorted', f, 'a.txt', 'old');
-    await row(c, 'sorted', 'a.txt', 'newer edit the copy never saw', { deleted: 1 });
+    await row(c, 'sorted', 'a.txt', 'newer edit the copy never saw', {
+      deleted: 1,
+    });
     await run(c, t);
     expect(c.trashed).toEqual([f]);
     expect(await entries(c)).toEqual([]);
@@ -119,7 +168,11 @@ describe('the table, row by row', () => {
     await row(c, 'incoming', 'sub/b.txt', 'bee');
     await run(c, t);
     expect(read(path.join(c.incoming, 'sub', 'b.txt'))).toBe('bee');
-    expect((await entries(c))[0]).toMatchObject({ root: 'incoming', rel_path: 'sub/b.txt', sha256: sha('bee') });
+    expect((await entries(c))[0]).toMatchObject({
+      root: 'incoming',
+      rel_path: 'sub/b.txt',
+      sha256: sha('bee'),
+    });
   });
 
   it('a file the leader has never seen is offered with no base, never removed', async () => {
@@ -128,7 +181,13 @@ describe('the table, row by row', () => {
     put(f, 'mine');
     await run(c, t);
     expect(serve.offers).toEqual([
-      { root: 'sorted', relPath: 'new.txt', sha256: sha('mine'), base: null, captureId: null },
+      {
+        root: 'sorted',
+        relPath: 'new.txt',
+        sha256: sha('mine'),
+        base: null,
+        captureId: null,
+      },
     ]);
     expect(read(f)).toBe('mine');
     expect((await entries(c))[0].sha256).toBe(sha('mine'));
@@ -155,7 +214,11 @@ describe('the table, row by row', () => {
     await row(c, 'sorted', 'a.txt', 'one, edited there');
     await run(c, t);
     expect(t.calls).toEqual(['offer sorted/a.txt']); // no fetch before the leader has this edit
-    expect(serve.offers[0]).toMatchObject({ base: sha('one'), captureId: 'cap-1', sha256: sha('one, edited here') });
+    expect(serve.offers[0]).toMatchObject({
+      base: sha('one'),
+      captureId: 'cap-1',
+      sha256: sha('one, edited here'),
+    });
     expect(read(f)).toBe('one, edited here');
   });
 
@@ -202,7 +265,9 @@ describe('missing_here rows', () => {
     await mir(c, 'sorted', f, 'a.txt', 'one');
     await row(c, 'sorted', 'a.txt', 'one', { missing_here: 1 });
     await run(c, t);
-    expect(serve.offers.map((o) => `${o.relPath}:${o.sha256 === sha('one')}`)).toEqual(['a.txt:true']);
+    expect(
+      serve.offers.map((o) => `${o.relPath}:${o.sha256 === sha('one')}`),
+    ).toEqual(['a.txt:true']);
   });
 
   it('are not filled with an older version of the file', async () => {
@@ -218,7 +283,7 @@ describe('missing_here rows', () => {
 });
 
 describe('what the leader answers', () => {
-  it('kept-both: the mirror takes this version, so the next pass fetches the leader\'s over it and both end with both', async () => {
+  it("kept-both: the mirror takes this version, so the next pass fetches the leader's over it and both end with both", async () => {
     const { c, lead, serve, t } = await setup(() => 'kept-both');
     const f = path.join(c.sorted, 'a.txt');
     put(f, 'base');
@@ -256,12 +321,15 @@ describe('what the leader answers', () => {
     expect(read(f)).toBe('scan, annotated');
   });
 
-  it.each(['same', 'written', 'filled'] as const)('%s: the mirror takes the offered hash', async (answer) => {
-    const { c, t } = await setup(() => answer);
-    put(path.join(c.sorted, 'a.txt'), 'x');
-    await run(c, t);
-    expect((await entries(c))[0].sha256).toBe(sha('x'));
-  });
+  it.each(['same', 'written', 'filled'] as const)(
+    '%s: the mirror takes the offered hash',
+    async (answer) => {
+      const { c, t } = await setup(() => answer);
+      put(path.join(c.sorted, 'a.txt'), 'x');
+      await run(c, t);
+      expect((await entries(c))[0].sha256).toBe(sha('x'));
+    },
+  );
 });
 
 describe('the destination is checked again', () => {
@@ -331,9 +399,15 @@ describe('transfers', () => {
     t.breakAfter = 4;
     await expect(run(c, t)).resolves.toBeUndefined(); // ends quietly
     expect(fs.existsSync(path.join(c.sorted, 'big.txt'))).toBe(false);
-    expect(fs.statSync(path.join(c.sorted, '.kia-sync', `${sha('0123456789')}.part`)).size).toBe(4);
+    expect(
+      fs.statSync(path.join(c.sorted, '.kia-sync', `${sha('0123456789')}.part`))
+        .size,
+    ).toBe(4);
     await run(c, t);
-    expect(t.calls).toEqual(['fetch sorted/big.txt@0', 'fetch sorted/big.txt@4']);
+    expect(t.calls).toEqual([
+      'fetch sorted/big.txt@0',
+      'fetch sorted/big.txt@4',
+    ]);
     expect(read(path.join(c.sorted, 'big.txt'))).toBe('0123456789');
   });
 
@@ -457,7 +531,7 @@ describe('transfers', () => {
     await mir(c, 'sorted', a, 'a.txt', 'one');
     await row(c, 'sorted', 'a.txt', 'one');
     fs.rmSync(a);
-    const remove = t.remove;
+    const { remove } = t;
     t.remove = async (q) => {
       await remove(q);
       unmount(c.sorted);
@@ -503,7 +577,9 @@ describe('a root that is not there, or looks empty', () => {
     expect(c.trashed).toEqual([]);
     expect(fs.existsSync(c.sorted)).toBe(false); // not even re-created by a fetch
     expect((await entries(c)).map((e) => e.rel_path)).toEqual(['a.txt']);
-    expect(c.logs.filter((l) => l.includes('missing or unreadable'))).toHaveLength(1);
+    expect(
+      c.logs.filter((l) => l.includes('missing or unreadable')),
+    ).toHaveLength(1);
   });
 
   it('a root that lists no file and has no marker sends no deletion and removes nothing', async () => {

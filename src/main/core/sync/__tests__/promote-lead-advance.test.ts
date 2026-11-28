@@ -38,16 +38,25 @@ afterEach(async () => {
 });
 
 const seqOf = (name: string) =>
-  ((conn().prepare(`SELECT seq FROM sqlite_sequence WHERE name = ?`).get(name) as { seq: number } | undefined)
-    ?.seq ?? 0);
-const epochOf = () => (conn().prepare(`SELECT epoch FROM sync_state`).get() as { epoch: number }).epoch;
+  (
+    conn()
+      .prepare(`SELECT seq FROM sqlite_sequence WHERE name = ?`)
+      .get(name) as { seq: number } | undefined
+  )?.seq ?? 0;
+const epochOf = () =>
+  (conn().prepare(`SELECT epoch FROM sync_state`).get() as { epoch: number })
+    .epoch;
 
 describe('lead on a tracking leader', () => {
   it('advances to a newer epoch, raising counters and recording the raised grant', async () => {
     expect(lead(conn(), 25)).toBe('advanced');
     expect(seqOf('changes')).toBeGreaterThanOrEqual(25 * GAP);
     expect(seqOf('sync_rows')).toBeGreaterThanOrEqual(25 * GAP);
-    const row = conn().prepare(`SELECT grant_seq, grant_cursor FROM sync_epochs WHERE epoch = 25`).get() as {
+    const row = conn()
+      .prepare(
+        `SELECT grant_seq, grant_cursor FROM sync_epochs WHERE epoch = 25`,
+      )
+      .get() as {
       grant_seq: number;
       grant_cursor: number;
     };
@@ -56,7 +65,9 @@ describe('lead on a tracking leader', () => {
     expect(row.grant_cursor).toBe(25 * GAP);
     expect(epochOf()).toBe(25);
     await store.createAccount({ source: 's', identifier: 'x' });
-    const head = (conn().prepare(`SELECT max(seq) AS m FROM changes`).get() as { m: number }).m;
+    const head = (
+      conn().prepare(`SELECT max(seq) AS m FROM changes`).get() as { m: number }
+    ).m;
     expect(head).toBeGreaterThan(25 * GAP);
   });
 
@@ -69,11 +80,19 @@ describe('lead on a tracking leader', () => {
 
   it('never lowers a counter that is already above the new range', () => {
     const high = 30 * GAP;
-    conn().prepare(`UPDATE sqlite_sequence SET seq = ? WHERE name IN ('changes','sync_rows')`).run(high);
+    conn()
+      .prepare(
+        `UPDATE sqlite_sequence SET seq = ? WHERE name IN ('changes','sync_rows')`,
+      )
+      .run(high);
     expect(lead(conn(), 25)).toBe('advanced');
     expect(seqOf('changes')).toBeGreaterThanOrEqual(high);
     expect(seqOf('sync_rows')).toBeGreaterThanOrEqual(high);
-    const row = conn().prepare(`SELECT grant_seq, grant_cursor FROM sync_epochs WHERE epoch = 25`).get() as {
+    const row = conn()
+      .prepare(
+        `SELECT grant_seq, grant_cursor FROM sync_epochs WHERE epoch = 25`,
+      )
+      .get() as {
       grant_seq: number;
       grant_cursor: number;
     };

@@ -352,9 +352,9 @@ describe('the leader side', () => {
     });
     expect(engine.commitReauth).toHaveBeenCalledWith(
       {
-      accountId: 'a1',
-      credentials: { accessToken: 't' },
-    },
+        accountId: 'a1',
+        credentials: { accessToken: 't' },
+      },
       expect.any(Function),
     );
     expect(started.map((s) => s.id)).toEqual(['a1']);
@@ -458,12 +458,18 @@ describe('the leader side', () => {
 
   it('a commit refused because this device had stopped leading runs when it comes again', async () => {
     let leads = false;
-    const commitReauth = jest.fn(async (_r: unknown, started?: (a: Account) => void) => {
-      if (!leads) throw new SyncReadOnly('commitReauth');
-      started?.(account('a1'));
-    });
+    const commitReauth = jest.fn(
+      async (_r: unknown, started?: (a: Account) => void) => {
+        if (!leads) throw new SyncReadOnly('commitReauth');
+        started?.(account('a1'));
+      },
+    );
     const { run, started } = setup({ commitReauth });
-    const body = { opId: 'o1', accountId: 'a1', credentials: { accessToken: 't' } };
+    const body = {
+      opId: 'o1',
+      accountId: 'a1',
+      credentials: { accessToken: 't' },
+    };
     await expect(run['accounts:commit-reauth'](body)).rejects.toThrow(
       LEADER_CHANGED_SENTENCE,
     );
@@ -598,13 +604,18 @@ describe('the plain account channels', () => {
       open = r;
     });
     // What the engine gate does for a folder-scope commit made on the leader.
-    const scope = ops.serial(accountKey('gmail', 'me@example.com'), async () => {
-      order.push('scope:start');
-      await held;
-      order.push('scope:end');
-    });
+    const scope = ops.serial(
+      accountKey('gmail', 'me@example.com'),
+      async () => {
+        order.push('scope:start');
+        await held;
+        order.push('scope:end');
+      },
+    );
     const outbound = (
-      table['accounts:update-outbound'] as unknown as (r: unknown) => Promise<unknown>
+      table['accounts:update-outbound'] as unknown as (
+        r: unknown,
+      ) => Promise<unknown>
     )({ accountId: 'acc-1' });
     await new Promise((r) => setTimeout(r, 0));
     expect(order).toEqual(['scope:start']);

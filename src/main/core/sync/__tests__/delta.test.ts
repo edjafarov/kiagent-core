@@ -10,7 +10,12 @@ import type { DocumentInput } from '@shared/contracts';
 import { openDb, type AppDb } from '../../../db/app-db';
 import { migrate } from '../../store/schema';
 import { openStore, type CoreStore } from '../../store/store';
-import { buildDelta, readStage, validateStage, type StageEntry } from '../delta';
+import {
+  buildDelta,
+  readStage,
+  validateStage,
+  type StageEntry,
+} from '../delta';
 import { enableTracking } from '../tracking';
 
 const deps = {
@@ -34,7 +39,8 @@ let file: string;
 let out: string;
 let reader: Database.Database;
 const conn = () => db._conn!;
-const rowOf = (e: StageEntry) => (e.op === 'upsert' ? e.row : {}) as Record<string, string>;
+const rowOf = (e: StageEntry) =>
+  (e.op === 'upsert' ? e.row : {}) as Record<string, string>;
 const START = { seq: 0, cursor: 0 };
 const MB = 1024 * 1024;
 const account = (identifier = 'a@b') =>
@@ -42,8 +48,13 @@ const account = (identifier = 'a@b') =>
 const commit = (id: string, documents: DocumentInput[]) =>
   store.commit({ account: id as never, documents, cursor: null });
 const docId = (ext: string) =>
-  (conn().prepare(`SELECT id FROM documents WHERE external_id=?`).get(ext) as { id: string }).id;
-const build = (after = START, cap = 250 * MB, fromEpoch = 0) => buildDelta(reader, after, fromEpoch, out, cap);
+  (
+    conn().prepare(`SELECT id FROM documents WHERE external_id=?`).get(ext) as {
+      id: string;
+    }
+  ).id;
+const build = (after = START, cap = 250 * MB, fromEpoch = 0) =>
+  buildDelta(reader, after, fromEpoch, out, cap);
 
 beforeEach(async () => {
   dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sync-delta-'));
@@ -71,7 +82,9 @@ it('returns documents above seq and tracked rows above cursor', async () => {
   const second = build(first.target);
   if (second.status !== 'ok') throw new Error('expected ok');
   const { entries } = readStage(out);
-  const docs = entries.filter((e) => e.op === 'upsert' && e.tbl === 'documents');
+  const docs = entries.filter(
+    (e) => e.op === 'upsert' && e.tbl === 'documents',
+  );
   expect(docs.map((e) => rowOf(e).external_id)).toEqual(['d2']);
   expect(entries.some((e) => e.tbl === 'accounts')).toBe(true); // the commit moved its cursor
 });
@@ -95,7 +108,11 @@ it('a tracked key with no row is written as a delete', async () => {
   enableTracking(conn());
   conn().prepare(`DELETE FROM documents WHERE id=?`).run(id);
   build();
-  expect(readStage(out).entries).toContainEqual({ op: 'delete', tbl: 'documents', pk: [id] });
+  expect(readStage(out).entries).toContainEqual({
+    op: 'delete',
+    tbl: 'documents',
+    pk: [id],
+  });
 });
 
 it('writes deletes children-first, then upserts parents-first', async () => {
@@ -107,7 +124,12 @@ it('writes deletes children-first, then upserts parents-first', async () => {
   await commit(a.id, [doc('new')]);
   build();
   const shape = readStage(out).entries.map((e) => `${e.op}:${e.tbl}`);
-  expect(shape).toEqual(['delete:documents', 'delete:accounts', 'upsert:accounts', 'upsert:documents']);
+  expect(shape).toEqual([
+    'delete:documents',
+    'delete:accounts',
+    'upsert:accounts',
+    'upsert:documents',
+  ]);
 });
 
 it('is one consistent state: a commit during the build is not partly included', async () => {
@@ -119,7 +141,11 @@ it('is one consistent state: a commit during the build is not partly included', 
   jest.spyOn(fs, 'writeSync').mockImplementation(((...args: unknown[]) => {
     if (once) {
       once = false;
-      conn().prepare(`UPDATE documents SET title='late', seq=seq+100 WHERE external_id='d1'`).run();
+      conn()
+        .prepare(
+          `UPDATE documents SET title='late', seq=seq+100 WHERE external_id='d1'`,
+        )
+        .run();
     }
     return (realWrite as (...x: unknown[]) => number)(...args);
   }) as typeof fs.writeSync);
@@ -127,7 +153,9 @@ it('is one consistent state: a commit during the build is not partly included', 
   if (r.status !== 'ok') throw new Error('expected ok');
   const docs = readStage(out).entries.filter((e) => e.tbl === 'documents');
   expect(rowOf(docs[0]).title).toBe('d1');
-  const head = conn().prepare(`SELECT max(seq) s FROM documents`).get() as { s: number };
+  const head = conn().prepare(`SELECT max(seq) s FROM documents`).get() as {
+    s: number;
+  };
   expect(r.target.seq).toBeLessThan(head.s);
 });
 
@@ -142,11 +170,15 @@ it('never emits a row from a table outside the allowlist', async () => {
   const a = await account();
   enableTracking(conn());
   await commit(a.id, [doc('d1')]);
-  conn().prepare(`INSERT INTO sync_rows(tbl, pk) VALUES('vault', '["k"]')`).run();
+  conn()
+    .prepare(`INSERT INTO sync_rows(tbl, pk) VALUES('vault', '["k"]')`)
+    .run();
   const r = build();
   if (r.status !== 'ok') throw new Error('expected ok');
   expect(readStage(out).entries.some((e) => e.tbl === 'vault')).toBe(false);
-  const max = conn().prepare(`SELECT max(cursor) c FROM sync_rows`).get() as { c: number };
+  const max = conn().prepare(`SELECT max(cursor) c FROM sync_rows`).get() as {
+    c: number;
+  };
   expect(r.target.cursor).toBe(max.c); // still moves past it
 });
 
@@ -174,12 +206,22 @@ it('readStage refuses a truncated or altered file', async () => {
 describe('rewind to the grant (step 2)', () => {
   const lead = (epoch: number, seq: number, cursor: number) => {
     conn().prepare(`UPDATE sync_state SET epoch = ?`).run(epoch);
-    conn().prepare(`INSERT INTO sync_epochs(epoch, grant_seq, grant_cursor) VALUES(?, ?, ?)`).run(epoch, seq, cursor);
+    conn()
+      .prepare(
+        `INSERT INTO sync_epochs(epoch, grant_seq, grant_cursor) VALUES(?, ?, ?)`,
+      )
+      .run(epoch, seq, cursor);
   };
   const seqs = () =>
-    (conn().prepare(`SELECT seq FROM documents ORDER BY seq`).all() as { seq: number }[]).map((r) => r.seq);
+    (
+      conn().prepare(`SELECT seq FROM documents ORDER BY seq`).all() as {
+        seq: number;
+      }[]
+    ).map((r) => r.seq);
   const externalIds = () =>
-    readStage(out).entries.filter((e) => e.op === 'upsert' && e.tbl === 'documents').map((e) => rowOf(e).external_id);
+    readStage(out)
+      .entries.filter((e) => e.op === 'upsert' && e.tbl === 'documents')
+      .map((e) => rowOf(e).external_id);
   const seed = async () => {
     enableTracking(conn());
     const a = await account();
@@ -223,7 +265,8 @@ describe('rewind to the grant (step 2)', () => {
     const ahead = { seq: 1000, cursor: 1000 };
     const one = build(ahead, undefined, 1);
     const two = build(ahead, undefined, 2);
-    if (one.status !== 'ok' || two.status !== 'ok') throw new Error('expected ok');
+    if (one.status !== 'ok' || two.status !== 'ok')
+      throw new Error('expected ok');
     expect(one.from).toEqual({ seq: s2, cursor: 2 });
     expect(two.from).toEqual({ seq: s3, cursor: 3 });
     expect(s1).toBeLessThan(s2);

@@ -21,6 +21,7 @@ export type SyncRole = 'normal' | 'follower';
 
 export class SyncReadOnly extends Error {
   readonly code = 'SYNC_READ_ONLY';
+
   constructor(what: string) {
     super(`this device is a read-only copy: ${what}`);
     this.name = 'SyncReadOnly';
@@ -414,7 +415,10 @@ export function gateEngine(
         | undefined;
       let ref: AccountRef | null = null;
       if (m === 'adopt' && typeof first === 'object')
-        ref = { source: first.sourceId ?? '', identifier: first.identifier ?? '' };
+        ref = {
+          source: first.sourceId ?? '',
+          identifier: first.identifier ?? '',
+        };
       else if (m === 'commitReauth' && typeof first === 'object')
         ref = { accountId: first.accountId ?? '' };
       else if (m === 'applyScope' && typeof first === 'string')

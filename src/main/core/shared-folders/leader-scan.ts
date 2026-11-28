@@ -12,19 +12,31 @@ import { checkRoot, type GateDeps } from './root-state';
 import { NEXT_REV } from './schema';
 import type { SharedFoldersDeps } from './service';
 
-export type ScanDeps = Pick<SharedFoldersDeps, 'db' | 'hashFile' | 'log' | 'platform'> & Pick<GateDeps, 'gateChanged'> & {
-  /** False once the role this pass started under has changed. Checked
-   *  immediately before every manifest transaction. */
-  still?: () => boolean;
-};
+export type ScanDeps = Pick<
+  SharedFoldersDeps,
+  'db' | 'hashFile' | 'log' | 'platform'
+> &
+  Pick<GateDeps, 'gateChanged'> & {
+    /** False once the role this pass started under has changed. Checked
+     *  immediately before every manifest transaction. */
+    still?: () => boolean;
+  };
 
 export const INCOMING_SCANNED_KEY = 'shared-folders:incoming-scanned';
 
 export interface FileRow {
-  rel_path: string; sha256: string; bytes: number; missing_here: number; deleted: number;
+  rel_path: string;
+  sha256: string;
+  bytes: number;
+  missing_here: number;
+  deleted: number;
 }
 export interface MirrorRow {
-  rel_path: string; sha256: string; bytes: number; mtime_ms: number; capture_id: string | null;
+  rel_path: string;
+  sha256: string;
+  bytes: number;
+  mtime_ms: number;
+  capture_id: string | null;
 }
 
 export const UPSERT_ROW = `INSERT INTO shared_files(root, rel_path, sha256, bytes, mtime, missing_here, deleted, parked, rev)
@@ -35,7 +47,6 @@ export const UPSERT_MIRROR = `INSERT INTO shared_mirror(root, rel_path, sha256, 
   VALUES(?, ?, ?, ?, ?, ?)
   ON CONFLICT(root, rel_path) DO UPDATE SET sha256 = excluded.sha256, bytes = excluded.bytes,
     mtime_ms = excluded.mtime_ms`;
-
 
 export interface DiskFile {
   abs: string;
@@ -48,11 +59,20 @@ export interface DiskFile {
 /** Hashes of files that have no mirror entry (yet), by path, size and mtime:
  *  a copy that cannot reach the leader would otherwise hash them all again on
  *  every retry. In memory; a changed size or mtime is a miss. */
-const hashCaches = new WeakMap<object, Map<string, { size: number; mtimeMs: number; sha: string }>>();
+const hashCaches = new WeakMap<
+  object,
+  Map<string, { size: number; mtimeMs: number; sha: string }>
+>();
 const MAX_HASHES = 5000;
-const hashes = (db: object): Map<string, { size: number; mtimeMs: number; sha: string }> =>
+const hashes = (
+  db: object,
+): Map<string, { size: number; mtimeMs: number; sha: string }> =>
   hashCaches.get(db) ?? hashCaches.set(db, new Map()).get(db)!;
-function remember(db: object, abs: string, v: { size: number; mtimeMs: number; sha: string }): void {
+function remember(
+  db: object,
+  abs: string,
+  v: { size: number; mtimeMs: number; sha: string },
+): void {
   const m = hashes(db);
   m.delete(abs);
   m.set(abs, v);
@@ -67,9 +87,16 @@ export async function readDisk(
   d: Pick<ScanDeps, 'hashFile' | 'db'>,
   rootAbs: string,
   /** By `key(rel)`. */
-  mirror: ReadonlyMap<string, { sha256: string; bytes: number; mtime_ms: number }>,
+  mirror: ReadonlyMap<
+    string,
+    { sha256: string; bytes: number; mtime_ms: number }
+  >,
   key: NameKey = (rel) => rel,
-): Promise<{ files: Map<string, DiskFile>; seen: Set<string>; incomplete: boolean }> {
+): Promise<{
+  files: Map<string, DiskFile>;
+  seen: Set<string>;
+  incomplete: boolean;
+}> {
   const trouble: WalkTrouble = { incomplete: false };
   const files = new Map<string, DiskFile>();
   const seen = new Set<string>();
@@ -82,7 +109,8 @@ export async function readDisk(
     let sha: string;
     const known = hashes(d.db).get(absPath);
     if (m && m.bytes === stats.size && m.mtime_ms === mtimeMs) sha = m.sha256;
-    else if (known && known.size === stats.size && known.mtimeMs === mtimeMs) sha = known.sha;
+    else if (known && known.size === stats.size && known.mtimeMs === mtimeMs)
+      sha = known.sha;
     else {
       try {
         sha = await d.hashFile(absPath);
@@ -92,7 +120,13 @@ export async function readDisk(
         continue;
       }
     }
-    files.set(rel, { abs: absPath, sha, stats, mtimeMs, iso: new Date(stats.mtimeMs).toISOString() });
+    files.set(rel, {
+      abs: absPath,
+      sha,
+      stats,
+      mtimeMs,
+      iso: new Date(stats.mtimeMs).toISOString(),
+    });
   }
   return { files, seen, incomplete: trouble.incomplete };
 }
@@ -100,38 +134,66 @@ export async function readDisk(
 /** One pass over one root. Does nothing while the root is not really here
  *  (see `checkRoot`: an unmounted volume is not an empty folder), and
  *  tombstones nothing when the walk could not read every folder. */
-export async function scanRoot(d: ScanDeps, root: SharedRoot, rootAbs: string): Promise<void> {
+export async function scanRoot(
+  d: ScanDeps,
+  root: SharedRoot,
+  rootAbs: string,
+): Promise<void> {
   if ((await checkRoot(d, root, rootAbs)) !== 'ok') return;
   // What this device moved or removed, and the capture notes not attached yet:
   // remembered in the database until the transaction that commits what they explain.
   const key = nameKey(d.platform);
   const ops = await loadOps(d.db, root);
-  const notes = new Map(ops.filter((o) => o.kind === 'note').map((o) => [`${key(o.rel_path)}\0${o.sha256}`, o]));
+  const notes = new Map(
+    ops
+      .filter((o) => o.kind === 'note')
+      .map((o) => [`${key(o.rel_path)}\0${o.sha256}`, o]),
+  );
 
   const rowList = (await d.db.all(
-    `SELECT rel_path, sha256, bytes, missing_here, deleted FROM shared_files WHERE root = ?`, [root],
+    `SELECT rel_path, sha256, bytes, missing_here, deleted FROM shared_files WHERE root = ?`,
+    [root],
   )) as unknown as FileRow[];
   const mirrorList = (await d.db.all(
-    `SELECT rel_path, sha256, bytes, mtime_ms, capture_id FROM shared_mirror WHERE root = ?`, [root],
+    `SELECT rel_path, sha256, bytes, mtime_ms, capture_id FROM shared_mirror WHERE root = ?`,
+    [root],
   )) as unknown as MirrorRow[];
-  const flagged = (await d.db.all(`SELECT 1 FROM meta WHERE key = ?`, [INCOMING_SCANNED_KEY])).length > 0;
+  const flagged =
+    (await d.db.all(`SELECT 1 FROM meta WHERE key = ?`, [INCOMING_SCANNED_KEY]))
+      .length > 0;
   const park = root === 'incoming' && rowList.length === 0 && !flagged ? 1 : 0;
 
-  const disk = await readDisk(d, rootAbs, new Map(mirrorList.map((m) => [key(m.rel_path), m])), key);
+  const disk = await readDisk(
+    d,
+    rootAbs,
+    new Map(mirrorList.map((m) => [key(m.rel_path), m])),
+    key,
+  );
   // The listing counts only if the root was really here while it was made.
   if ((await checkRoot(d, root, rootAbs)) !== 'ok') return;
   const trouble = { incomplete: disk.incomplete };
   const seenKeys = new Set([...disk.seen].map(key));
   // One group per file, whatever the case of its name: a name that differs only
   // in case is the same file on macOS and Windows, and gets no second live row.
-  const groups = groupByName(key, [...disk.files].map(([rel, f]) => ({ ...f, rel })), mirrorList, rowList);
+  const groups = groupByName(
+    key,
+    [...disk.files].map(([rel, f]) => ({ ...f, rel })),
+    mirrorList,
+    rowList,
+  );
   const units: BatchStep[][] = [];
   const unitOf = new Map<string, number>();
   const put = (k: string, steps: BatchStep[]): void => {
     unitOf.set(k, units.length);
     units.push(steps);
   };
-  const fresh: { rel: string; sha: string; bytes: number; mtimeMs: number; step: number }[] = [];
+  const fresh: {
+    rel: string;
+    sha: string;
+    bytes: number;
+    mtimeMs: number;
+    step: number;
+  }[] = [];
   const noted = new Map<string, { capture: string; rel: string }>();
 
   for (const [k, g] of groups) {
@@ -140,19 +202,45 @@ export async function scanRoot(d: ScanDeps, root: SharedRoot, rootAbs: string): 
     const { sha, stats, mtimeMs, rel } = f;
     const rrel = r?.rel_path ?? rel; // the manifest's spelling wins
     const mrel = m?.rel_path ?? rel; // a mirror entry keeps its spelling
-    const write = (mirrorCapture: string | null = m?.capture_id ?? null): BatchStep[] => {
+    const write = (
+      mirrorCapture: string | null = m?.capture_id ?? null,
+    ): BatchStep[] => {
       return [
-        { sql: UPSERT_ROW, params: [root, rrel, sha, stats.size, f.iso, r ? 0 : park] },
-        { sql: UPSERT_MIRROR, params: [root, mrel, sha, stats.size, mtimeMs, mirrorCapture] },
+        {
+          sql: UPSERT_ROW,
+          params: [root, rrel, sha, stats.size, f.iso, r ? 0 : park],
+        },
+        {
+          sql: UPSERT_MIRROR,
+          params: [root, mrel, sha, stats.size, mtimeMs, mirrorCapture],
+        },
       ];
     };
     const mirrorOnly = (): BatchStep[] =>
       m && m.sha256 === sha && m.bytes === stats.size && m.mtime_ms === mtimeMs
         ? []
-        : [{ sql: UPSERT_MIRROR, params: [root, mrel, sha, stats.size, mtimeMs, m?.capture_id ?? null] }];
+        : [
+            {
+              sql: UPSERT_MIRROR,
+              params: [
+                root,
+                mrel,
+                sha,
+                stats.size,
+                mtimeMs,
+                m?.capture_id ?? null,
+              ],
+            },
+          ];
 
     if (!r) {
-      fresh.push({ rel: mrel, sha, bytes: stats.size, mtimeMs, step: units.length });
+      fresh.push({
+        rel: mrel,
+        sha,
+        bytes: stats.size,
+        mtimeMs,
+        step: units.length,
+      });
       put(k, write());
     } else if (r.deleted) put(k, write());
     else if (r.missing_here) {
@@ -183,16 +271,23 @@ export async function scanRoot(d: ScanDeps, root: SharedRoot, rootAbs: string): 
   }
 
   if (!trouble.incomplete) {
-    const gone: MirrorRow[] = mirrorList.filter((m) => !seenKeys.has(key(m.rel_path)));
+    const gone: MirrorRow[] = mirrorList.filter(
+      (m) => !seenKeys.has(key(m.rel_path)),
+    );
     const used = new Set<number>();
     for (const [k, g] of groups) {
-      const r = g.r;
+      const { r } = g;
       if (!r || g.f || seenKeys.has(k) || r.deleted || r.missing_here) continue;
       // The move or removal that explains this absence is used up with the tombstone.
-      const why = ops.filter((o) => o.kind !== 'note' && key(o.rel_path) === key(r.rel_path));
+      const why = ops.filter(
+        (o) => o.kind !== 'note' && key(o.rel_path) === key(r.rel_path),
+      );
       for (const o of why) used.add(o.id);
       units.push([
-        { sql: `UPDATE shared_files SET deleted = 1, rev = ${NEXT_REV} WHERE root = ? AND rel_path = ?`, params: [root, r.rel_path] },
+        {
+          sql: `UPDATE shared_files SET deleted = 1, rev = ${NEXT_REV} WHERE root = ? AND rel_path = ?`,
+          params: [root, r.rel_path],
+        },
         ...why.map((o) => ({ sql: DELETE_OP, params: [o.id] })),
       ]);
     }
@@ -201,18 +296,29 @@ export async function scanRoot(d: ScanDeps, root: SharedRoot, rootAbs: string): 
     for (const o of ops) {
       if (o.kind === 'note' || used.has(o.id)) continue;
       const r = groups.get(key(o.rel_path))?.r;
-      if (!r || r.deleted || r.missing_here || seenKeys.has(key(o.rel_path))) units.push([{ sql: DELETE_OP, params: [o.id] }]);
+      if (!r || r.deleted || r.missing_here || seenKeys.has(key(o.rel_path)))
+        units.push([{ sql: DELETE_OP, params: [o.id] }]);
     }
     for (const m of gone) {
       const row = groups.get(key(m.rel_path))?.r;
       if (row?.missing_here) continue;
-      units.push([{ sql: `DELETE FROM shared_mirror WHERE root = ? AND rel_path = ?`, params: [root, m.rel_path] }]);
+      units.push([
+        {
+          sql: `DELETE FROM shared_mirror WHERE root = ? AND rel_path = ?`,
+          params: [root, m.rel_path],
+        },
+      ]);
     }
     // A rename is a deleted row and a new one; the capture note follows the bytes.
-    for (const m of gone) if (m.capture_id && !noted.has(m.sha256)) noted.set(m.sha256, { capture: m.capture_id, rel: m.rel_path });
+    for (const m of gone)
+      if (m.capture_id && !noted.has(m.sha256))
+        noted.set(m.sha256, { capture: m.capture_id, rel: m.rel_path });
     if (root === 'incoming' && !flagged) {
       units.push([
-        { sql: `INSERT OR IGNORE INTO meta(key, value) VALUES(?, '1')`, params: [INCOMING_SCANNED_KEY] },
+        {
+          sql: `INSERT OR IGNORE INTO meta(key, value) VALUES(?, '1')`,
+          params: [INCOMING_SCANNED_KEY],
+        },
       ]);
     }
   }
@@ -222,13 +328,19 @@ export async function scanRoot(d: ScanDeps, root: SharedRoot, rootAbs: string): 
     const n = noted.get(f.sha);
     if (!n) continue;
     noted.delete(f.sha);
-    units[f.step][1] = { sql: UPSERT_MIRROR, params: [root, f.rel, f.sha, f.bytes, f.mtimeMs, n.capture] };
+    units[f.step][1] = {
+      sql: UPSERT_MIRROR,
+      params: [root, f.rel, f.sha, f.bytes, f.mtimeMs, n.capture],
+    };
   }
   // The entry's file left this folder (the sorter moved it, and `moved()` has
   // not been called yet): the capture note stays, at the old path, for it.
   for (const [sha, n] of noted) {
     units.push([
-      { sql: `INSERT INTO shared_pending(kind, root, rel_path, sha256, capture_id) VALUES('note', ?, ?, ?, ?)`, params: [root, n.rel, sha, n.capture] },
+      {
+        sql: `INSERT INTO shared_pending(kind, root, rel_path, sha256, capture_id) VALUES('note', ?, ?, ?, ?)`,
+        params: [root, n.rel, sha, n.capture],
+      },
     ]);
   }
 

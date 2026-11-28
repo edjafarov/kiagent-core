@@ -4,7 +4,10 @@ import path from 'path';
 import type { Batch, Session } from '@shared/contracts';
 
 import { sharedSubtrees } from '../../../sources';
-import { createSharedFolderSource, type SharedFolderCursor } from '../../../sources/shared-folder/shared-folder-source';
+import {
+  createSharedFolderSource,
+  type SharedFolderCursor,
+} from '../../../sources/shared-folder/shared-folder-source';
 import type { SharedFileItem } from '../../../sources/shared-folder/to-document';
 import { closeDevices, device, withRoots, type Device } from './helpers/device';
 import { sha } from './helpers/fake-transport';
@@ -20,8 +23,10 @@ const write = (file: string, text: string) => {
   fs.mkdirSync(path.dirname(file), { recursive: true });
   fs.writeFileSync(file, text);
 };
-const rowCount = async (d: Device) => Number((await d.db.all(`SELECT count(*) AS n FROM shared_files`))[0].n);
-const enabledKey = async (d: Device) => d.db.all(`SELECT value FROM meta WHERE key = 'shared-folders:enabled'`);
+const rowCount = async (d: Device) =>
+  Number((await d.db.all(`SELECT count(*) AS n FROM shared_files`))[0].n);
+const enabledKey = async (d: Device) =>
+  d.db.all(`SELECT value FROM meta WHERE key = 'shared-folders:enabled'`);
 
 /** A host that records what the wiring does, and a device with documents under its roots. */
 function wiring() {
@@ -73,7 +78,9 @@ describe('a device with no other computer in its account', () => {
     expect(d.hashed).toEqual([]);
     expect(w.calls.ensure).toBe(0);
     expect(w.calls.archived).toEqual([]);
-    expect(await d.db.all(`SELECT 1 FROM accounts WHERE source = 'shared-folder'`)).toEqual([]);
+    expect(
+      await d.db.all(`SELECT 1 FROM accounts WHERE source = 'shared-folder'`),
+    ).toEqual([]);
     expect(await enabledKey(d)).toEqual([]);
     expect(sharedSubtrees({ db: d.db, sharedFolders: d.svc })).toEqual([]);
   });
@@ -89,18 +96,35 @@ describe('a device with no other computer in its account', () => {
        VALUES('incoming','a.pdf',?,1,'t',0,0,0,5)`,
       [sha('a')],
     );
-    await d.db.run(`INSERT INTO shared_capture_files(capture_id, sha256) VALUES('cap', ?)`, [sha('a')]);
+    await d.db.run(
+      `INSERT INTO shared_capture_files(capture_id, sha256) VALUES('cap', ?)`,
+      [sha('a')],
+    );
     const abs = path.join(incoming, 'a.pdf');
     expect(await d.svc.resolve(abs)).toBeNull();
-    expect(await d.svc.pathOf({ accountId: 'acct', externalId: 'incoming/a.pdf' })).toBeNull();
+    expect(
+      await d.svc.pathOf({ accountId: 'acct', externalId: 'incoming/a.pdf' }),
+    ).toBeNull();
     expect(await d.svc.fileOfCapture('cap')).toBeNull();
     expect(await d.svc.listForSorting()).toEqual([]);
     expect(d.svc.rootStatus('incoming')).toBe('unset');
     expect(d.svc.rootStatus('sorted')).toBe('unset');
     expect(d.svc.usable('incoming')).toBe(false);
-    await expect(d.svc.serve.open({ root: 'incoming', relPath: 'a.pdf', sha256: sha('a') })).rejects.toThrow(/paused/);
+    await expect(
+      d.svc.serve.open({
+        root: 'incoming',
+        relPath: 'a.pdf',
+        sha256: sha('a'),
+      }),
+    ).rejects.toThrow(/paused/);
     await expect(d.svc.serve.stagingFile('incoming')).rejects.toThrow(/paused/);
-    await expect(d.svc.serve.remove({ root: 'incoming', relPath: 'a.pdf', sha256: sha('a') })).rejects.toThrow(/paused/);
+    await expect(
+      d.svc.serve.remove({
+        root: 'incoming',
+        relPath: 'a.pdf',
+        sha256: sha('a'),
+      }),
+    ).rejects.toThrow(/paused/);
     expect(fs.existsSync(path.join(incoming, '.kia-sync'))).toBe(false);
     expect(fs.existsSync(abs)).toBe(true);
   });
@@ -112,9 +136,17 @@ describe('a device with no other computer in its account', () => {
        VALUES('incoming','a.pdf',?,1,'t',0,1,0,5)`,
       [sha('a')],
     );
-    const source = createSharedFolderSource(() => ({ db: d.db, sharedFolders: d.svc }));
+    const source = createSharedFolderSource(() => ({
+      db: d.db,
+      sharedFolders: d.svc,
+    }));
     const session = {
-      account: { id: 'acct', source: 'shared-folder', identifier: 'shared', config: { watch: false } },
+      account: {
+        id: 'acct',
+        source: 'shared-folder',
+        identifier: 'shared',
+        config: { watch: false },
+      },
       signal: new AbortController().signal,
       credentials: async () => null,
       saveCredentials: async () => {},
@@ -163,7 +195,10 @@ describe('when another computer joins the account', () => {
     expect(w.calls.archived).toHaveLength(1); // the migration ran
     expect(await rowCount(d)).toBe(1);
     expect(d.svc.rootStatus('incoming')).toBe('ok');
-    expect(sharedSubtrees({ db: d.db, sharedFolders: d.svc })).toEqual([incoming, sorted]);
+    expect(sharedSubtrees({ db: d.db, sharedFolders: d.svc })).toEqual([
+      incoming,
+      sorted,
+    ]);
     expect((await enabledKey(d))[0].value).toBe('1');
   });
 
@@ -212,11 +247,15 @@ describe('when another computer joins the account', () => {
     d.sync.setPeer(true, false);
     let published: { enabled(): boolean } | null = null;
     const seen: (boolean | null)[] = [];
-    (w.over as { publish?: (api: { enabled(): boolean }) => void }).publish = (api) => {
+    (w.over as { publish?: (api: { enabled(): boolean }) => void }).publish = (
+      api,
+    ) => {
       published = api;
     };
     w.over.localFolders.quiesce = async () => {
-      seen.push(published ? (published as { enabled(): boolean }).enabled() : null);
+      seen.push(
+        published ? (published as { enabled(): boolean }).enabled() : null,
+      );
     };
     const svc = await d.restart();
     await svc.settled();

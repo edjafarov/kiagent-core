@@ -21,7 +21,12 @@ module.exports = {
     return {
       sources: [
         makeSource('goodopts', [
-          { key: 'skipThings', label: 'Skip things', type: 'boolean', default: true },
+          {
+            key: 'skipThings',
+            label: 'Skip things',
+            type: 'boolean',
+            default: true,
+          },
         ]),
         makeSource('badopts', [
           { key: 'Bad Key', label: 'x', type: 'boolean', default: true },

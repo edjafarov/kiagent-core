@@ -30,15 +30,34 @@ afterEach(async () => {
 
 const svc = (readOnly = false) =>
   createSyncService({
-    db, store, dbPath: db._conn!.name, workerFile: '', deviceId: () => 'seedseed-9999',
-    ...(readOnly ? { bootGate: { role: 'follower' as const, joining: false, joined: true, tracking: false } } : {}),
+    db,
+    store,
+    dbPath: db._conn!.name,
+    workerFile: '',
+    deviceId: () => 'seedseed-9999',
+    ...(readOnly
+      ? {
+          bootGate: {
+            role: 'follower' as const,
+            joining: false,
+            joined: true,
+            tracking: false,
+          },
+        }
+      : {}),
   });
-const offer = { prefs: { 'a.b': 1 }, extensions: { 'kia.x': { enabled: true, ref: 'github:kia-plugins/x@v1' } } };
+const offer = {
+  prefs: { 'a.b': 1 },
+  extensions: { 'kia.x': { enabled: true, ref: 'github:kia-plugins/x@v1' } },
+};
 
 describe('exportSettings', () => {
   it('returns what the installed handler offers', async () => {
     const sync = svc();
-    sync.setSettingsOffer({ export: async () => offer, import: async () => ({ prefs: [], extensions: [] }) });
+    sync.setSettingsOffer({
+      export: async () => offer,
+      import: async () => ({ prefs: [], extensions: [] }),
+    });
     expect(await sync.exportSettings()).toEqual(offer);
   });
   it('is an empty offer before the handler is installed', async () => {
@@ -56,7 +75,10 @@ describe('importSettings', () => {
       import: async (s) => {
         if (h.fail) throw new Error('boom');
         seen.push(s);
-        return { prefs: Object.keys(s.prefs), extensions: Object.keys(s.extensions) };
+        return {
+          prefs: Object.keys(s.prefs),
+          extensions: Object.keys(s.extensions),
+        };
       },
     };
     return h;
@@ -66,7 +88,10 @@ describe('importSettings', () => {
     const sync = svc();
     const h = handler();
     sync.setSettingsOffer(h);
-    expect(await sync.importSettings('o1', offer)).toEqual({ prefs: ['a.b'], extensions: ['kia.x'] });
+    expect(await sync.importSettings('o1', offer)).toEqual({
+      prefs: ['a.b'],
+      extensions: ['kia.x'],
+    });
     expect(h.seen).toEqual([offer]);
   });
 
@@ -75,7 +100,10 @@ describe('importSettings', () => {
     const h = handler();
     sync.setSettingsOffer(h);
     await sync.importSettings('o1', offer);
-    expect(await sync.importSettings('o1', offer)).toEqual({ prefs: [], extensions: [] });
+    expect(await sync.importSettings('o1', offer)).toEqual({
+      prefs: [],
+      extensions: [],
+    });
     expect(h.seen).toHaveLength(1);
     await sync.importSettings('o2', offer);
     expect(h.seen).toHaveLength(2);
@@ -88,14 +116,21 @@ describe('importSettings', () => {
     h.fail = true;
     await expect(sync.importSettings('o1', offer)).rejects.toThrow('boom');
     h.fail = false;
-    expect(await sync.importSettings('o1', offer)).toEqual({ prefs: ['a.b'], extensions: ['kia.x'] });
+    expect(await sync.importSettings('o1', offer)).toEqual({
+      prefs: ['a.b'],
+      extensions: ['kia.x'],
+    });
   });
 
   it('refuses on a device that is not the seed, and without a handler', async () => {
     const ro = svc(true);
     ro.setSettingsOffer(handler());
-    await expect(ro.importSettings('o1', offer)).rejects.toThrow(/not the seed/);
-    await expect(svc().importSettings('o1', offer)).rejects.toThrow(/not ready/);
+    await expect(ro.importSettings('o1', offer)).rejects.toThrow(
+      /not the seed/,
+    );
+    await expect(svc().importSettings('o1', offer)).rejects.toThrow(
+      /not ready/,
+    );
   });
 
   it('shapes a hostile offer before the handler sees it', async () => {

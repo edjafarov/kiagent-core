@@ -98,7 +98,12 @@ describe('through an in-memory extension host (messages cloned across the hop)',
         repairSearchIndex: note('repairSearchIndex', 'repaired'),
         prepareSwap: note('prepareSwap', 'ready'),
         prepareRestore: note('prepareRestore', 'no-archive'),
-        swapStatus: note('swapStatus', { pending: null, outcome: null, markId: null, attempt: null }),
+        swapStatus: note('swapStatus', {
+          pending: null,
+          outcome: null,
+          markId: null,
+          attempt: null,
+        }),
         discardForeignPending: note('discardForeignPending', 'none'),
         clearSwapStatus: note('clearSwapStatus', undefined),
         setDeviceId: note('setDeviceId', undefined),
@@ -147,7 +152,11 @@ describe('through an in-memory extension host (messages cloned across the hop)',
         aiFitness: note('aiFitness', { weak: false }),
         runAiCall: note('runAiCall', { value: 'x' }),
         setWorkLender: note('setWorkLender', undefined),
-        runLentWork: note('runLentWork', { outcome: 'done', docs: [], enrich: [] }),
+        runLentWork: note('runLentWork', {
+          outcome: 'done',
+          docs: [],
+          enrich: [],
+        }),
         close: async () => undefined,
       } as never,
       sources: {
@@ -229,7 +238,12 @@ describe('through an in-memory extension host (messages cloned across the hop)',
       { prefs: { 'a.b': 1 }, extensions: {} },
     ]);
     expect(seen.buildDelta).toEqual([{ seq: 1, cursor: 2 }, 'out', 5, 3]);
-    expect(seen.prepareSwap).toEqual(['f', 'h', 'm', { markId: 'k', attempt: 1 }]);
+    expect(seen.prepareSwap).toEqual([
+      'f',
+      'h',
+      'm',
+      { markId: 'k', attempt: 1 },
+    ]);
     expect(seen.discardForeignPending).toEqual(['k', 1]);
     expect(seen.clearSwapStatus).toEqual(['k', 1]);
     expect(Object.keys(seen).sort()).toEqual([...SYNC_SURFACE_METHODS].sort());

@@ -16,7 +16,11 @@ import {
   copiedSetDigest,
   copiedTables,
 } from '../tables';
-import { disableTracking, enableTracking, ensureSyncTriggers } from '../tracking';
+import {
+  disableTracking,
+  enableTracking,
+  ensureSyncTriggers,
+} from '../tracking';
 import { readSyncStatus } from '../status';
 import {
   addOutbox,
@@ -235,7 +239,11 @@ describe('synced plugin tables', () => {
   it('ensureSyncTriggers runs after completeImport', async () => {
     const d = descriptor();
     const registry = createPluginRegistry(conn(), { filename: file() });
-    await registry.register({ pluginId: PLUGIN, descriptor: d, legacyPath: file() });
+    await registry.register({
+      pluginId: PLUGIN,
+      descriptor: d,
+      legacyPath: file(),
+    });
     for (const m of d.modules)
       for (const mig of m.migrations)
         await registry.migrate({
@@ -248,14 +256,24 @@ describe('synced plugin tables', () => {
     conn().prepare(`UPDATE sync_state SET tracking = 1`).run();
     const t = physical('notes');
     const triggers = () =>
-      (conn().prepare(`SELECT count(*) n FROM sqlite_master WHERE type = 'trigger' AND name = ?`).get(`sync_i_${t}`) as {
-        n: number;
-      }).n;
+      (
+        conn()
+          .prepare(
+            `SELECT count(*) n FROM sqlite_master WHERE type = 'trigger' AND name = ?`,
+          )
+          .get(`sync_i_${t}`) as {
+          n: number;
+        }
+      ).n;
     expect(triggers()).toBe(0);
     await registry.completeImport(PLUGIN);
     expect(triggers()).toBe(1);
-    conn().prepare(`INSERT INTO "${t}"(account_id, key, body) VALUES('a','k','x')`).run();
-    expect(entries().filter((e) => e.tbl === t)).toEqual([{ tbl: t, pk: JSON.stringify(['a', 'k']) }]);
+    conn()
+      .prepare(`INSERT INTO "${t}"(account_id, key, body) VALUES('a','k','x')`)
+      .run();
+    expect(entries().filter((e) => e.tbl === t)).toEqual([
+      { tbl: t, pk: JSON.stringify(['a', 'k']) },
+    ]);
   });
 
   it('an upsert or an OR-clause write of a tracked row succeeds and moves its cursor', async () => {
@@ -367,7 +385,9 @@ describe('synced plugin tables', () => {
     expect(COPIED_CORE_TABLES).toContain('user_prefs');
     enableTracking(conn());
     const before = entries().length;
-    conn().prepare(`INSERT INTO user_prefs(key, value_json) VALUES('k', '1')`).run();
+    conn()
+      .prepare(`INSERT INTO user_prefs(key, value_json) VALUES('k', '1')`)
+      .run();
     const added = entries().slice(before);
     expect(added.map((e) => e.tbl)).toEqual(['user_prefs']);
   });

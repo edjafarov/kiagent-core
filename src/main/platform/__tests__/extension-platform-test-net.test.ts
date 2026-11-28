@@ -3,7 +3,11 @@
  *  it to `scopedTestNetFetch` with the extension being activated. */
 import path from 'path';
 
-import { createHarness, FIXTURES, type PlatformHarness } from './helpers/platform-harness';
+import {
+  createHarness,
+  FIXTURES,
+  type PlatformHarness,
+} from './helpers/platform-harness';
 
 jest.mock('../network-service', () => {
   const actual = jest.requireActual('../network-service');
@@ -25,7 +29,9 @@ describe('testNetExtensionId', () => {
     await platform.start();
     await h.install(platform, path.join(FIXTURES, 'ext-basic'));
     await platform.stop();
-    const call = (scopedTestNetFetch as jest.Mock).mock.calls.find((c) => c[0] === 'test.basic');
+    const call = (scopedTestNetFetch as jest.Mock).mock.calls.find(
+      (c) => c[0] === 'test.basic',
+    );
     expect(call).toBeDefined();
     expect(call![1]).toBe('test.basic');
   });

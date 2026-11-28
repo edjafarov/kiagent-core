@@ -8,9 +8,12 @@ export function guardDraftTools<T extends OutboundToolApi>(
   api: T,
   sync: { readOnly(): boolean; masterName(): string | null },
 ): T {
-  const where = (): string => `Draft this on ${sync.masterName() ?? 'the device that leads'}`;
+  const where = (): string =>
+    `Draft this on ${sync.masterName() ?? 'the device that leads'}`;
   const sentence = (): Error =>
-    new Error(`${where()}: this device holds a read-only copy, so drafts are made on the device that leads.`);
+    new Error(
+      `${where()}: this device holds a read-only copy, so drafts are made on the device that leads.`,
+    );
   const guarded = Object.create(api) as T;
   for (const name of WRITES) {
     (guarded as Record<string, unknown>)[name] = async (a: never) => {
@@ -18,7 +21,8 @@ export function guardDraftTools<T extends OutboundToolApi>(
       try {
         return await (api[name] as (a: never) => Promise<unknown>)(a);
       } catch (err) {
-        if (err instanceof Error && err.name === 'SyncReadOnly') throw sentence();
+        if (err instanceof Error && err.name === 'SyncReadOnly')
+          throw sentence();
         throw err;
       }
     };

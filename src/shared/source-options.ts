@@ -36,7 +36,8 @@ export function validateSourceOptions(options: unknown): string | null {
       return `option key '${String(o.key)}' is invalid`;
     if (seen.has(o.key)) return `option key '${o.key}' is duplicated`;
     seen.add(o.key);
-    if (o.type !== 'boolean') return `option '${o.key}' must have type 'boolean'`;
+    if (o.type !== 'boolean')
+      return `option '${o.key}' must have type 'boolean'`;
     if (typeof o.default !== 'boolean')
       return `option '${o.key}' needs a boolean default`;
     if (

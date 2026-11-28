@@ -12,7 +12,11 @@ import { migrate } from '../../store/schema';
 import { openStore, type CoreStore } from '../../store/store';
 import { gateEngine, readGateSync, SyncReadOnly } from '../role';
 import { leadProc } from './lead-proc';
-import { createSyncService, type ForwardRequest, type SyncService } from '../service';
+import {
+  createSyncService,
+  type ForwardRequest,
+  type SyncService,
+} from '../service';
 import { runCommitBatch, splitBatch } from '../owned';
 
 const DEVICE = 'devicea1-0000-0000-0000-000000000000';
@@ -28,13 +32,17 @@ interface Dev {
 }
 const devs: Dev[] = [];
 
-async function device(opts: { follower?: boolean; joined?: boolean } = {}): Promise<Dev> {
+async function device(
+  opts: { follower?: boolean; joined?: boolean } = {},
+): Promise<Dev> {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sync-owned-'));
   const db = await openDb(path.join(dir, 'a.db'));
   migrate(db._conn!);
   const conn = () => db._conn!;
   if (opts.follower)
-    conn().prepare(`UPDATE sync_state SET role = 'follower', joined = ?`).run(opts.joined === false ? 0 : 1);
+    conn()
+      .prepare(`UPDATE sync_state SET role = 'follower', joined = ?`)
+      .run(opts.joined === false ? 0 : 1);
   let svc!: SyncService;
   const after: CommitBatch[] = [];
   const store = openStore(db, {
@@ -61,7 +69,13 @@ afterEach(async () => {
   }
 });
 
-const addAccount = (d: Dev, id: string, source: string, identifier: string, owner: string | null = null) =>
+const addAccount = (
+  d: Dev,
+  id: string,
+  source: string,
+  identifier: string,
+  owner: string | null = null,
+) =>
   d
     .conn()
     .prepare(
@@ -77,8 +91,13 @@ const doc = (externalId: string) => ({
   createdAt: null,
 });
 const queued = (d: Dev) =>
-  (d.conn().prepare(`SELECT payload FROM sync_outbound ORDER BY id`).all() as { payload: Buffer }[]).map(
-    (r) => JSON.parse(Buffer.from(r.payload).toString('utf8')) as ForwardRequest,
+  (
+    d.conn().prepare(`SELECT payload FROM sync_outbound ORDER BY id`).all() as {
+      payload: Buffer;
+    }[]
+  ).map(
+    (r) =>
+      JSON.parse(Buffer.from(r.payload).toString('utf8')) as ForwardRequest,
   );
 
 describe('adopting device-owned accounts', () => {
@@ -89,22 +108,32 @@ describe('adopting device-owned accounts', () => {
     addAccount(d, 'g', 'gmail', 'me@x.com');
     await d.svc.setDeviceId(DEVICE);
     await d.svc.setDeviceId(DEVICE);
-    const rows = d.conn().prepare(`SELECT id, identifier, owner_device_id AS o FROM accounts ORDER BY id`).all();
+    const rows = d
+      .conn()
+      .prepare(
+        `SELECT id, identifier, owner_device_id AS o FROM accounts ORDER BY id`,
+      )
+      .all();
     expect(rows).toEqual([
       { id: 'f', identifier: `this-machine#${SUFFIX}`, o: DEVICE },
       { id: 'g', identifier: 'me@x.com', o: null },
       { id: 'm', identifier: `local#${SUFFIX}`, o: DEVICE },
     ]);
-    expect(d.conn().prepare(`SELECT adopted_at FROM sync_state`).get()).toEqual({ adopted_at: expect.any(String) });
+    expect(d.conn().prepare(`SELECT adopted_at FROM sync_state`).get()).toEqual(
+      { adopted_at: expect.any(String) },
+    );
   });
 
   it('setDeviceId on a joined device changes no accounts row', async () => {
     const d = await device({ follower: true });
     addAccount(d, 'f', 'local-folder', `this-machine#other123`, 'other-device');
     await d.svc.setDeviceId(DEVICE);
-    expect(d.conn().prepare(`SELECT identifier, owner_device_id AS o FROM accounts`).all()).toEqual([
-      { identifier: 'this-machine#other123', o: 'other-device' },
-    ]);
+    expect(
+      d
+        .conn()
+        .prepare(`SELECT identifier, owner_device_id AS o FROM accounts`)
+        .all(),
+    ).toEqual([{ identifier: 'this-machine#other123', o: 'other-device' }]);
   });
 
   it('a restart after adoption adopts nothing again', async () => {
@@ -120,7 +149,9 @@ describe('adopting device-owned accounts', () => {
       workerFile: '',
     });
     await again.setDeviceId(DEVICE);
-    expect(d.conn().prepare(`SELECT identifier FROM accounts WHERE id = 'n'`).get()).toEqual({ identifier: 'later' });
+    expect(
+      d.conn().prepare(`SELECT identifier FROM accounts WHERE id = 'n'`).get(),
+    ).toEqual({ identifier: 'later' });
   });
 
   it('status reports the device id', async () => {
@@ -136,15 +167,30 @@ describe('the writer guard on a follower', () => {
     const d = await device({ follower: true });
     await d.svc.setDeviceId(DEVICE);
     addAccount(d, 'own', 'local-folder', `this-machine#${SUFFIX}`, DEVICE);
-    addAccount(d, 'theirs', 'local-folder', 'this-machine#zzzzzzzz', 'zzzzzzzz-device');
+    addAccount(
+      d,
+      'theirs',
+      'local-folder',
+      'this-machine#zzzzzzzz',
+      'zzzzzzzz-device',
+    );
     addAccount(d, 'mail', 'gmail', 'me@x.com');
     return d;
   };
 
   it('an owned commit writes locally and queues the batch', async () => {
     const d = await setup();
-    await d.store.commit({ account: 'own' as never, documents: [doc('a')], cursor: { n: 1 } });
-    expect(d.conn().prepare(`SELECT count(*) n FROM documents WHERE account_id = 'own'`).get()).toEqual({ n: 1 });
+    await d.store.commit({
+      account: 'own' as never,
+      documents: [doc('a')],
+      cursor: { n: 1 },
+    });
+    expect(
+      d
+        .conn()
+        .prepare(`SELECT count(*) n FROM documents WHERE account_id = 'own'`)
+        .get(),
+    ).toEqual({ n: 1 });
     const q = queued(d);
     expect(q).toHaveLength(1);
     expect(q[0]).toMatchObject({ kind: 'commit', name: 'core.commitBatch' });
@@ -154,7 +200,11 @@ describe('the writer guard on a follower', () => {
     const d = await setup();
     for (const id of ['theirs', 'mail']) {
       await expect(
-        d.store.commit({ account: id as never, documents: [doc('a')], cursor: null }),
+        d.store.commit({
+          account: id as never,
+          documents: [doc('a')],
+          cursor: null,
+        }),
       ).rejects.toThrow(SyncReadOnly);
     }
     expect(queued(d)).toEqual([]);
@@ -162,25 +212,42 @@ describe('the writer guard on a follower', () => {
 
   it('reconcile and status writes pass for an owned account and throw for any other', async () => {
     const d = await setup();
-    await expect(d.store.setAccountStatus('own' as never, { status: 'live' } as never)).resolves.toBeUndefined();
-    await expect(d.store.setAccountStatus('mail' as never, { status: 'live' } as never)).rejects.toThrow(
+    await expect(
+      d.store.setAccountStatus('own' as never, { status: 'live' } as never),
+    ).resolves.toBeUndefined();
+    await expect(
+      d.store.setAccountStatus('mail' as never, { status: 'live' } as never),
+    ).rejects.toThrow(SyncReadOnly);
+    await expect(
+      d.store.reconcileBegin('own' as never),
+    ).resolves.toBeUndefined();
+    await expect(d.store.reconcileBegin('theirs' as never)).rejects.toThrow(
       SyncReadOnly,
     );
-    await expect(d.store.reconcileBegin('own' as never)).resolves.toBeUndefined();
-    await expect(d.store.reconcileBegin('theirs' as never)).rejects.toThrow(SyncReadOnly);
-    await expect(d.store.reconcileEnd('mail' as never)).rejects.toThrow(SyncReadOnly);
+    await expect(d.store.reconcileEnd('mail' as never)).rejects.toThrow(
+      SyncReadOnly,
+    );
   });
 
   it('a consumer commit (a worker) is refused on a follower', async () => {
     const d = await setup();
-    await expect(d.store.commit({ consumer: 'vision', documents: [] } as never)).rejects.toThrow(SyncReadOnly);
+    await expect(
+      d.store.commit({ consumer: 'vision', documents: [] } as never),
+    ).rejects.toThrow(SyncReadOnly);
   });
 
   it('removing an owned account queues the removal', async () => {
     const d = await setup();
     await d.store.commit({ removeAccount: 'own' as never });
-    expect(d.conn().prepare(`SELECT count(*) n FROM accounts WHERE id = 'own'`).get()).toEqual({ n: 0 });
-    expect(queued(d)[0].payload).toMatchObject({ batch: { removeAccount: 'own' } });
+    expect(
+      d
+        .conn()
+        .prepare(`SELECT count(*) n FROM accounts WHERE id = 'own'`)
+        .get(),
+    ).toEqual({ n: 0 });
+    expect(queued(d)[0].payload).toMatchObject({
+      batch: { removeAccount: 'own' },
+    });
   });
 
   it('a device that is not yet joined stays fully read-only, owned or not', async () => {
@@ -188,7 +255,11 @@ describe('the writer guard on a follower', () => {
     await d.svc.setDeviceId(DEVICE);
     addAccount(d, 'own', 'local-folder', 'x', DEVICE);
     await expect(
-      d.store.commit({ account: 'own' as never, documents: [doc('a')], cursor: null }),
+      d.store.commit({
+        account: 'own' as never,
+        documents: [doc('a')],
+        cursor: null,
+      }),
     ).rejects.toThrow(SyncReadOnly);
   });
 });
@@ -202,9 +273,18 @@ describe('an owned commit and its queue row are one transaction', () => {
       `CREATE TRIGGER refuse_queue BEFORE INSERT ON sync_outbound BEGIN SELECT RAISE(ABORT, 'queue full'); END`,
     );
     await expect(
-      d.store.commit({ account: 'own' as never, documents: [doc('a')], cursor: { n: 1 } }),
+      d.store.commit({
+        account: 'own' as never,
+        documents: [doc('a')],
+        cursor: { n: 1 },
+      }),
     ).rejects.toMatchObject({ message: expect.stringContaining('queue full') });
-    expect(d.conn().prepare(`SELECT count(*) n FROM documents WHERE account_id = 'own'`).get()).toEqual({ n: 0 });
+    expect(
+      d
+        .conn()
+        .prepare(`SELECT count(*) n FROM documents WHERE account_id = 'own'`)
+        .get(),
+    ).toEqual({ n: 0 });
   });
 
   it('a removal queue write that fails keeps the account', async () => {
@@ -214,17 +294,28 @@ describe('an owned commit and its queue row are one transaction', () => {
     d.conn().exec(
       `CREATE TRIGGER refuse_queue BEFORE INSERT ON sync_outbound BEGIN SELECT RAISE(ABORT, 'queue full'); END`,
     );
-    await expect(d.store.commit({ removeAccount: 'own' as never })).rejects.toMatchObject({
+    await expect(
+      d.store.commit({ removeAccount: 'own' as never }),
+    ).rejects.toMatchObject({
       message: expect.stringContaining('queue full'),
     });
-    expect(d.conn().prepare(`SELECT count(*) n FROM accounts WHERE id = 'own'`).get()).toEqual({ n: 1 });
+    expect(
+      d
+        .conn()
+        .prepare(`SELECT count(*) n FROM accounts WHERE id = 'own'`)
+        .get(),
+    ).toEqual({ n: 1 });
   });
 
   it('a master commit queues nothing', async () => {
     const d = await device();
     await d.svc.setDeviceId(DEVICE);
     addAccount(d, 'own', 'local-folder', `this-machine#${SUFFIX}`, DEVICE);
-    await d.store.commit({ account: 'own' as never, documents: [doc('a')], cursor: { n: 1 } });
+    await d.store.commit({
+      account: 'own' as never,
+      documents: [doc('a')],
+      cursor: { n: 1 },
+    });
     expect(queued(d)).toEqual([]);
   });
 });
@@ -234,7 +325,10 @@ describe('connecting a device-owned account after the device id is known', () =>
     const d = await device();
     await d.svc.setDeviceId(DEVICE);
     for (const source of ['local-folder', 'meetings', 'whatsapp', 'codex']) {
-      const a = await d.store.createAccount({ source, identifier: source === 'local-folder' ? 'this-machine' : 'local' });
+      const a = await d.store.createAccount({
+        source,
+        identifier: source === 'local-folder' ? 'this-machine' : 'local',
+      });
       expect(a.identifier).toMatch(new RegExp(`#${SUFFIX}$`));
       expect(a.ownerDeviceId).toBe(DEVICE);
     }
@@ -247,20 +341,42 @@ describe('connecting a device-owned account after the device id is known', () =>
   it('connecting again upserts the one suffixed row', async () => {
     const d = await device();
     await d.svc.setDeviceId(DEVICE);
-    const a = await d.store.createAccount({ source: 'local-folder', identifier: 'this-machine' });
-    const b = await d.store.createAccount({ source: 'local-folder', identifier: 'this-machine' });
-    const c = await d.store.createAccount({ source: 'local-folder', identifier: `this-machine#${SUFFIX}` });
+    const a = await d.store.createAccount({
+      source: 'local-folder',
+      identifier: 'this-machine',
+    });
+    const b = await d.store.createAccount({
+      source: 'local-folder',
+      identifier: 'this-machine',
+    });
+    const c = await d.store.createAccount({
+      source: 'local-folder',
+      identifier: `this-machine#${SUFFIX}`,
+    });
     expect(new Set([a.id, b.id, c.id]).size).toBe(1);
-    expect(d.conn().prepare(`SELECT count(*) n FROM accounts WHERE source = 'local-folder'`).get()).toEqual({ n: 1 });
+    expect(
+      d
+        .conn()
+        .prepare(
+          `SELECT count(*) n FROM accounts WHERE source = 'local-folder'`,
+        )
+        .get(),
+    ).toEqual({ n: 1 });
   });
 
   it('another source keeps its identifier and no owner; no device id keeps the bare identifier', async () => {
     const d = await device();
-    const bare = await d.store.createAccount({ source: 'local-folder', identifier: 'this-machine' });
+    const bare = await d.store.createAccount({
+      source: 'local-folder',
+      identifier: 'this-machine',
+    });
     expect(bare.identifier).toBe('this-machine');
     expect(bare.ownerDeviceId ?? null).toBeNull();
     await d.svc.setDeviceId(DEVICE);
-    const mail = await d.store.createAccount({ source: 'gmail', identifier: 'me@x.com' });
+    const mail = await d.store.createAccount({
+      source: 'gmail',
+      identifier: 'me@x.com',
+    });
     expect(mail.identifier).toBe('me@x.com');
     expect(mail.ownerDeviceId ?? null).toBeNull();
   });
@@ -268,7 +384,10 @@ describe('connecting a device-owned account after the device id is known', () =>
   it('a follower device-owned connect is suffixed too', async () => {
     const d = await device({ follower: true });
     await d.svc.setDeviceId(DEVICE);
-    const a = await d.store.createAccount({ source: 'local-folder', identifier: 'this-machine' });
+    const a = await d.store.createAccount({
+      source: 'local-folder',
+      identifier: 'this-machine',
+    });
     expect(a.identifier).toBe(`this-machine#${SUFFIX}`);
   });
 });
@@ -285,59 +404,126 @@ describe('delivery to the leader', () => {
         cadence: null,
         ownerDeviceId: DEVICE,
       },
-      batch: { account: 'own', documents: [doc('a'), doc('b')], cursor: { n: 2 } } as unknown as CommitBatch,
+      batch: {
+        account: 'own',
+        documents: [doc('a'), doc('b')],
+        cursor: { n: 2 },
+      } as unknown as CommitBatch,
     };
     await runCommitBatch(leader, input as never);
     await runCommitBatch(leader, input as never);
     const c = leader.conn();
-    expect(c.prepare(`SELECT id, owner_device_id AS o FROM accounts`).all()).toEqual([{ id: 'own', o: DEVICE }]);
-    expect(c.prepare(`SELECT count(*) n FROM documents`).get()).toEqual({ n: 2 });
-    expect(c.prepare(`SELECT count(*) n FROM documents_fts WHERE documents_fts MATCH 'body'`).get()).toEqual({ n: 2 });
+    expect(
+      c.prepare(`SELECT id, owner_device_id AS o FROM accounts`).all(),
+    ).toEqual([{ id: 'own', o: DEVICE }]);
+    expect(c.prepare(`SELECT count(*) n FROM documents`).get()).toEqual({
+      n: 2,
+    });
+    expect(
+      c
+        .prepare(
+          `SELECT count(*) n FROM documents_fts WHERE documents_fts MATCH 'body'`,
+        )
+        .get(),
+    ).toEqual({ n: 2 });
   });
 
   it('a late batch for the account-level assistant is dropped: no row comes back', async () => {
     const leader = await device();
     const input = {
-      account: { id: 'old', source: 'assistant', identifier: `local#${SUFFIX}`, config: {}, cadence: null, ownerDeviceId: DEVICE },
-      batch: { account: 'old', documents: [doc('a')], cursor: { n: 1 } } as unknown as CommitBatch,
+      account: {
+        id: 'old',
+        source: 'assistant',
+        identifier: `local#${SUFFIX}`,
+        config: {},
+        cadence: null,
+        ownerDeviceId: DEVICE,
+      },
+      batch: {
+        account: 'old',
+        documents: [doc('a')],
+        cursor: { n: 1 },
+      } as unknown as CommitBatch,
     };
     await runCommitBatch(leader, input as never);
-    expect(leader.conn().prepare(`SELECT count(*) n FROM accounts`).get()).toEqual({ n: 0 });
-    expect(leader.conn().prepare(`SELECT count(*) n FROM documents`).get()).toEqual({ n: 0 });
+    expect(
+      leader.conn().prepare(`SELECT count(*) n FROM accounts`).get(),
+    ).toEqual({ n: 0 });
+    expect(
+      leader.conn().prepare(`SELECT count(*) n FROM documents`).get(),
+    ).toEqual({ n: 0 });
   });
 
   it('an account the leader already holds under another id is used, not duplicated', async () => {
     const leader = await device();
-    addAccount(leader, 'leader-id', 'local-folder', `this-machine#${SUFFIX}`, DEVICE);
+    addAccount(
+      leader,
+      'leader-id',
+      'local-folder',
+      `this-machine#${SUFFIX}`,
+      DEVICE,
+    );
     await runCommitBatch(leader, {
-      account: { id: 'owner-id', source: 'local-folder', identifier: `this-machine#${SUFFIX}`, config: {}, cadence: null, ownerDeviceId: DEVICE },
-      batch: { account: 'owner-id', documents: [doc('a')], cursor: null } as unknown as CommitBatch,
+      account: {
+        id: 'owner-id',
+        source: 'local-folder',
+        identifier: `this-machine#${SUFFIX}`,
+        config: {},
+        cadence: null,
+        ownerDeviceId: DEVICE,
+      },
+      batch: {
+        account: 'owner-id',
+        documents: [doc('a')],
+        cursor: null,
+      } as unknown as CommitBatch,
     } as never);
-    expect(leader.conn().prepare(`SELECT account_id FROM documents`).all()).toEqual([{ account_id: 'leader-id' }]);
+    expect(
+      leader.conn().prepare(`SELECT account_id FROM documents`).all(),
+    ).toEqual([{ account_id: 'leader-id' }]);
   });
 
   it('a removal is delivered as a removal', async () => {
     const leader = await device();
     addAccount(leader, 'own', 'local-folder', 'x', DEVICE);
     await runCommitBatch(leader, {
-      account: { id: 'own', source: 'local-folder', identifier: 'x', config: {}, cadence: null, ownerDeviceId: DEVICE },
+      account: {
+        id: 'own',
+        source: 'local-folder',
+        identifier: 'x',
+        config: {},
+        cadence: null,
+        ownerDeviceId: DEVICE,
+      },
       batch: { removeAccount: 'own' } as unknown as CommitBatch,
     } as never);
-    expect(leader.conn().prepare(`SELECT count(*) n FROM accounts`).get()).toEqual({ n: 0 });
+    expect(
+      leader.conn().prepare(`SELECT count(*) n FROM accounts`).get(),
+    ).toEqual({ n: 0 });
   });
 
   it('owned commit with no leader stays queued and goes out when one appears', async () => {
     const d = await device({ follower: true });
     await d.svc.setDeviceId(DEVICE);
     addAccount(d, 'own', 'local-folder', `this-machine#${SUFFIX}`, DEVICE);
-    await d.store.commit({ account: 'own' as never, documents: [doc('a')], cursor: null });
-    await expect(d.svc.drainOutbound()).resolves.toEqual({ sent: 0, waiting: 1 });
+    await d.store.commit({
+      account: 'own' as never,
+      documents: [doc('a')],
+      cursor: null,
+    });
+    await expect(d.svc.drainOutbound()).resolves.toEqual({
+      sent: 0,
+      waiting: 1,
+    });
     const got: ForwardRequest[] = [];
     d.svc.setForwarder(async (r) => {
       got.push(r);
       return { ok: true, value: null };
     });
-    await expect(d.svc.drainOutbound()).resolves.toEqual({ sent: 1, waiting: 0 });
+    await expect(d.svc.drainOutbound()).resolves.toEqual({
+      sent: 1,
+      waiting: 0,
+    });
     expect(got[0].kind).toBe('commit');
   });
 
@@ -346,7 +532,11 @@ describe('delivery to the leader', () => {
     (d.db as unknown as { proc: unknown }).proc = leadProc(d.conn);
     await d.svc.setDeviceId(DEVICE);
     addAccount(d, 'own', 'local-folder', `this-machine#${SUFFIX}`, DEVICE);
-    await d.store.commit({ account: 'own' as never, documents: [doc('a')], cursor: { n: 1 } });
+    await d.store.commit({
+      account: 'own' as never,
+      documents: [doc('a')],
+      cursor: { n: 1 },
+    });
     const seen: unknown[] = [];
     d.svc.setRunners({
       ui: jest.fn(),
@@ -359,8 +549,15 @@ describe('delivery to the leader', () => {
     await d.svc.lead({ epoch: 2 });
     await d.svc.open('head-acked');
     expect(seen).toHaveLength(1);
-    expect(d.conn().prepare(`SELECT count(*) n FROM documents WHERE account_id = 'own'`).get()).toEqual({ n: 1 });
-    expect(d.conn().prepare(`SELECT count(*) n FROM sync_outbound`).get()).toEqual({ n: 0 });
+    expect(
+      d
+        .conn()
+        .prepare(`SELECT count(*) n FROM documents WHERE account_id = 'own'`)
+        .get(),
+    ).toEqual({ n: 1 });
+    expect(
+      d.conn().prepare(`SELECT count(*) n FROM sync_outbound`).get(),
+    ).toEqual({ n: 0 });
   });
 });
 
@@ -373,17 +570,29 @@ describe('splitBatch', () => {
       cursor: { n: 4 },
       status: 'live',
     } as unknown as CommitBatch;
-    const parts = splitBatch(batch, 400) as unknown as { documents: unknown[]; cursor?: unknown; status?: string }[];
+    const parts = splitBatch(batch, 400) as unknown as {
+      documents: unknown[];
+      cursor?: unknown;
+      status?: string;
+    }[];
     expect(parts.length).toBeGreaterThan(1);
     expect(parts.flatMap((p) => p.documents)).toHaveLength(4);
-    expect(parts.slice(0, -1).every((p) => p.cursor === undefined && p.status === undefined)).toBe(true);
+    expect(
+      parts
+        .slice(0, -1)
+        .every((p) => p.cursor === undefined && p.status === undefined),
+    ).toBe(true);
     expect(parts[parts.length - 1].cursor).toEqual({ n: 4 });
     expect(parts[parts.length - 1].status).toBe('live');
     for (const p of parts) expect(JSON.stringify(p).length).toBeLessThan(900);
   });
 
   it('a batch under the cap, and a removal, stay whole', () => {
-    const small = { account: 'own', documents: [doc('a')], cursor: null } as unknown as CommitBatch;
+    const small = {
+      account: 'own',
+      documents: [doc('a')],
+      cursor: null,
+    } as unknown as CommitBatch;
     expect(splitBatch(small, 16 * 1024 * 1024)).toEqual([small]);
     const rm = { removeAccount: 'own' } as unknown as CommitBatch;
     expect(splitBatch(rm, 10)).toEqual([rm]);
@@ -413,15 +622,40 @@ describe('one ownership predicate, read per call', () => {
     const d = await device({ follower: true });
     await d.svc.setDeviceId(DEVICE);
     await d.svc.loadOwned();
-    const e = engineOver(d, () => d.store.createAccount({ source: 'local-folder', identifier: 'this-machine' }));
-    const account = (await e.connect({ descriptor: { id: 'local-folder' } })) as { id: string };
-    expect(((e.run as unknown as (a: { id: string }) => unknown)({ id: account.id }) as { inner: unknown }).inner).toBe('real');
+    const e = engineOver(d, () =>
+      d.store.createAccount({
+        source: 'local-folder',
+        identifier: 'this-machine',
+      }),
+    );
+    const account = (await e.connect({
+      descriptor: { id: 'local-folder' },
+    })) as { id: string };
+    expect(
+      (
+        (e.run as unknown as (a: { id: string }) => unknown)({
+          id: account.id,
+        }) as { inner: unknown }
+      ).inner,
+    ).toBe('real');
   });
 
   it.each([
-    ['a joined follower', { follower: true, joined: true, joining: false }, true],
-    ['a follower that never joined', { follower: true, joined: false, joining: false }, false],
-    ['a follower that is joining', { follower: true, joined: true, joining: true }, false],
+    [
+      'a joined follower',
+      { follower: true, joined: true, joining: false },
+      true,
+    ],
+    [
+      'a follower that never joined',
+      { follower: true, joined: false, joining: false },
+      false,
+    ],
+    [
+      'a follower that is joining',
+      { follower: true, joined: true, joining: true },
+      false,
+    ],
   ])('the engine and the writer guard agree for %s', async (_n, st, mayRun) => {
     const d = await device({ follower: st.follower, joined: st.joined });
     await d.svc.setDeviceId(DEVICE);
@@ -430,7 +664,11 @@ describe('one ownership predicate, read per call', () => {
     await d.svc.loadOwned();
     let wrote = true;
     try {
-      await d.store.commit({ account: 'own' as never, documents: [doc('a')], cursor: null });
+      await d.store.commit({
+        account: 'own' as never,
+        documents: [doc('a')],
+        cursor: null,
+      });
     } catch {
       wrote = false;
     }
@@ -442,7 +680,11 @@ describe('one ownership predicate, read per call', () => {
 describe('owner deletions converge on the leader', () => {
   const ref = (externalId: string) => ({ externalId, type: 'file' });
   const seqNow = (d: Dev) =>
-    (d.conn().prepare(`SELECT max(seq) s FROM documents`).get() as { s: number }).s;
+    (
+      d.conn().prepare(`SELECT max(seq) s FROM documents`).get() as {
+        s: number;
+      }
+    ).s;
   const deliverAll = async (from: Dev, to: Dev) => {
     to.svc.setRunners({
       ui: jest.fn(),
@@ -459,28 +701,53 @@ describe('owner deletions converge on the leader', () => {
     await owner.svc.setDeviceId(DEVICE);
     const identifier = `this-machine#${SUFFIX}`;
     addAccount(owner, 'own', 'local-folder', identifier, DEVICE);
-    owner.conn().prepare(`UPDATE accounts SET config = ? WHERE id = 'own'`).run(JSON.stringify({ folderRoots: ['/x', '/y'] }));
+    owner
+      .conn()
+      .prepare(`UPDATE accounts SET config = ? WHERE id = 'own'`)
+      .run(JSON.stringify({ folderRoots: ['/x', '/y'] }));
     const docs = [
       { ...doc('x1'), scopeRootId: '/x' },
       { ...doc('x2'), scopeRootId: '/x' },
       { ...doc('y1'), scopeRootId: '/y' },
     ];
-    await owner.store.commit({ account: 'own' as never, documents: docs, cursor: { n: 1 } });
+    await owner.store.commit({
+      account: 'own' as never,
+      documents: docs,
+      cursor: { n: 1 },
+    });
 
     const leader = await device();
-    await expect(deliverAll(owner, leader)).resolves.toEqual({ sent: 1, waiting: 0 });
+    await expect(deliverAll(owner, leader)).resolves.toEqual({
+      sent: 1,
+      waiting: 0,
+    });
     const live = (d: Dev) =>
-      (d.conn().prepare(`SELECT external_id e FROM documents WHERE archived_at IS NULL ORDER BY 1`).all() as { e: string }[]).map((r) => r.e);
+      (
+        d
+          .conn()
+          .prepare(
+            `SELECT external_id e FROM documents WHERE archived_at IS NULL ORDER BY 1`,
+          )
+          .all() as { e: string }[]
+      ).map((r) => r.e);
     expect(live(leader)).toEqual(['x1', 'x2', 'y1']);
 
     // x2 is deleted from disk: a reconcile pass archives it.
     const start = seqNow(owner);
     await owner.store.reconcileBegin('own' as never);
-    await owner.store.reconcileStage('own' as never, [ref('x1'), ref('y1')] as never);
+    await owner.store.reconcileStage(
+      'own' as never,
+      [ref('x1'), ref('y1')] as never,
+    );
     await owner.store.reconcileArchiveChunk('own' as never, start as never);
     expect(live(owner)).toEqual(['x1', 'y1']);
     // Then the root /y is removed from the folder's scope.
-    const expectedConfigJson = (owner.conn().prepare(`SELECT config c FROM accounts WHERE id='own'`).get() as { c: string }).c;
+    const expectedConfigJson = (
+      owner
+        .conn()
+        .prepare(`SELECT config c FROM accounts WHERE id='own'`)
+        .get() as { c: string }
+    ).c;
     await owner.store.applyFolderScope({
       accountId: 'own' as never,
       config: { folderRoots: ['/x'] },
@@ -491,11 +758,19 @@ describe('owner deletions converge on the leader', () => {
       expectedConfigJson,
     } as never);
     expect(live(owner)).toEqual(['x1']);
-    expect(owner.conn().prepare(`SELECT count(*) n FROM sync_outbound`).get()).toEqual({ n: 2 });
+    expect(
+      owner.conn().prepare(`SELECT count(*) n FROM sync_outbound`).get(),
+    ).toEqual({ n: 2 });
 
-    await expect(deliverAll(owner, leader)).resolves.toEqual({ sent: 2, waiting: 0 });
+    await expect(deliverAll(owner, leader)).resolves.toEqual({
+      sent: 2,
+      waiting: 0,
+    });
     expect(live(leader)).toEqual(['x1']);
-    const cfg = leader.conn().prepare(`SELECT config c FROM accounts WHERE source='local-folder'`).get() as { c: string };
+    const cfg = leader
+      .conn()
+      .prepare(`SELECT config c FROM accounts WHERE source='local-folder'`)
+      .get() as { c: string };
     expect(JSON.parse(cfg.c).folderRoots).toEqual(['/x']);
   });
 
@@ -503,13 +778,19 @@ describe('owner deletions converge on the leader', () => {
     const d = await device({ follower: true });
     await d.svc.setDeviceId(DEVICE);
     addAccount(d, 'own', 'local-folder', `this-machine#${SUFFIX}`, DEVICE);
-    await d.store.commit({ account: 'own' as never, documents: [doc('a')], cursor: null });
+    await d.store.commit({
+      account: 'own' as never,
+      documents: [doc('a')],
+      cursor: null,
+    });
     const start = seqNow(d);
     await d.store.reconcileBegin('own' as never);
     await d.store.reconcileStage('own' as never, [ref('a')] as never);
     await d.store.reconcileArchiveChunk('own' as never, start as never);
     // Only the commit's own row.
-    expect(d.conn().prepare(`SELECT count(*) n FROM sync_outbound`).get()).toEqual({ n: 1 });
+    expect(
+      d.conn().prepare(`SELECT count(*) n FROM sync_outbound`).get(),
+    ).toEqual({ n: 1 });
   });
 });
 
@@ -590,29 +871,62 @@ describe('device names and accounts held elsewhere (final review)', () => {
 
 describe('renameAccount', () => {
   const row = (d: Dev, id: string) =>
-    d.conn().prepare(`SELECT identifier, owner_device_id, cursor, status, last_error FROM accounts WHERE id = ?`).get(id);
-  const changes = (d: Dev) => (d.conn().prepare(`SELECT count(*) n FROM changes`).get() as { n: number }).n;
+    d
+      .conn()
+      .prepare(
+        `SELECT identifier, owner_device_id, cursor, status, last_error FROM accounts WHERE id = ?`,
+      )
+      .get(id);
+  const changes = (d: Dev) =>
+    (d.conn().prepare(`SELECT count(*) n FROM changes`).get() as { n: number })
+      .n;
 
   it('renames, clears the owner and the cursor, appends one account change', async () => {
     const d = await device();
     addAccount(d, 'k', 'assistant', 'local#0533dbda', '0533dbda-x');
     d.conn().prepare(`UPDATE accounts SET cursor = '775' WHERE id = 'k'`).run();
     const before = changes(d);
-    await d.store.commit({ renameAccount: { id: 'k' as never, identifier: 'local' } });
-    expect(row(d, 'k')).toEqual({ identifier: 'local', owner_device_id: null, cursor: null, status: 'idle', last_error: null });
+    await d.store.commit({
+      renameAccount: { id: 'k' as never, identifier: 'local' },
+    });
+    expect(row(d, 'k')).toEqual({
+      identifier: 'local',
+      owner_device_id: null,
+      cursor: null,
+      status: 'idle',
+      last_error: null,
+    });
     expect(changes(d)).toBe(before + 1);
   });
 
   it('lifts an Owned-by pause, keeps a plain one', async () => {
     const d = await device();
     addAccount(d, 'o', 'assistant', 'local#aaaaaaaa', 'aaaaaaaa-x');
-    d.conn().prepare(`UPDATE accounts SET status = 'paused', last_error = 'Owned by aaaaaaaa' WHERE id = 'o'`).run();
+    d.conn()
+      .prepare(
+        `UPDATE accounts SET status = 'paused', last_error = 'Owned by aaaaaaaa' WHERE id = 'o'`,
+      )
+      .run();
     addAccount(d, 'p', 'assistant', 'other#bbbbbbbb');
-    d.conn().prepare(`UPDATE accounts SET status = 'paused', last_error = NULL WHERE id = 'p'`).run();
-    await d.store.commit({ renameAccount: { id: 'o' as never, identifier: 'local' } });
-    await d.store.commit({ renameAccount: { id: 'p' as never, identifier: 'other' } });
-    expect(row(d, 'o')).toMatchObject({ status: 'connecting', last_error: null });
-    expect(row(d, 'p')).toMatchObject({ identifier: 'other', status: 'paused' });
+    d.conn()
+      .prepare(
+        `UPDATE accounts SET status = 'paused', last_error = NULL WHERE id = 'p'`,
+      )
+      .run();
+    await d.store.commit({
+      renameAccount: { id: 'o' as never, identifier: 'local' },
+    });
+    await d.store.commit({
+      renameAccount: { id: 'p' as never, identifier: 'other' },
+    });
+    expect(row(d, 'o')).toMatchObject({
+      status: 'connecting',
+      last_error: null,
+    });
+    expect(row(d, 'p')).toMatchObject({
+      identifier: 'other',
+      status: 'paused',
+    });
   });
 
   it("lifts an owner batch's pause (paused, no error, another owner), not my own", async () => {
@@ -620,11 +934,23 @@ describe('renameAccount', () => {
     await d.svc.setDeviceId(DEVICE);
     addAccount(d, 'f', 'assistant', 'local#ffffffff', 'ffffffff-x');
     addAccount(d, 'm', 'assistant', `mine#${SUFFIX}`, DEVICE);
-    d.conn().prepare(`UPDATE accounts SET status = 'paused', last_error = NULL`).run();
-    await d.store.commit({ renameAccount: { id: 'f' as never, identifier: 'local' } });
-    await d.store.commit({ renameAccount: { id: 'm' as never, identifier: 'mine' } });
-    expect(row(d, 'f')).toMatchObject({ status: 'connecting', owner_device_id: null });
-    expect(row(d, 'm')).toMatchObject({ status: 'paused', owner_device_id: null });
+    d.conn()
+      .prepare(`UPDATE accounts SET status = 'paused', last_error = NULL`)
+      .run();
+    await d.store.commit({
+      renameAccount: { id: 'f' as never, identifier: 'local' },
+    });
+    await d.store.commit({
+      renameAccount: { id: 'm' as never, identifier: 'mine' },
+    });
+    expect(row(d, 'f')).toMatchObject({
+      status: 'connecting',
+      owner_device_id: null,
+    });
+    expect(row(d, 'm')).toMatchObject({
+      status: 'paused',
+      owner_device_id: null,
+    });
   });
 
   it('changes nothing while another row holds the identifier', async () => {
@@ -632,8 +958,13 @@ describe('renameAccount', () => {
     addAccount(d, 'a', 'assistant', 'local');
     addAccount(d, 'b', 'assistant', 'local#cccccccc', 'cccccccc-x');
     const before = changes(d);
-    await d.store.commit({ renameAccount: { id: 'b' as never, identifier: 'local' } });
-    expect(row(d, 'b')).toMatchObject({ identifier: 'local#cccccccc', owner_device_id: 'cccccccc-x' });
+    await d.store.commit({
+      renameAccount: { id: 'b' as never, identifier: 'local' },
+    });
+    expect(row(d, 'b')).toMatchObject({
+      identifier: 'local#cccccccc',
+      owner_device_id: 'cccccccc-x',
+    });
     expect(changes(d)).toBe(before);
   });
 });

@@ -12,7 +12,11 @@ import {
 
 function fakeStore(initial: Record<string, unknown> = {}, writable = true) {
   const rows: Record<string, unknown> = { ...initial };
-  const s: UserPrefsStore & { rows: Record<string, unknown>; writable: boolean; sets: string[] } = {
+  const s: UserPrefsStore & {
+    rows: Record<string, unknown>;
+    writable: boolean;
+    sets: string[];
+  } = {
     rows,
     writable,
     sets: [],
@@ -38,7 +42,12 @@ describe('user prefs', () => {
   afterEach(() => fs.rmSync(dir, { recursive: true, force: true }));
 
   it('splitPatch separates keys exactly by USER_PREF_KEYS', () => {
-    expect([...USER_PREF_KEYS]).toEqual(['outbound', 'calendar', 'features', 'theme']);
+    expect([...USER_PREF_KEYS]).toEqual([
+      'outbound',
+      'calendar',
+      'features',
+      'theme',
+    ]);
     const { user, device } = splitPatch({
       launchAtLogin: false,
       outbound: { defaultMode: 'link' },
@@ -51,7 +60,10 @@ describe('user prefs', () => {
 
   it('get() returns table values for user keys and file values for device keys', async () => {
     writeFile({ launchAtLogin: false, outbound: { defaultMode: 'chat' } });
-    const store = fakeStore({ 'core.outbound': { defaultMode: 'link' } }, false);
+    const store = fakeStore(
+      { 'core.outbound': { defaultMode: 'link' } },
+      false,
+    );
     const p = createPrefs(dir, store);
     await p.ready;
     expect(p.get().outbound.defaultMode).toBe('link');
@@ -151,7 +163,9 @@ describe('user prefs', () => {
       },
     });
     p.setForwardUser(async () => {
-      throw Object.assign(new Error('no leader'), { code: 'EXT_SYNC_NO_MASTER' });
+      throw Object.assign(new Error('no leader'), {
+        code: 'EXT_SYNC_NO_MASTER',
+      });
     });
     await p.patch({ launchAtLogin: false, theme: 'dark' });
     expect(queued).toEqual(['core.theme']);
@@ -166,7 +180,9 @@ describe('user prefs', () => {
     p.setForwardUser(async () => {
       throw new Error("Can't change this while Mac is offline");
     });
-    await expect(p.patch({ launchAtLogin: false, theme: 'dark' })).rejects.toThrow(/offline/);
+    await expect(
+      p.patch({ launchAtLogin: false, theme: 'dark' }),
+    ).rejects.toThrow(/offline/);
     expect(fileJson().launchAtLogin).toBe(false);
     expect(p.get().launchAtLogin).toBe(false);
     expect(store.sets).toEqual([]);
@@ -236,7 +252,10 @@ describe('user prefs', () => {
     expect(p.get().theme).toBe('dark');
     expect(seen).toEqual(['dark']);
     store.rows['core.theme'] = 'light';
-    await p.refreshUser({ prefKeys: ['core.theme'], pullStartedAt: Date.now() + 1000 });
+    await p.refreshUser({
+      prefKeys: ['core.theme'],
+      pullStartedAt: Date.now() + 1000,
+    });
     expect(p.get().theme).toBe('light');
   });
 });

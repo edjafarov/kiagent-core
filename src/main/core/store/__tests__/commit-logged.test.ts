@@ -74,10 +74,16 @@ describe('commit reports whether it logged (#135)', () => {
     await it.return!();
     await expect(next).resolves.toEqual({ done: true, value: undefined });
     const spy = jest.spyOn(db, 'all');
-    await store.commit({ account: accountId, documents: [doc('b')], cursor: 1 });
+    await store.commit({
+      account: accountId,
+      documents: [doc('b')],
+      cursor: 1,
+    });
     await settle();
     expect(
-      spy.mock.calls.filter(([sql]) => /FROM changes WHERE seq > \?/.test(sql as string)).length,
+      spy.mock.calls.filter(([sql]) =>
+        /FROM changes WHERE seq > \?/.test(sql as string),
+      ).length,
     ).toBe(0);
     await expect(it.next()).resolves.toEqual({ done: true, value: undefined });
   });

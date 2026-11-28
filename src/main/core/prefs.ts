@@ -8,8 +8,8 @@ import type {
   Prefs,
 } from '@shared/contracts';
 
-import type { AppDb } from '../db/app-db';
 import { USER_PREF_KEYS, type UserPrefKey } from '@shared/user-pref-keys';
+import type { AppDb } from '../db/app-db';
 import { SyncNoMaster } from './sync/forward-core';
 import { forwardOrQueue } from './sync/settings-sync';
 import type { ForwardRequest } from './sync/service';
@@ -157,7 +157,8 @@ const tableKey = (k: string): string => `core.${k}`;
 export function pickUserKeys(p: unknown): Partial<AppPrefs> {
   const out: Record<string, unknown> = {};
   if (p === null || typeof p !== 'object') return out as Partial<AppPrefs>;
-  for (const [k, v] of Object.entries(p)) if (USER_KEY_SET.has(k) && v !== undefined) out[k] = v;
+  for (const [k, v] of Object.entries(p))
+    if (USER_KEY_SET.has(k) && v !== undefined) out[k] = v;
   return out as Partial<AppPrefs>;
 }
 
@@ -171,7 +172,10 @@ export function splitPatch(p: Partial<AppPrefs>): {
     if (v === undefined) continue;
     (USER_KEY_SET.has(k) ? user : device)[k] = v;
   }
-  return { user: user as Partial<AppPrefs>, device: device as Partial<AppPrefs> };
+  return {
+    user: user as Partial<AppPrefs>,
+    device: device as Partial<AppPrefs>,
+  };
 }
 
 /** The user's keys as the table holds them (`core.<key>` -> JSON value). */
@@ -204,7 +208,10 @@ export interface CorePrefs extends Prefs {
    *  says which keys the delta carried and when its pull began: a delivered
    *  setting held as an optimistic value is released once a pull that started
    *  after its acknowledgement brought that key (or a prefix of it). */
-  refreshUser(meta?: { prefKeys: string[]; pullStartedAt?: number }): Promise<void>;
+  refreshUser(meta?: {
+    prefKeys: string[];
+    pullStartedAt?: number;
+  }): Promise<void>;
   /** Where a user or extension setting waits when no leader is reachable. */
   setOfflineQueue(q: OfflineQueue | null): void;
   /** Boot: rebuild the overlay from the queue's rows (no optimistic entries). */
@@ -234,9 +241,15 @@ export interface CorePrefs extends Prefs {
   /** Resolves once the store passed to `createPrefs` is attached. */
   readonly ready: Promise<void>;
   getExt(key: string): unknown;
-  setExt(key: string, value: unknown, opts?: { notify?: boolean }): Promise<void>;
+  setExt(
+    key: string,
+    value: unknown,
+    opts?: { notify?: boolean },
+  ): Promise<void>;
   onExtChange(cb: (key: string, value: unknown) => void): () => void;
-  setForwardExt(fn: ((key: string, value: unknown) => Promise<void>) | null): void;
+  setForwardExt(
+    fn: ((key: string, value: unknown) => Promise<void>) | null,
+  ): void;
   /** A `core.*` row that is not one of the app preferences (`core.extensions`),
    *  from the same mirror. */
   getCore(key: string): unknown;
@@ -256,7 +269,8 @@ export interface CorePrefs extends Prefs {
 
 /** Extension settings share the table under `<extension id>.<name>`; the
  *  `core.` prefix is the app's own. */
-const isExtKey = (k: string): boolean => typeof k === 'string' && k.length > 0 && !k.startsWith('core.');
+const isExtKey = (k: string): boolean =>
+  typeof k === 'string' && k.length > 0 && !k.startsWith('core.');
 
 /** A copy of `value` that is exactly what the table will hold; rejects what
  *  JSON would drop or change silently (functions, symbols, bigint, undefined). */
@@ -264,7 +278,11 @@ function jsonCopy(value: unknown): unknown {
   let text: string | undefined;
   try {
     text = JSON.stringify(value, (_k, v) => {
-      if (typeof v === 'function' || typeof v === 'symbol' || typeof v === 'bigint') {
+      if (
+        typeof v === 'function' ||
+        typeof v === 'symbol' ||
+        typeof v === 'bigint'
+      ) {
         throw new TypeError('not JSON');
       }
       return v;
@@ -297,11 +315,15 @@ export function createPrefs(dir: string, user?: UserPrefsStore): CorePrefs {
   let store: UserPrefsStore | null = null;
   let mirror: Record<string, unknown> = {};
   let forwardUser: ((u: Partial<AppPrefs>) => Promise<void>) | null = null;
-  let forwardExt: ((key: string, value: unknown) => Promise<void>) | null = null;
+  let forwardExt: ((key: string, value: unknown) => Promise<void>) | null =
+    null;
   let queue: OfflineQueue | null = null;
   // Settings waiting in the queue (`overlay`) and delivered ones the feed has
   // not brought back yet (`optimistic`) show over the table; one `viewOf`.
-  const overlay = new Map<string, { value: unknown; rowId: number; stuck?: boolean }>();
+  const overlay = new Map<
+    string,
+    { value: unknown; rowId: number; stuck?: boolean }
+  >();
   const optimistic = new Map<string, { value: unknown; ackedAt: number }>();
   /** A queued value shows, except a stuck one on a device that writes the
    *  table itself: the table is the truth there and nothing will deliver it. */
@@ -333,7 +355,11 @@ export function createPrefs(dir: string, user?: UserPrefsStore): CorePrefs {
   /** Every extension key with a value in the view, to see what a step changed. */
   const extView = (): Map<string, unknown> => {
     const out = new Map<string, unknown>();
-    for (const k of [...Object.keys(mirror), ...overlay.keys(), ...optimistic.keys()]) {
+    for (const k of [
+      ...Object.keys(mirror),
+      ...overlay.keys(),
+      ...optimistic.keys(),
+    ]) {
       if (isExtKey(k)) out.set(k, viewOf(k));
     }
     return out;
@@ -468,7 +494,8 @@ export function createPrefs(dir: string, user?: UserPrefsStore): CorePrefs {
         // Device part first: it is applied whatever happens to the user part.
         if (Object.keys(device).length > 0) {
           const merged: Record<string, unknown> = { ...fromFile };
-          for (const k of Object.keys(device)) merged[k] = (next as unknown as Record<string, unknown>)[k];
+          for (const k of Object.keys(device))
+            merged[k] = (next as unknown as Record<string, unknown>)[k];
           fromFile = sanitize(merged);
           writeFile();
           recompute();
@@ -508,7 +535,9 @@ export function createPrefs(dir: string, user?: UserPrefsStore): CorePrefs {
               forward: async () => (await forwardUser!(userPart), { ok: true }),
               enqueue: (key) => {
                 const k = byKey.get(key)!;
-                return queue!.enqueue(userPrefRequest(k, next[k]), { coalesceKey: key });
+                return queue!.enqueue(userPrefRequest(k, next[k]), {
+                  coalesceKey: key,
+                });
               },
               apply: {
                 forwarded: ackForwarded,
@@ -522,7 +551,9 @@ export function createPrefs(dir: string, user?: UserPrefsStore): CorePrefs {
           recompute();
           emit();
         } else {
-          throw new Error('this device is a read-only copy: it cannot change this setting');
+          throw new Error(
+            'this device is a read-only copy: it cannot change this setting',
+          );
         }
       }),
     onChange(cb) {
@@ -538,7 +569,9 @@ export function createPrefs(dir: string, user?: UserPrefsStore): CorePrefs {
         if (meta && meta.pullStartedAt !== undefined) {
           for (const [k, o] of [...optimistic]) {
             if (meta.pullStartedAt <= o.ackedAt) continue;
-            if (meta.prefKeys.some((pk) => pk === k || k.startsWith(`${pk}.`))) {
+            if (
+              meta.prefKeys.some((pk) => pk === k || k.startsWith(`${pk}.`))
+            ) {
               optimistic.delete(k);
             }
           }
@@ -551,7 +584,8 @@ export function createPrefs(dir: string, user?: UserPrefsStore): CorePrefs {
         await seedLocked();
       }),
     hasQueued: (key) => overlay.has(key),
-    ackForwarded: (key, value) => void optimistic.set(key, { value, ackedAt: nowMs() }),
+    ackForwarded: (key, value) =>
+      void optimistic.set(key, { value, ackedAt: nowMs() }),
     setOfflineQueue(q) {
       queue = q;
     },
@@ -562,7 +596,11 @@ export function createPrefs(dir: string, user?: UserPrefsStore): CorePrefs {
       for (const r of rows) {
         const have = overlay.get(r.key);
         if (!have || have.rowId < r.rowId) {
-          overlay.set(r.key, { value: r.value, rowId: r.rowId, ...(r.stuck ? { stuck: true } : {}) });
+          overlay.set(r.key, {
+            value: r.value,
+            rowId: r.rowId,
+            ...(r.stuck ? { stuck: true } : {}),
+          });
         }
       }
       recompute();
@@ -573,7 +611,10 @@ export function createPrefs(dir: string, user?: UserPrefsStore): CorePrefs {
       serial(async () => {
         if (!queue) throw new SyncNoMaster();
         const key = extensionEnabledKey(id);
-        const rowId = await queue.enqueue(extensionEnabledRequest(id, enabled), { coalesceKey: key });
+        const rowId = await queue.enqueue(
+          extensionEnabledRequest(id, enabled),
+          { coalesceKey: key },
+        );
         overlay.set(key, { value: enabled, rowId });
         optimistic.delete(key);
         return rowId;
@@ -614,7 +655,8 @@ export function createPrefs(dir: string, user?: UserPrefsStore): CorePrefs {
     getExt: (key) => (isExtKey(key) ? viewOf(key) : undefined),
     setExt: (key, value, opts) =>
       serial(async () => {
-        if (!isExtKey(key)) throw new Error(`'${key}' is not an extension setting`);
+        if (!isExtKey(key))
+          throw new Error(`'${key}' is not an extension setting`);
         const stored = jsonCopy(value);
         if (!store) throw new Error('settings are not ready yet');
         if (store.canWrite()) {
@@ -634,8 +676,11 @@ export function createPrefs(dir: string, user?: UserPrefsStore): CorePrefs {
             await forwardOrQueue({
               keys: [key],
               isHeld: (k) => overlay.has(k),
-              forward: async () => (await forwardExt!(key, stored), { ok: true }),
-              enqueue: (k) => queue!.enqueue(extPrefRequest(k, stored), { coalesceKey: k }),
+              forward: async () => (
+                await forwardExt!(key, stored), { ok: true }
+              ),
+              enqueue: (k) =>
+                queue!.enqueue(extPrefRequest(k, stored), { coalesceKey: k }),
               apply: {
                 forwarded: ackForwarded,
                 queued: (k, rowId) => {
@@ -646,7 +691,9 @@ export function createPrefs(dir: string, user?: UserPrefsStore): CorePrefs {
             });
           }
         } else {
-          throw new Error('this device is a read-only copy: it cannot change this setting');
+          throw new Error(
+            'this device is a read-only copy: it cannot change this setting',
+          );
         }
       }),
     getCore: (key) => {
@@ -654,14 +701,13 @@ export function createPrefs(dir: string, user?: UserPrefsStore): CorePrefs {
       // The set as the table holds it, with every queued or just-delivered
       // switch laid over it.
       const prefix = `${key}.`;
-      const ids = [...new Set([...overlay.keys(), ...optimistic.keys()])].filter(
-        (k) => k.startsWith(prefix) && (queued(k) || optimistic.has(k)),
-      );
+      const ids = [
+        ...new Set([...overlay.keys(), ...optimistic.keys()]),
+      ].filter((k) => k.startsWith(prefix) && (queued(k) || optimistic.has(k)));
       if (ids.length === 0) return mirror[key];
-      const table = (mirror[key] && typeof mirror[key] === 'object' ? mirror[key] : {}) as Record<
-        string,
-        Record<string, unknown>
-      >;
+      const table = (
+        mirror[key] && typeof mirror[key] === 'object' ? mirror[key] : {}
+      ) as Record<string, Record<string, unknown>>;
       const out: Record<string, unknown> = { ...table };
       for (const k of ids) {
         const id = k.slice(prefix.length);
@@ -671,10 +717,13 @@ export function createPrefs(dir: string, user?: UserPrefsStore): CorePrefs {
     },
     updateCore: (key, fn) =>
       serial(async () => {
-        if (!key.startsWith('core.')) throw new Error(`'${key}' is not a core setting`);
+        if (!key.startsWith('core.'))
+          throw new Error(`'${key}' is not a core setting`);
         if (!store) throw new Error('settings are not ready yet');
         if (!store.canWrite()) {
-          throw new Error('this device is a read-only copy: it cannot change this setting');
+          throw new Error(
+            'this device is a read-only copy: it cannot change this setting',
+          );
         }
         // The function sees what this device shows (queued switches included),
         // so a switch it flips back is a change against that, and only those
@@ -688,11 +737,16 @@ export function createPrefs(dir: string, user?: UserPrefsStore): CorePrefs {
           mirror[key] = stored;
         }
         if (key === 'core.extensions') {
-          const was = (seen && typeof seen === 'object' ? seen : {}) as Record<string, unknown>;
-          const now = (stored && typeof stored === 'object' ? stored : {}) as Record<string, unknown>;
-          const changed = [...new Set([...Object.keys(was), ...Object.keys(now)])].filter(
-            (id) => !sameJson(was[id], now[id]),
-          );
+          const was = (seen && typeof seen === 'object' ? seen : {}) as Record<
+            string,
+            unknown
+          >;
+          const now = (
+            stored && typeof stored === 'object' ? stored : {}
+          ) as Record<string, unknown>;
+          const changed = [
+            ...new Set([...Object.keys(was), ...Object.keys(now)]),
+          ].filter((id) => !sameJson(was[id], now[id]));
           await supersede(changed.map((id) => extensionEnabledKey(id)));
         } else {
           await supersede([key]);
@@ -702,11 +756,13 @@ export function createPrefs(dir: string, user?: UserPrefsStore): CorePrefs {
       serial(async () => {
         const rows = store ? await store.all() : mirror;
         const out: Record<string, unknown> = {};
-        for (const [k, v] of Object.entries(rows)) if (offerableKey(k)) out[k] = v;
+        for (const [k, v] of Object.entries(rows))
+          if (offerableKey(k)) out[k] = v;
         // A user key still in prefs.json (never seeded here) is a choice too.
         for (const k of USER_PREF_KEYS) {
           const t = tableKey(k);
-          if (!(t in out) && !sameJson(fromFile[k], DEFAULT_PREFS[k])) out[t] = fromFile[k];
+          if (!(t in out) && !sameJson(fromFile[k], DEFAULT_PREFS[k]))
+            out[t] = fromFile[k];
         }
         return out;
       }),
@@ -714,7 +770,9 @@ export function createPrefs(dir: string, user?: UserPrefsStore): CorePrefs {
       serial(async () => {
         if (!store) throw new Error('settings are not ready yet');
         if (!store.canWrite()) {
-          throw new Error('this device is a read-only copy: it cannot change this setting');
+          throw new Error(
+            'this device is a read-only copy: it cannot change this setting',
+          );
         }
         // The master's own file values count as the master's: move them first.
         await seedLocked();

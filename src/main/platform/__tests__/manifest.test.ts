@@ -317,7 +317,11 @@ describe('prepareExport contributions (2.18.0)', () => {
   it('lists the source ids whose connector moves its own login, defaulting to none', () => {
     const m = parseManifest({
       ...GOOD,
-      contributes: { sources: ['telegram'], senders: [], prepareExport: ['telegram'] },
+      contributes: {
+        sources: ['telegram'],
+        senders: [],
+        prepareExport: ['telegram'],
+      },
     });
     expect(prepareExportContributions(m)).toEqual(['telegram']);
     expect(prepareExportContributions(parseManifest(GOOD))).toEqual([]);
@@ -325,10 +329,16 @@ describe('prepareExport contributions (2.18.0)', () => {
 
   it('refuses a non-list and an empty id', () => {
     expect(() =>
-      parseManifest({ ...GOOD, contributes: { senders: [], prepareExport: 'telegram' } }),
+      parseManifest({
+        ...GOOD,
+        contributes: { senders: [], prepareExport: 'telegram' },
+      }),
     ).toThrow();
     expect(() =>
-      parseManifest({ ...GOOD, contributes: { senders: [], prepareExport: [''] } }),
+      parseManifest({
+        ...GOOD,
+        contributes: { senders: [], prepareExport: [''] },
+      }),
     ).toThrow();
   });
 });
@@ -497,16 +507,24 @@ describe('manifest sync block (step 3)', () => {
   });
 
   it('accepts forward and deliver name lists', () => {
-    const m = parseManifest(withSync({ forward: ['claim'], deliver: ['import'] }));
+    const m = parseManifest(
+      withSync({ forward: ['claim'], deliver: ['import'] }),
+    );
     expect(m.sync).toEqual({ forward: ['claim'], deliver: ['import'] });
   });
 
   it('rejects unknown keys and empty names', () => {
-    expect(() => parseManifest(withSync({ forwards: ['x'] }))).toThrow(ManifestError);
-    expect(() => parseManifest(withSync({ forward: [''] }))).toThrow(ManifestError);
+    expect(() => parseManifest(withSync({ forwards: ['x'] }))).toThrow(
+      ManifestError,
+    );
+    expect(() => parseManifest(withSync({ forward: [''] }))).toThrow(
+      ManifestError,
+    );
   });
 
   it('needs the ui capability, since the names are ui.handle names', () => {
-    expect(() => parseManifest(withSync({ forward: ['claim'] }, ['net']))).toThrow(/ui/);
+    expect(() =>
+      parseManifest(withSync({ forward: ['claim'] }, ['net'])),
+    ).toThrow(/ui/);
   });
 });

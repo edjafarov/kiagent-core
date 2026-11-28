@@ -10,11 +10,23 @@ const write = (file: string, text: string) => {
   fs.mkdirSync(path.dirname(file), { recursive: true });
   fs.writeFileSync(file, text);
 };
-const row = (d: Device, rel: string, text: string, o: { missing?: number; deleted?: number; parked?: number } = {}) =>
+const row = (
+  d: Device,
+  rel: string,
+  text: string,
+  o: { missing?: number; deleted?: number; parked?: number } = {},
+) =>
   d.db.run(
     `INSERT INTO shared_files(root, rel_path, sha256, bytes, mtime, missing_here, deleted, parked, rev)
      VALUES('incoming', ?, ?, ?, 't', ?, ?, ?, 3)`,
-    [rel, sha(text), text.length, o.missing ?? 0, o.deleted ?? 0, o.parked ?? 0],
+    [
+      rel,
+      sha(text),
+      text.length,
+      o.missing ?? 0,
+      o.deleted ?? 0,
+      o.parked ?? 0,
+    ],
   );
 
 async function leader() {
@@ -30,8 +42,13 @@ it('a parked present row is listed as present, and not offered to the sorter', a
   write(path.join(incoming, 'parked.pdf'), 'parked');
   await row(d, 'free.pdf', 'free');
   await row(d, 'parked.pdf', 'parked', { parked: 1 });
-  expect(await d.svc.listForSorting()).toEqual([path.join(incoming, 'free.pdf')]);
-  expect(await d.svc.listPresent()).toEqual([path.join(incoming, 'free.pdf'), path.join(incoming, 'parked.pdf')]);
+  expect(await d.svc.listForSorting()).toEqual([
+    path.join(incoming, 'free.pdf'),
+  ]);
+  expect(await d.svc.listPresent()).toEqual([
+    path.join(incoming, 'free.pdf'),
+    path.join(incoming, 'parked.pdf'),
+  ]);
 });
 
 it('an older version here (missing_here) and a deleted row are in neither list', async () => {

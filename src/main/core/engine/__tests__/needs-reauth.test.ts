@@ -371,7 +371,10 @@ describe('source error taxonomy', () => {
       },
       async *pull(session) {
         seenTokens.push((await session.credentials())?.accessToken);
-        yield { phase: 'live', items: [], cursor: 1 } as Batch<unknown, unknown>;
+        yield { phase: 'live', items: [], cursor: 1 } as Batch<
+          unknown,
+          unknown
+        >;
       },
       toDocument: () => null,
     };

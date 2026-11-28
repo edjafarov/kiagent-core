@@ -104,8 +104,12 @@ describe('host.secrets surface', () => {
     const secrets = fakeSecrets();
     const r = build('ext.a', { secrets }).router;
     for (const bad of ['', 'A', 'a:b', 'a.b', 'x'.repeat(41), 3]) {
-      await expect(r.dispatch('secrets', 'put', [bad, 'v'])).rejects.toThrow('invalid secret name');
-      await expect(r.dispatch('secrets', 'get', [bad])).rejects.toThrow('invalid secret name');
+      await expect(r.dispatch('secrets', 'put', [bad, 'v'])).rejects.toThrow(
+        'invalid secret name',
+      );
+      await expect(r.dispatch('secrets', 'get', [bad])).rejects.toThrow(
+        'invalid secret name',
+      );
     }
     expect(secrets.rows.size).toBe(0);
   });
@@ -114,7 +118,9 @@ describe('host.secrets surface', () => {
     const secrets = fakeSecrets();
     const sync = fakeSync(true);
     const r = build('ext.a', { secrets, sync }).router;
-    await expect(r.dispatch('secrets', 'put', ['identity', 'v'])).rejects.toBeInstanceOf(SyncReadOnly);
+    await expect(
+      r.dispatch('secrets', 'put', ['identity', 'v']),
+    ).rejects.toBeInstanceOf(SyncReadOnly);
     expect(secrets.rows.size).toBe(0);
     sync.state.readOnly = false;
     await r.dispatch('secrets', 'put', ['identity', 'v']);
@@ -146,7 +152,11 @@ describe('host.secrets surface', () => {
   it('closing the surface stops delivery', async () => {
     const sync = fakeSync();
     const delivered: unknown[][] = [];
-    const { router, built } = build('ext.a', { secrets: fakeSecrets(), sync, delivered });
+    const { router, built } = build('ext.a', {
+      secrets: fakeSecrets(),
+      sync,
+      delivered,
+    });
     await router.dispatch('secrets', 'watch', []);
     await built.close();
     sync.arrive('secret:ext.a:x');
@@ -156,13 +166,17 @@ describe('host.secrets surface', () => {
   it('an extension without the secrets grant is refused by the router', async () => {
     const secrets = fakeSecrets();
     const r = build('ext.a', { secrets, granted: [] }).router;
-    await expect(r.dispatch('secrets', 'put', ['identity', 'v'])).rejects.toThrow(/CAP_DENIED/);
+    await expect(
+      r.dispatch('secrets', 'put', ['identity', 'v']),
+    ).rejects.toThrow(/CAP_DENIED/);
     expect(secrets.rows.size).toBe(0);
   });
 
   it('a surface built without a store rejects', async () => {
     const r = build('ext.a', {}).router;
-    await expect(r.dispatch('secrets', 'get', ['identity'])).rejects.toThrow(/not available/);
+    await expect(r.dispatch('secrets', 'get', ['identity'])).rejects.toThrow(
+      /not available/,
+    );
   });
 });
 
@@ -178,7 +192,9 @@ describe('manifest tier for secrets', () => {
   };
   it('a non-bundled extension asking for secrets fails validation', () => {
     expect(() => parseManifest(base)).toThrow(/secrets.*bundled/i);
-    expect(() => parseManifest(base, { tier: 'external' })).toThrow(/secrets.*bundled/i);
+    expect(() => parseManifest(base, { tier: 'external' })).toThrow(
+      /secrets.*bundled/i,
+    );
   });
   it('a bundled one is accepted', () => {
     expect(parseManifest(base, { tier: 'bundled' }).caps).toContain('secrets');
@@ -243,7 +259,10 @@ describe('host.secrets in the extension process', () => {
       ['secrets', 'put', ['identity', 'v2']],
       ['secrets', 'watch', []],
     ]);
-    for (const [name, at] of [['a', 1], ['b', 2]] as const)
+    for (const [name, at] of [
+      ['a', 1],
+      ['b', 2],
+    ] as const)
       mainEp.post({
         kind: 'event',
         name: 'platform.secrets.change',

@@ -33,7 +33,8 @@ export type MirrorDeps = Pick<
 /** The pass was told to stop (the role changed): it ends without side effects. */
 class Stopped extends Error {}
 const check = (d: MirrorDeps): void => {
-  if (!(d.still?.() ?? true)) throw new Stopped('shared-folders: the role changed');
+  if (!(d.still?.() ?? true))
+    throw new Stopped('shared-folders: the role changed');
 };
 
 /** The root stopped being really here (its marker is gone) mid-pass: this
@@ -41,9 +42,14 @@ const check = (d: MirrorDeps): void => {
 class RootGone extends Error {}
 /** Right before a file action, and after each wait on the network: the pass
  *  goes on only while the role is the same and the root still holds its marker. */
-async function alive(d: MirrorDeps, root: SharedRoot, base: string): Promise<void> {
+async function alive(
+  d: MirrorDeps,
+  root: SharedRoot,
+  base: string,
+): Promise<void> {
   check(d);
-  if ((await checkRoot(d, root, base)) !== 'ok') throw new RootGone(`shared-folders: the ${root} folder went away`);
+  if ((await checkRoot(d, root, base)) !== 'ok')
+    throw new RootGone(`shared-folders: the ${root} folder went away`);
 }
 
 type Row = FileRow & { bytes: number; mtime: string };
@@ -110,7 +116,12 @@ async function mirrorRoot(
   // The listing counts only if the root was really here while it was made.
   if ((await checkRoot(d, root, base)) !== 'ok') return;
 
-  const groups = groupByName(key, [...disk.files].map(([rel, f]) => ({ ...f, rel })), mirrorList, rowList);
+  const groups = groupByName(
+    key,
+    [...disk.files].map(([rel, f]) => ({ ...f, rel })),
+    mirrorList,
+    rowList,
+  );
   const seenKeys = new Set([...disk.seen].map(key));
 
   const dropMirror = async (rel: string): Promise<void> => {
@@ -175,7 +186,12 @@ async function mirrorRoot(
       check(d);
       await act();
     } catch (err) {
-      if (err instanceof TransportFailed || err instanceof Stopped || err instanceof RootGone) throw err;
+      if (
+        err instanceof TransportFailed ||
+        err instanceof Stopped ||
+        err instanceof RootGone
+      )
+        throw err;
       d.log('warn', `${root}/${rel}: ${String(err)}`);
     }
   };
@@ -193,7 +209,9 @@ async function mirrorRoot(
       const { m, r } = g;
       // A scan this Mac filed itself has no mirror entry yet: its capture id
       // is in a note for these very bytes at this very path.
-      const note = m?.capture_id ? null : await noteFor(d.db, root, f.rel, f.sha);
+      const note = m?.capture_id
+        ? null
+        : await noteFor(d.db, root, f.rel, f.sha);
       const captureId = m?.capture_id ?? note?.capture_id ?? null;
       const answer = await viaTransport(
         transport.offer(
@@ -219,7 +237,10 @@ async function mirrorRoot(
         return;
       }
       await d.db.batch([
-        { sql: UPSERT_MIRROR, params: [root, mrel, f.sha, f.stats.size, f.mtimeMs, captureId] },
+        {
+          sql: UPSERT_MIRROR,
+          params: [root, mrel, f.sha, f.stats.size, f.mtimeMs, captureId],
+        },
         ...(note ? [{ sql: DELETE_OP, params: [note.id] }] : []),
       ]);
     });
@@ -249,7 +270,11 @@ async function mirrorRoot(
     const m = g.m!;
     // eslint-disable-next-line no-await-in-loop
     await forPath(m.rel_path, async () => {
-      if ((await stillMirrored(d, await safeAbs(base, m.rel_path), m)) !== 'absent') return;
+      if (
+        (await stillMirrored(d, await safeAbs(base, m.rel_path), m)) !==
+        'absent'
+      )
+        return;
       await alive(d, root, base); // a deletion is only sent while the folder is really here
       await viaTransport(
         transport.remove({ root, relPath: g.r!.rel_path, sha256: m.sha256 }),
@@ -294,7 +319,11 @@ async function fetchOne(
   }
   if (offset < r.bytes) {
     const got = await viaTransport(
-      transport.fetch({ root, relPath: r.rel_path, sha256: r.sha256 }, tmp, offset),
+      transport.fetch(
+        { root, relPath: r.rel_path, sha256: r.sha256 },
+        tmp,
+        offset,
+      ),
     );
     await alive(d, root, base);
     if (got === 'gone') return; // the leader moved on: wait for the next rows

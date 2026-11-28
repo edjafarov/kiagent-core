@@ -35,7 +35,7 @@ it('creating it again is not asked for once an account exists', async () => {
   expect(a.calls).toEqual([]);
 });
 
-it('a copy never creates it; the leader\'s account arrives with the copied rows', async () => {
+it("a copy never creates it; the leader's account arrives with the copied rows", async () => {
   const a = make();
   const d = await device('copy', { ensureAccount: a.ensureAccount });
   await withRoots(d);

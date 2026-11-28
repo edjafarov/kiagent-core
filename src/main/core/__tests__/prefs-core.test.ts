@@ -6,7 +6,10 @@ import { createPrefs, type UserPrefsStore } from '../prefs';
 
 function fakeStore(initial: Record<string, unknown> = {}, writable = true) {
   const rows: Record<string, unknown> = { ...initial };
-  const s: UserPrefsStore & { rows: Record<string, unknown>; writable: boolean } = {
+  const s: UserPrefsStore & {
+    rows: Record<string, unknown>;
+    writable: boolean;
+  } = {
     rows,
     writable,
     all: async () => JSON.parse(JSON.stringify(rows)),
@@ -35,10 +38,18 @@ describe('core.* rows outside the app preferences (core.extensions)', () => {
     const p = await make(store);
     expect(p.getCore('core.extensions')).toEqual({ a: { enabled: true } });
     await Promise.all([
-      p.updateCore('core.extensions', (c) => ({ ...(c as object), b: { enabled: false } })),
-      p.updateCore('core.extensions', (c) => ({ ...(c as object), c: { enabled: true } })),
+      p.updateCore('core.extensions', (c) => ({
+        ...(c as object),
+        b: { enabled: false },
+      })),
+      p.updateCore('core.extensions', (c) => ({
+        ...(c as object),
+        c: { enabled: true },
+      })),
     ]);
-    expect(Object.keys(store.rows['core.extensions'] as object).sort()).toEqual(['a', 'b', 'c']);
+    expect(Object.keys(store.rows['core.extensions'] as object).sort()).toEqual(
+      ['a', 'b', 'c'],
+    );
     expect(p.getCore('core.extensions')).toEqual(store.rows['core.extensions']);
   });
 
@@ -52,7 +63,9 @@ describe('core.* rows outside the app preferences (core.extensions)', () => {
   it('a follower cannot write it, and the feed refreshes what it reads', async () => {
     const store = fakeStore({}, false);
     const p = await make(store);
-    await expect(p.updateCore('core.extensions', () => ({}))).rejects.toThrow(/read-only/);
+    await expect(p.updateCore('core.extensions', () => ({}))).rejects.toThrow(
+      /read-only/,
+    );
     store.rows['core.extensions'] = { z: { enabled: true } };
     await p.refreshUser();
     expect(p.getCore('core.extensions')).toEqual({ z: { enabled: true } });

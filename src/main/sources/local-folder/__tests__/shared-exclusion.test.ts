@@ -33,7 +33,10 @@ const write = (rel: string, text = 'text') => {
   fs.writeFileSync(abs, text);
   return abs;
 };
-const session = (signal = new AbortController().signal, watch = false): Session => {
+const session = (
+  signal = new AbortController().signal,
+  watch = false,
+): Session => {
   const account: Account = {
     id: 'acct-lf',
     source: 'local-folder',
@@ -43,7 +46,13 @@ const session = (signal = new AbortController().signal, watch = false): Session 
     cursor: null,
     createdAt: new Date().toISOString(),
   } as never;
-  return { account, signal, credentials: async () => null, saveCredentials: async () => {}, log: () => {} };
+  return {
+    account,
+    signal,
+    credentials: async () => null,
+    saveCredentials: async () => {},
+    log: () => {},
+  };
 };
 const names = async (it: AsyncIterable<{ absPath: string }>) => {
   const out: string[] = [];
@@ -56,7 +65,9 @@ describe('isExcluded', () => {
     expect(isExcluded(shared, [shared])).toBe(true);
     expect(isExcluded(path.join(shared, 'a', 'b.txt'), [shared])).toBe(true);
     expect(isExcluded(`${shared} 2/a.txt`, [shared])).toBe(false);
-    expect(isExcluded(path.join(parent, 'Scans', 'x.txt'), [shared])).toBe(false);
+    expect(isExcluded(path.join(parent, 'Scans', 'x.txt'), [shared])).toBe(
+      false,
+    );
     expect(isExcluded(shared, [])).toBe(false);
     expect(isExcluded(shared, undefined)).toBe(false);
   });
@@ -70,22 +81,33 @@ describe('the walk', () => {
     write('Documents/Scans/other.txt');
     const opened: string[] = [];
     const real = fs.promises.opendir.bind(fs.promises);
-    const spy = jest.spyOn(fs.promises, 'opendir').mockImplementation(((p: string, ...rest: unknown[]) => {
+    const spy = jest.spyOn(fs.promises, 'opendir').mockImplementation(((
+      p: string,
+      ...rest: unknown[]
+    ) => {
       opened.push(String(p));
       return (real as (...a: unknown[]) => Promise<fs.Dir>)(p, ...rest);
     }) as never);
     try {
-      expect(await names(walkRoot(parent, undefined, [shared]))).toEqual(['Scans/other.txt', 'sibling.txt']);
+      expect(await names(walkRoot(parent, undefined, [shared]))).toEqual([
+        'Scans/other.txt',
+        'sibling.txt',
+      ]);
     } finally {
       spy.mockRestore();
     }
-    expect(opened.some((p) => p === shared || p.startsWith(`${shared}${path.sep}`))).toBe(false);
+    expect(
+      opened.some((p) => p === shared || p.startsWith(`${shared}${path.sep}`)),
+    ).toBe(false);
   });
 
   it('without an exclusion it lists everything (the control)', async () => {
     write('Documents/sibling.txt');
     write('Documents/Scans/Sorted/b.txt');
-    expect(await names(walkRoot(parent))).toEqual(['Scans/Sorted/b.txt', 'sibling.txt']);
+    expect(await names(walkRoot(parent))).toEqual([
+      'Scans/Sorted/b.txt',
+      'sibling.txt',
+    ]);
   });
 
   it('a root that is itself the shared folder, or inside it, lists nothing', async () => {
@@ -93,7 +115,10 @@ describe('the walk', () => {
     write('Documents/Scans/Sorted/deep/c.txt');
     const out: string[] = [];
     for await (const p of walkPaths(shared, undefined, [shared])) out.push(p);
-    for await (const p of walkPaths(path.join(shared, 'deep'), undefined, [shared])) out.push(p);
+    for await (const p of walkPaths(path.join(shared, 'deep'), undefined, [
+      shared,
+    ]))
+      out.push(p);
     expect(out).toEqual([]);
   });
 });
@@ -101,7 +126,9 @@ describe('the walk', () => {
 describe('the source', () => {
   const source = (excluded?: () => string[]) =>
     createLocalFolderSource({
-      converter: { expandPage: async () => ({ items: [], done: true }) } as never,
+      converter: {
+        expandPage: async () => ({ items: [], done: true }),
+      } as never,
       excluded,
     });
 
@@ -111,7 +138,8 @@ describe('the source', () => {
     const src = source(() => [shared]);
     const ids: string[] = [];
     for await (const b of src.pull(session(), null))
-      for (const i of b.items) ids.push(path.relative(parent, (i as { absPath: string }).absPath));
+      for (const i of b.items)
+        ids.push(path.relative(parent, (i as { absPath: string }).absPath));
     expect(ids).toEqual(['sibling.txt']);
   });
 
@@ -126,7 +154,8 @@ describe('the source', () => {
     write('Documents/sibling2.txt', 'b');
     const ids: string[] = [];
     for await (const b of src.pull(session(), cursor as never))
-      for (const i of b.items) ids.push(path.relative(parent, (i as { absPath: string }).absPath));
+      for (const i of b.items)
+        ids.push(path.relative(parent, (i as { absPath: string }).absPath));
     expect(ids).toEqual(['sibling2.txt']);
   });
 
@@ -150,7 +179,11 @@ describe('the source', () => {
       while (!seen.includes('live-sibling.txt') && Date.now() < deadline) {
         // eslint-disable-next-line no-await-in-loop
         const r = await Promise.race([it.next(), sleep(500).then(() => null)]);
-        if (r && !r.done) for (const i of r.value.items) seen.push(path.relative(parent, (i as { absPath: string }).absPath));
+        if (r && !r.done)
+          for (const i of r.value.items)
+            seen.push(
+              path.relative(parent, (i as { absPath: string }).absPath),
+            );
       }
       await sleep(300);
     } finally {
@@ -166,10 +199,14 @@ describe('the source', () => {
     const inShared = write('Documents/Scans/Sorted/a.txt', 'a');
     const src = source(() => [shared]);
     const listed: string[] = [];
-    for await (const page of src.reconcile!(session())) listed.push(...page.map((r) => r.externalId));
+    for await (const page of src.reconcile!(session()))
+      listed.push(...page.map((r) => r.externalId));
     expect(listed.map((l) => path.basename(l))).toEqual(['sibling.txt']);
-    const doc = (abs: string) => ({ metadata: { absPath: abs } }) as unknown as Document;
-    expect(Buffer.from((await src.fetchBytes!(session(), doc(sib)))!).toString()).toBe('sib');
+    const doc = (abs: string) =>
+      ({ metadata: { absPath: abs } }) as unknown as Document;
+    expect(
+      Buffer.from((await src.fetchBytes!(session(), doc(sib)))!).toString(),
+    ).toBe('sib');
     expect(await src.fetchBytes!(session(), doc(inShared))).toBeNull();
   });
 
@@ -195,9 +232,12 @@ describe('the watcher', () => {
       write('Documents/sibling2.txt', 'b');
       await sleep(900);
       const seen: string[] = [];
-      for (let e = w.take(); e; e = w.take()) seen.push(path.relative(parent, e.absPath));
+      for (let e = w.take(); e; e = w.take())
+        seen.push(path.relative(parent, e.absPath));
       expect(seen).toContain('sibling2.txt');
-      expect(seen.some((s) => s.startsWith(path.join('Scans', 'Sorted')))).toBe(false);
+      expect(seen.some((s) => s.startsWith(path.join('Scans', 'Sorted')))).toBe(
+        false,
+      );
     } finally {
       ac.abort();
       await w.close();
@@ -216,7 +256,8 @@ describe('the watcher', () => {
       write('Documents/ok.txt', 'b');
       await sleep(900);
       const seen: string[] = [];
-      for (let e = w.take(); e; e = w.take()) seen.push(path.relative(parent, e.absPath));
+      for (let e = w.take(); e; e = w.take())
+        seen.push(path.relative(parent, e.absPath));
       expect(seen).toContain('ok.txt');
       expect(seen).not.toContain(path.join('Scans', 'Sorted', 'late.txt'));
     } finally {

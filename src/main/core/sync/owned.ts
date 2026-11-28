@@ -37,16 +37,30 @@ export const MAX_BATCH_BYTES = 16 * 1024 * 1024;
  *  error, deletions and relink, so a crash between pieces never moves the
  *  cursor past documents the leader has not seen. Anything that is not an
  *  account batch with documents stays whole. */
-export function splitBatch(batch: CommitBatch, maxBytes = MAX_BATCH_BYTES): CommitBatch[] {
-  const b = batch as unknown as { account?: string; documents?: unknown[] } & Record<string, unknown>;
-  if (!('account' in b) || !Array.isArray(b.documents) || b.documents.length < 2) return [batch];
+export function splitBatch(
+  batch: CommitBatch,
+  maxBytes = MAX_BATCH_BYTES,
+): CommitBatch[] {
+  const b = batch as unknown as {
+    account?: string;
+    documents?: unknown[];
+  } & Record<string, unknown>;
+  if (
+    !('account' in b) ||
+    !Array.isArray(b.documents) ||
+    b.documents.length < 2
+  )
+    return [batch];
   if (JSON.stringify(batch).length <= maxBytes) return [batch];
   const { documents, ...tail } = b;
   const parts: unknown[][] = [];
   let cur: unknown[] = [];
   let size = 0;
   // Room for the envelope around the documents.
-  const budget = Math.max(1, maxBytes - JSON.stringify({ ...tail, documents: [] }).length);
+  const budget = Math.max(
+    1,
+    maxBytes - JSON.stringify({ ...tail, documents: [] }).length,
+  );
   for (const d of documents) {
     const n = JSON.stringify(d).length + 1;
     if (cur.length > 0 && size + n > budget) {
@@ -58,10 +72,15 @@ export function splitBatch(batch: CommitBatch, maxBytes = MAX_BATCH_BYTES): Comm
     size += n;
   }
   if (cur.length) parts.push(cur);
-  return parts.map((docs, i) =>
-    (i === parts.length - 1
-      ? { ...tail, documents: docs }
-      : { account: b.account, documents: docs, cursor: undefined }) as unknown as CommitBatch,
+  return parts.map(
+    (docs, i) =>
+      (i === parts.length - 1
+        ? { ...tail, documents: docs }
+        : {
+            account: b.account,
+            documents: docs,
+            cursor: undefined,
+          }) as unknown as CommitBatch,
   );
 }
 
@@ -72,17 +91,20 @@ export function splitBatch(batch: CommitBatch, maxBytes = MAX_BATCH_BYTES): Comm
  *  id the batch is moved to that id. The leader never runs the account: a new
  *  row rests as `paused`, as an offered one does (step 1). */
 export async function runCommitBatch(
-  deps: { db: Pick<AppDb, 'all' | 'run'>; store: Pick<CoreStore, 'commit' | 'applyFolderScope'> },
+  deps: {
+    db: Pick<AppDb, 'all' | 'run'>;
+    store: Pick<CoreStore, 'commit' | 'applyFolderScope'>;
+  },
   input: CommitInput | ScopeInput,
 ): Promise<void> {
   if ('scope' in input) {
     // A folder-scope edit the owner made. The owner is the authority on its
     // own account, so the stale-config guard compares against what this
     // device holds now; the roots and the archive list are the owner's.
-    const row = (await deps.db.all(`SELECT id, config FROM accounts WHERE source = ? AND identifier = ?`, [
-      input.account.source,
-      input.account.identifier,
-    ])) as { id: string; config: string }[];
+    const row = (await deps.db.all(
+      `SELECT id, config FROM accounts WHERE source = ? AND identifier = ?`,
+      [input.account.source, input.account.identifier],
+    )) as { id: string; config: string }[];
     if (!row[0]) return;
     await deps.store.applyFolderScope({
       ...input.scope,
@@ -96,10 +118,10 @@ export async function runCommitBatch(
   // on the leader itself. A late batch from an owner on an older build or
   // from its outbound queue would otherwise bring back a collapsed row.
   if (!isDeviceOwned(a.source)) return;
-  const found = (await deps.db.all(`SELECT id FROM accounts WHERE source = ? AND identifier = ?`, [
-    a.source,
-    a.identifier,
-  ])) as { id: string }[];
+  const found = (await deps.db.all(
+    `SELECT id FROM accounts WHERE source = ? AND identifier = ?`,
+    [a.source, a.identifier],
+  )) as { id: string }[];
   let id = found[0]?.id;
   if (!id) {
     if ('removeAccount' in input.batch) return;

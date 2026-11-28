@@ -9,7 +9,12 @@ import { openDbInWorker } from '@main/db/worker-client';
 import type { AppDb } from '@main/db/app-db';
 import type { Account, LeaseSnapshot } from '@shared/contracts';
 
-import { promoteCore, resumeAccounts, resumeHeld, type CorePlatform } from '../../boot';
+import {
+  promoteCore,
+  resumeAccounts,
+  resumeHeld,
+  type CorePlatform,
+} from '../../boot';
 import { openStore, type CoreStore } from '../../store/store';
 import { notMineToRun } from '../sources';
 import { gateEngine, readSyncGate } from '../role';
@@ -65,9 +70,12 @@ beforeEach(async () => {
   );
   execArgv = [
     '--no-experimental-strip-types',
-    '-r', preload,
-    '-r', 'ts-node/register/transpile-only',
-    '-r', 'tsconfig-paths/register',
+    '-r',
+    preload,
+    '-r',
+    'ts-node/register/transpile-only',
+    '-r',
+    'tsconfig-paths/register',
   ];
   await open();
 }, 60_000);
@@ -79,7 +87,8 @@ afterEach(async () => {
 });
 
 let n = 0;
-const write = () => store.createAccount({ source: 's', identifier: `i${(n += 1)}` });
+const write = () =>
+  store.createAccount({ source: 's', identifier: `i${(n += 1)}` });
 const lease = (o: Partial<LeaseSnapshot> = {}): LeaseSnapshot => ({
   isMaster: true,
   reason: 'solo',
@@ -96,7 +105,10 @@ const promote = async (epoch: number) => {
   await sync.open('head-acked');
 };
 const state = async () =>
-  (await db.all(`SELECT * FROM sync_state`))[0] as Record<string, number | string | null>;
+  (await db.all(`SELECT * FROM sync_state`))[0] as Record<
+    string,
+    number | string | null
+  >;
 const follow = () =>
   db.run(
     `UPDATE sync_state SET role='follower', master_device_id='m1', tracking=0,
@@ -192,17 +204,29 @@ describe('one order for the held work', () => {
       store: {
         read: {
           accounts: async () => [
-            { id: 'live', source: 'gmail', identifier: 'x', status: 'live', cursor: { c: 1 }, config: {}, ownerDeviceId: null },
+            {
+              id: 'live',
+              source: 'gmail',
+              identifier: 'x',
+              status: 'live',
+              cursor: { c: 1 },
+              config: {},
+              ownerDeviceId: null,
+            },
           ],
         },
       },
       sources: { get: (id: string) => ({ descriptor: { id } }) },
       logSink: { log: () => undefined },
-      engine: { run: (a: Account) => (runs.push(a.id), {}), isRunning: () => false },
+      engine: {
+        run: (a: Account) => (runs.push(a.id), {}),
+        isRunning: () => false,
+      },
       scheduler: { register: jest.fn() },
       sync: { deviceId: () => 'me-device' },
     } as unknown as CorePlatform;
-    resumeWork = () => resumeHeld(p, { attachHeld: async () => void (attached += 1) });
+    resumeWork = () =>
+      resumeHeld(p, { attachHeld: async () => void (attached += 1) });
     await sync.beginJoin();
     await sync.leaveJoin();
     expect(attached).toBe(1);
@@ -231,7 +255,9 @@ describe('one order for the held work', () => {
     expect(holds).toBe(1);
     expect(resumes).toBe(1);
     expect(holding).toBe(false);
-    const row = (await db.all(`SELECT joining FROM sync_state`))[0] as { joining: number };
+    const row = (await db.all(`SELECT joining FROM sync_state`))[0] as {
+      joining: number;
+    };
     expect(row.joining).toBe(0);
   });
 
@@ -288,13 +314,25 @@ describe('one order for the held work', () => {
 
 describe('what promotion starts', () => {
   const account = (o: Partial<Account>): Account =>
-    ({ id: 'a', source: 'gmail', identifier: 'x', status: 'idle', cursor: { c: 1 }, config: {}, ownerDeviceId: null, ...o }) as never;
+    ({
+      id: 'a',
+      source: 'gmail',
+      identifier: 'x',
+      status: 'idle',
+      cursor: { c: 1 },
+      config: {},
+      ownerDeviceId: null,
+      ...o,
+    }) as never;
   const platform = (accounts: Account[], runs: unknown[]) =>
     ({
       store: { read: { accounts: async () => accounts } },
       sources: { get: (id: string) => ({ descriptor: { id } }) },
       logSink: { log: () => undefined },
-      engine: { run: (a: Account) => (runs.push(a), {}), isRunning: () => false },
+      engine: {
+        run: (a: Account) => (runs.push(a), {}),
+        isRunning: () => false,
+      },
       scheduler: { register: jest.fn() },
     }) as unknown as CorePlatform;
 
@@ -346,14 +384,29 @@ describe('what promotion starts', () => {
   });
   it('promoteCore releases the hold before it re-runs accounts, through the real gate', async () => {
     const order: string[] = [];
-    const run = jest.fn(() => (order.push('resume'), { stop: async () => undefined, status: 'running' }));
-    const eng = { run, attach: jest.fn(() => ({ stop: async () => undefined, status: 'running' })), rerunDeferred: jest.fn() };
+    const run = jest.fn(
+      () => (
+        order.push('resume'), { stop: async () => undefined, status: 'running' }
+      ),
+    );
+    const eng = {
+      run,
+      attach: jest.fn(() => ({
+        stop: async () => undefined,
+        status: 'running',
+      })),
+      rerunDeferred: jest.fn(),
+    };
     const g = gateEngine(eng as never, () => false);
     await g.closeWriter();
     const p = {
       ...platform([account({})], []),
       sync: { deviceId: () => 'me-device' },
-      engine: { run: (a: Account) => (eng as unknown as { run(a: Account): unknown }).run(a), isRunning: () => false },
+      engine: {
+        run: (a: Account) =>
+          (eng as unknown as { run(a: Account): unknown }).run(a),
+        isRunning: () => false,
+      },
     } as unknown as CorePlatform;
     await promoteCore(p, {
       archiveSweep: () => void order.push('sweep'),

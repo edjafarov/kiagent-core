@@ -51,14 +51,17 @@ let store: CoreStore;
 let snap: string;
 let receiver: string;
 const open = () => new Database(receiver);
-const sha = (f: string) => createHash('sha256').update(fs.readFileSync(f)).digest('hex');
+const sha = (f: string) =>
+  createHash('sha256').update(fs.readFileSync(f)).digest('hex');
 const archives = () =>
   fs
     .readdirSync(path.dirname(receiver))
     .filter((f) => f.includes('.archive-') && /\d$/.test(f))
     .sort();
 const sidecars = () =>
-  fs.readdirSync(path.dirname(receiver)).filter((f) => f.includes('.passed-over.json'));
+  fs
+    .readdirSync(path.dirname(receiver))
+    .filter((f) => f.includes('.passed-over.json'));
 
 /** A follower of an earlier master that also holds queued work and a row (X2)
  *  that only its own file ever published. */
@@ -79,18 +82,35 @@ function makeFollowerReceiver(file: string): void {
 
 /** A device with its own database (role normal): a plain swap archives it. */
 function makeNormalReceiver(file: string): void {
-  for (const ext of ['', '-wal', '-shm']) fs.rmSync(`${file}${ext}`, { force: true });
+  for (const ext of ['', '-wal', '-shm'])
+    fs.rmSync(`${file}${ext}`, { force: true });
   const d = new Database(file);
   d.pragma('journal_mode = WAL');
   migrate(d);
   d.close();
 }
 
-const prepare = async (opts: { markId: string; attempt: number } | null = KEEP) => {
-  const a = await store.createAccount({ source: 'test', identifier: `a${n++}@b` });
-  await store.commit({ account: a.id as never, documents: [doc(`d${n}`)], cursor: null });
+const prepare = async (
+  opts: { markId: string; attempt: number } | null = KEEP,
+) => {
+  const a = await store.createAccount({
+    source: 'test',
+    identifier: `a${n++}@b`,
+  });
+  await store.commit({
+    account: a.id as never,
+    documents: [doc(`d${n}`)],
+    cursor: null,
+  });
   const r = buildSnapshot(path.join(dir, 'master.db'), snap);
-  return prepareSwap(receiver, snap, r.sha256, MASTER, undefined, opts ?? undefined);
+  return prepareSwap(
+    receiver,
+    snap,
+    r.sha256,
+    MASTER,
+    undefined,
+    opts ?? undefined,
+  );
 };
 
 beforeEach(async () => {
@@ -117,10 +137,17 @@ describe('recovery swap', () => {
     expect(archives()).toEqual([]);
     expect(sidecars()).toEqual([]);
     expect(sha(receiver)).not.toBe(before);
-    expect(swapStatus(receiver)).toEqual({ pending: null, outcome: 'ok', markId: 'mark-1', attempt: 2 });
+    expect(swapStatus(receiver)).toEqual({
+      pending: null,
+      outcome: 'ok',
+      markId: 'mark-1',
+      attempt: 2,
+    });
     // The device's own local tables are carried into the new file.
     const d = open();
-    expect(d.prepare(`SELECT account_id FROM vault`).all()).toEqual([{ account_id: 'mine' }]);
+    expect(d.prepare(`SELECT account_id FROM vault`).all()).toEqual([
+      { account_id: 'mine' },
+    ]);
     d.close();
   });
 
@@ -142,7 +169,9 @@ describe('recovery swap', () => {
     expect(archives()).toEqual([]);
     expect(sidecars()).toEqual([]);
     const d = open();
-    expect(d.prepare(`SELECT joined FROM sync_state`).get()).toEqual({ joined: 1 });
+    expect(d.prepare(`SELECT joined FROM sync_state`).get()).toEqual({
+      joined: 1,
+    });
     expect(d.prepare(`SELECT * FROM sync_rows`).all()).toEqual([]);
     d.close();
   });
@@ -166,8 +195,12 @@ describe('recovery swap', () => {
         attempt: 2,
       });
       const d = open();
-      expect(d.prepare(`SELECT account_id FROM vault`).all()).toEqual([{ account_id: 'mine' }]);
-      expect(d.prepare(`SELECT master_device_id m FROM sync_state`).get()).toEqual({ m: MASTER });
+      expect(d.prepare(`SELECT account_id FROM vault`).all()).toEqual([
+        { account_id: 'mine' },
+      ]);
+      expect(
+        d.prepare(`SELECT master_device_id m FROM sync_state`).get(),
+      ).toEqual({ m: MASTER });
       d.close();
     },
   );
@@ -182,7 +215,9 @@ describe('recovery swap', () => {
     expect(applyPendingSwap(receiver)).toBe('swapped');
     expect(fs.existsSync(receiver)).toBe(true);
     const d = open();
-    expect(d.prepare(`SELECT master_device_id m FROM sync_state`).get()).toEqual({ m: MASTER });
+    expect(
+      d.prepare(`SELECT master_device_id m FROM sync_state`).get(),
+    ).toEqual({ m: MASTER });
     d.close();
   });
 
@@ -204,12 +239,27 @@ describe('recovery swap', () => {
     applyPendingSwap(receiver);
     const d = open();
     expect(
-      d.prepare(`SELECT role, master_device_id m, joined, joining, tracking, pre_demote_epoch p FROM sync_state`).get(),
-    ).toEqual({ role: 'follower', m: MASTER, joined: 1, joining: 0, tracking: 0, p: null });
+      d
+        .prepare(
+          `SELECT role, master_device_id m, joined, joining, tracking, pre_demote_epoch p FROM sync_state`,
+        )
+        .get(),
+    ).toEqual({
+      role: 'follower',
+      m: MASTER,
+      joined: 1,
+      joining: 0,
+      tracking: 0,
+      p: null,
+    });
     // the snapshot carries no sync_rows: the old file's X2 is not kept
     expect(d.prepare(`SELECT * FROM sync_rows`).all()).toEqual([]);
-    expect(d.prepare(`SELECT count(*) n FROM sync_outbound`).get()).toEqual({ n: 1 });
-    expect(d.prepare(`SELECT tbl, pk FROM sync_retained`).all()).toEqual([{ tbl: 't', pk: '["pk"]' }]);
+    expect(d.prepare(`SELECT count(*) n FROM sync_outbound`).get()).toEqual({
+      n: 1,
+    });
+    expect(d.prepare(`SELECT tbl, pk FROM sync_retained`).all()).toEqual([
+      { tbl: 't', pk: '["pk"]' },
+    ]);
     d.close();
   });
 
@@ -219,7 +269,9 @@ describe('recovery swap', () => {
     const d = open();
     expect(d.prepare(`SELECT * FROM sync_imported`).all()).toEqual([]);
     promote(d, 5);
-    expect(d.prepare(`SELECT tbl, pk FROM sync_rows WHERE pk = 'X2'`).all()).toEqual([]);
+    expect(
+      d.prepare(`SELECT tbl, pk FROM sync_rows WHERE pk = 'X2'`).all(),
+    ).toEqual([]);
     d.close();
   });
 
@@ -244,7 +296,8 @@ describe('swap outcome', () => {
   it('is JSON with markId and attempt for a recovery swap, and survives repeated reads', async () => {
     await prepare();
     applyPendingSwap(receiver);
-    const raw = () => JSON.parse(fs.readFileSync(`${receiver}.swap-outcome`, 'utf8'));
+    const raw = () =>
+      JSON.parse(fs.readFileSync(`${receiver}.swap-outcome`, 'utf8'));
     expect(raw()).toEqual({ outcome: 'swapped', markId: 'mark-1', attempt: 2 });
     expect(applyPendingSwap(receiver)).toBe('none');
     expect(swapStatus(receiver)).toEqual(swapStatus(receiver));
@@ -254,7 +307,9 @@ describe('swap outcome', () => {
   it('an ordinary swap writes markId and attempt null; lastSwap projection is unchanged', async () => {
     await prepare(null);
     applyPendingSwap(receiver);
-    expect(JSON.parse(fs.readFileSync(`${receiver}.swap-outcome`, 'utf8'))).toEqual({
+    expect(
+      JSON.parse(fs.readFileSync(`${receiver}.swap-outcome`, 'utf8')),
+    ).toEqual({
       outcome: 'swapped',
       markId: null,
       attempt: null,
@@ -266,7 +321,9 @@ describe('swap outcome', () => {
     await prepare();
     fs.writeFileSync(`${receiver}.swap-incoming`, 'not a database');
     expect(applyPendingSwap(receiver)).toBe('abandoned');
-    expect(JSON.parse(fs.readFileSync(`${receiver}.swap-outcome`, 'utf8'))).toEqual({
+    expect(
+      JSON.parse(fs.readFileSync(`${receiver}.swap-outcome`, 'utf8')),
+    ).toEqual({
       outcome: 'abandoned',
       markId: 'mark-1',
       attempt: 2,
@@ -284,7 +341,12 @@ describe('swap outcome', () => {
   it('readSwapOutcome reads the legacy bare strings', () => {
     fs.writeFileSync(`${receiver}.swap-outcome`, 'swapped');
     expect(readSwapOutcome(receiver)).toBe('swapped');
-    expect(swapStatus(receiver)).toEqual({ pending: null, outcome: 'ok', markId: null, attempt: null });
+    expect(swapStatus(receiver)).toEqual({
+      pending: null,
+      outcome: 'ok',
+      markId: null,
+      attempt: null,
+    });
     fs.writeFileSync(`${receiver}.swap-outcome`, 'abandoned');
     expect(readSwapOutcome(receiver)).toBe('abandoned');
     fs.writeFileSync(`${receiver}.swap-outcome`, 'junk');
@@ -292,9 +354,19 @@ describe('swap outcome', () => {
   });
 
   it('swapStatus is pending while a journal waits and null-outcome before anything ran', async () => {
-    expect(swapStatus(receiver)).toEqual({ pending: null, outcome: null, markId: null, attempt: null });
+    expect(swapStatus(receiver)).toEqual({
+      pending: null,
+      outcome: null,
+      markId: null,
+      attempt: null,
+    });
     await prepare();
-    expect(swapStatus(receiver)).toEqual({ pending: 'swap', outcome: null, markId: 'mark-1', attempt: 2 });
+    expect(swapStatus(receiver)).toEqual({
+      pending: 'swap',
+      outcome: null,
+      markId: 'mark-1',
+      attempt: 2,
+    });
   });
 
   it('clearSwapStatus clears only a matching markId and attempt', async () => {
@@ -314,7 +386,10 @@ describe('archives left by earlier versions', () => {
   const leaveTagged = (stamp: string): string => {
     const a = `${receiver}.archive-${stamp}`;
     fs.copyFileSync(receiver, a);
-    fs.writeFileSync(`${a}.passed-over.json`, JSON.stringify({ markId: 'old', attempt: 1 }));
+    fs.writeFileSync(
+      `${a}.passed-over.json`,
+      JSON.stringify({ markId: 'old', attempt: 1 }),
+    );
     return a;
   };
 
@@ -345,7 +420,12 @@ describe('archives left by earlier versions', () => {
 describe('swapStatus while pending', () => {
   it('an ordinary pending swap reports pending swap with null ids', async () => {
     await prepare(null);
-    expect(swapStatus(receiver)).toEqual({ pending: 'swap', outcome: null, markId: null, attempt: null });
+    expect(swapStatus(receiver)).toEqual({
+      pending: 'swap',
+      outcome: null,
+      markId: null,
+      attempt: null,
+    });
   });
   it('a pending restore reports pending restore', async () => {
     makeNormalReceiver(receiver);
@@ -357,27 +437,44 @@ describe('swapStatus while pending', () => {
 });
 
 describe('failed-swap cleanup crash safety', () => {
-  const CLEANUP = ['abandon-outcome', 'abandon-journal', 'abandon-cleaned'] as const;
+  const CLEANUP = [
+    'abandon-outcome',
+    'abandon-journal',
+    'abandon-cleaned',
+  ] as const;
   for (const kind of ['ordinary follower', 'recovery'] as const) {
-    it.each(CLEANUP)(`${kind}: a crash after %s leaves the original database and an abandoned outcome`, async (step) => {
-      await prepare(kind === 'recovery' ? KEEP : null);
-      fs.writeFileSync(`${receiver}.swap-incoming`, 'not a database');
-      expect(() =>
-        applyPendingSwap(receiver, (s) => {
-          if (s === step) throw new Error('crash');
-        }),
-      ).toThrow('crash');
-      const first = applyPendingSwap(receiver);
-      expect(['abandoned', 'none']).toContain(first);
-      expect(applyPendingSwap(receiver)).toBe('none');
-      const d = open();
-      expect(d.prepare(`SELECT account_id FROM vault`).all()).toEqual([{ account_id: 'mine' }]);
-      expect(d.prepare(`SELECT count(*) n FROM sync_outbound`).get()).toEqual({ n: 1 });
-      d.close();
-      expect(readSwapOutcome(receiver)).toBe('abandoned');
-      expect(archives()).toEqual([]);
-      expect(fs.readdirSync(path.dirname(receiver)).filter((f) => f.includes('.swap-') && !f.endsWith('.swap-outcome'))).toEqual([]);
-    });
+    it.each(CLEANUP)(
+      `${kind}: a crash after %s leaves the original database and an abandoned outcome`,
+      async (step) => {
+        await prepare(kind === 'recovery' ? KEEP : null);
+        fs.writeFileSync(`${receiver}.swap-incoming`, 'not a database');
+        expect(() =>
+          applyPendingSwap(receiver, (s) => {
+            if (s === step) throw new Error('crash');
+          }),
+        ).toThrow('crash');
+        const first = applyPendingSwap(receiver);
+        expect(['abandoned', 'none']).toContain(first);
+        expect(applyPendingSwap(receiver)).toBe('none');
+        const d = open();
+        expect(d.prepare(`SELECT account_id FROM vault`).all()).toEqual([
+          { account_id: 'mine' },
+        ]);
+        expect(d.prepare(`SELECT count(*) n FROM sync_outbound`).get()).toEqual(
+          { n: 1 },
+        );
+        d.close();
+        expect(readSwapOutcome(receiver)).toBe('abandoned');
+        expect(archives()).toEqual([]);
+        expect(
+          fs
+            .readdirSync(path.dirname(receiver))
+            .filter(
+              (f) => f.includes('.swap-') && !f.endsWith('.swap-outcome'),
+            ),
+        ).toEqual([]);
+      },
+    );
   }
 
   it('a merged file that the journal does not call merged is never installed when nothing can be merged', async () => {
@@ -386,7 +483,9 @@ describe('failed-swap cleanup crash safety', () => {
     fs.rmSync(`${receiver}.swap-incoming`, { force: true });
     expect(applyPendingSwap(receiver)).toBe('abandoned');
     const d = open();
-    expect(d.prepare(`SELECT account_id FROM vault`).all()).toEqual([{ account_id: 'mine' }]);
+    expect(d.prepare(`SELECT account_id FROM vault`).all()).toEqual([
+      { account_id: 'mine' },
+    ]);
     d.close();
     expect(fs.existsSync(`${receiver}.swap-merged`)).toBe(false);
   });
@@ -398,18 +497,32 @@ describe('a merged file counts only with positive evidence', () => {
     ['recovery', KEEP],
   ] as const;
   const tables = (d: Database.Database) =>
-    (d.prepare(`SELECT name FROM sqlite_master WHERE type='table'`).all() as { name: string }[]).map((r) => r.name);
+    (
+      d.prepare(`SELECT name FROM sqlite_master WHERE type='table'`).all() as {
+        name: string;
+      }[]
+    ).map((r) => r.name);
   const intact = () => {
     const d = open();
-    expect(d.prepare(`SELECT account_id FROM vault`).all()).toEqual([{ account_id: 'mine' }]);
-    expect(d.prepare(`SELECT count(*) n FROM documents`).get()).toEqual({ n: 0 });
+    expect(d.prepare(`SELECT account_id FROM vault`).all()).toEqual([
+      { account_id: 'mine' },
+    ]);
+    expect(d.prepare(`SELECT count(*) n FROM documents`).get()).toEqual({
+      n: 0,
+    });
     d.close();
   };
   const swappedRight = () => {
     const d = open();
-    expect(d.prepare(`SELECT count(*) n FROM documents`).get()).toEqual({ n: 1 });
-    expect(d.prepare(`SELECT master_device_id m FROM sync_state`).get()).toEqual({ m: MASTER });
-    expect(d.prepare(`SELECT account_id FROM vault`).all()).toEqual([{ account_id: 'mine' }]);
+    expect(d.prepare(`SELECT count(*) n FROM documents`).get()).toEqual({
+      n: 1,
+    });
+    expect(
+      d.prepare(`SELECT master_device_id m FROM sync_state`).get(),
+    ).toEqual({ m: MASTER });
+    expect(d.prepare(`SELECT account_id FROM vault`).all()).toEqual([
+      { account_id: 'mine' },
+    ]);
     expect(tables(d)).not.toContain('sync_swap_merged');
     d.close();
   };
@@ -457,7 +570,9 @@ describe('a merged file counts only with positive evidence', () => {
           if (s === 'committed') throw new Error('crash');
         }),
       ).toThrow('crash');
-      expect(JSON.parse(fs.readFileSync(`${receiver}.swap.json`, 'utf8')).merged).toBe(false);
+      expect(
+        JSON.parse(fs.readFileSync(`${receiver}.swap.json`, 'utf8')).merged,
+      ).toBe(false);
       expect(applyPendingSwap(receiver)).toBe('swapped');
       swappedRight();
     });
@@ -493,7 +608,9 @@ describe('discardForeignPending', () => {
     expect(prepareRestore(receiver)).toBe('ready');
     fs.writeFileSync(`${receiver}.restore.json.tmp`, 'x');
     const before = archives();
-    expect(discardForeignPending(receiver, 'mark-1', 2)).toBe('dropped-restore');
+    expect(discardForeignPending(receiver, 'mark-1', 2)).toBe(
+      'dropped-restore',
+    );
     expect(fs.existsSync(`${receiver}.restore.json`)).toBe(false);
     expect(fs.existsSync(`${receiver}.restore.json.tmp`)).toBe(false);
     expect(archives()).toEqual(before);
@@ -571,10 +688,9 @@ describe('a recovery prepareSwap over a pending journal', () => {
     expect(sidecars()).toEqual([]);
     // Local tables are this device's own and are carried.
     const now = open();
-    expect(now.prepare(`SELECT account_id FROM vault ORDER BY 1`).all()).toEqual([
-      { account_id: 'divergent' },
-      { account_id: 'mine' },
-    ]);
+    expect(
+      now.prepare(`SELECT account_id FROM vault ORDER BY 1`).all(),
+    ).toEqual([{ account_id: 'divergent' }, { account_id: 'mine' }]);
     now.close();
   });
 });

@@ -10,9 +10,16 @@ import path from 'path';
 import Database from 'better-sqlite3';
 
 import { openDb, type AppDb } from '../../../db/app-db';
-import { createExtensionSync, type LocalExtension } from '../../../platform/extension-set';
+import {
+  createExtensionSync,
+  type LocalExtension,
+} from '../../../platform/extension-set';
 import { fakeOps } from '../../../platform/__tests__/helpers/extension-fakes';
-import { createDbUserPrefsStore, createPrefs, type CorePrefs } from '../../prefs';
+import {
+  createDbUserPrefsStore,
+  createPrefs,
+  type CorePrefs,
+} from '../../prefs';
 import { migrate } from '../../store/schema';
 import { openStore } from '../../store/store';
 import { buildDelta } from '../delta';
@@ -31,7 +38,7 @@ interface Dev {
   prefs: CorePrefs;
 }
 let dir = '';
-let devs: Dev[] = [];
+const devs: Dev[] = [];
 
 async function open(name: string, canWrite: () => boolean): Promise<Dev> {
   const file = path.join(dir, `${name}.db`);
@@ -50,7 +57,10 @@ async function open(name: string, canWrite: () => boolean): Promise<Dev> {
     workerFile: '',
     log: () => undefined,
   });
-  const prefs = createPrefs(path.join(dir, `${name}-prefs`), createDbUserPrefsStore(db, canWrite));
+  const prefs = createPrefs(
+    path.join(dir, `${name}-prefs`),
+    createDbUserPrefsStore(db, canWrite),
+  );
   await prefs.ready;
   const d: Dev = {
     db,
@@ -66,7 +76,8 @@ async function open(name: string, canWrite: () => boolean): Promise<Dev> {
 const extStore = (d: Dev, canWrite: () => boolean) => ({
   get: () => d.prefs.getCore('core.extensions') as never,
   canWrite,
-  update: (fn: (cur: never) => unknown) => d.prefs.updateCore('core.extensions', (cur) => fn(cur as never) as never),
+  update: (fn: (cur: never) => unknown) =>
+    d.prefs.updateCore('core.extensions', (cur) => fn(cur as never) as never),
 });
 
 afterEach(async () => {
@@ -78,7 +89,8 @@ afterEach(async () => {
 });
 
 const until = async (cond: () => boolean): Promise<void> => {
-  for (let i = 0; i < 200 && !cond(); i += 1) await new Promise((r) => setTimeout(r, 10));
+  for (let i = 0; i < 200 && !cond(); i += 1)
+    await new Promise((r) => setTimeout(r, 10));
   expect(cond()).toBe(true);
 };
 
@@ -90,10 +102,19 @@ it("leader disables X → the follower's chain disables X; leader records an ins
   enableTracking(leader.conn());
   follower.conn().prepare(`UPDATE sync_state SET role = 'follower'`).run();
 
-  const X: LocalExtension = { id: 'conn.x', origin: 'marketplace', enabled: true, ref: 'github:kia-plugins/x@1' };
+  const X: LocalExtension = {
+    id: 'conn.x',
+    origin: 'marketplace',
+    enabled: true,
+    ref: 'github:kia-plugins/x@1',
+  };
   const leaderOps = fakeOps([X], { failAll: true });
   const followerOps = fakeOps([X], { failAll: true });
-  const leaderSet = createExtensionSync({ store: extStore(leader, () => true), ops: leaderOps, log: () => undefined });
+  const leaderSet = createExtensionSync({
+    store: extStore(leader, () => true),
+    ops: leaderOps,
+    log: () => undefined,
+  });
 
   // The follower: the shipped wiring, with the real reconcile over fake ops.
   const followerSet = createExtensionSync({
@@ -126,9 +147,17 @@ it("leader disables X → the follower's chain disables X; leader records an ins
   const pull = async (): Promise<void> => {
     const s = follower
       .conn()
-      .prepare(`SELECT epoch, after_seq AS seq, after_cursor AS cursor FROM sync_state`)
+      .prepare(
+        `SELECT epoch, after_seq AS seq, after_cursor AS cursor FROM sync_state`,
+      )
       .get() as { epoch: number; seq: number; cursor: number };
-    const r = buildDelta(leader.reader, { seq: s.seq, cursor: s.cursor }, s.epoch, stage, 250 * 1024 * 1024);
+    const r = buildDelta(
+      leader.reader,
+      { seq: s.seq, cursor: s.cursor },
+      s.epoch,
+      stage,
+      250 * 1024 * 1024,
+    );
     if (r.status !== 'ok') throw new Error(r.status);
     await follower.svc.applyDelta(stage);
   };
@@ -148,5 +177,7 @@ it("leader disables X → the follower's chain disables X; leader records an ins
     () => ({ kind: 'installed', id: 'conn.y', ref: 'github:kia-plugins/y@2' }),
   );
   await pull();
-  await until(() => followerOps.calls.includes('install:github:kia-plugins/y@2:true'));
+  await until(() =>
+    followerOps.calls.includes('install:github:kia-plugins/y@2:true'),
+  );
 });

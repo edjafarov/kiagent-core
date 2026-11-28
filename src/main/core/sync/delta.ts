@@ -56,7 +56,9 @@ function rewound(
   after: SyncCursor,
   fromEpoch: number,
 ): { from: SyncCursor; epoch: number } {
-  const epoch = (conn.prepare(`SELECT epoch FROM sync_state`).get() as { epoch: number }).epoch;
+  const { epoch } = conn.prepare(`SELECT epoch FROM sync_state`).get() as {
+    epoch: number;
+  };
   if (fromEpoch >= epoch) return { from: after, epoch };
   const g = conn
     .prepare(
@@ -65,7 +67,10 @@ function rewound(
     .get(fromEpoch) as { seq: number | null; cursor: number | null };
   if (g.seq === null || g.cursor === null) return { from: after, epoch };
   return {
-    from: { seq: Math.min(after.seq, g.seq), cursor: Math.min(after.cursor, g.cursor) },
+    from: {
+      seq: Math.min(after.seq, g.seq),
+      cursor: Math.min(after.cursor, g.cursor),
+    },
     epoch,
   };
 }
@@ -98,13 +103,20 @@ export function buildDelta(
       // Inside the read transaction, so the grant and the rows agree.
       ({ from: after, epoch } = rewound(conn, asked, fromEpoch));
       const tracked = conn
-        .prepare(`SELECT tbl, pk FROM sync_rows WHERE cursor > ? ORDER BY cursor`)
+        .prepare(
+          `SELECT tbl, pk FROM sync_rows WHERE cursor > ? ORDER BY cursor`,
+        )
         .all(after.cursor) as { tbl: string; pk: string }[];
       const tables = copiedTables(conn);
       const keys = (tbl: string) =>
-        tracked.filter((e) => e.tbl === tbl).map((e) => JSON.parse(e.pk) as unknown[]);
+        tracked
+          .filter((e) => e.tbl === tbl)
+          .map((e) => JSON.parse(e.pk) as unknown[]);
       const getters = new Map<string, BetterSqlite3.Statement>();
-      const getRow = (tbl: string, pk: unknown[]): Record<string, unknown> | undefined => {
+      const getRow = (
+        tbl: string,
+        pk: unknown[],
+      ): Record<string, unknown> | undefined => {
         let stmt = getters.get(tbl);
         if (!stmt) {
           const cols = primaryKeyColumns(conn, tbl);
@@ -131,7 +143,8 @@ export function buildDelta(
           for (const row of fromSeq) write({ op: 'upsert', tbl, row });
           for (const pk of keys(tbl)) {
             const row = getRow(tbl, pk);
-            if (row && (row.seq as number) <= after.seq) write({ op: 'upsert', tbl, row });
+            if (row && (row.seq as number) <= after.seq)
+              write({ op: 'upsert', tbl, row });
           }
           continue;
         }
@@ -150,7 +163,8 @@ export function buildDelta(
             .prepare(`SELECT * FROM sync_epochs WHERE epoch > ? ORDER BY epoch`)
             .all(fromEpoch) as Record<string, unknown>[];
           for (const row of grants) {
-            if (!sent.has(JSON.stringify([row.epoch]))) write({ op: 'upsert', tbl, row });
+            if (!sent.has(JSON.stringify([row.epoch])))
+              write({ op: 'upsert', tbl, row });
           }
         }
       }
@@ -197,7 +211,9 @@ function encodeRow(row: Record<string, unknown>): Record<string, unknown> {
 }
 
 const isBlob = (v: unknown): v is { $b64: string } =>
-  !!v && typeof v === 'object' && typeof (v as { $b64?: unknown }).$b64 === 'string';
+  !!v &&
+  typeof v === 'object' &&
+  typeof (v as { $b64?: unknown }).$b64 === 'string';
 
 function decodeEntry(e: StageEntry): StageEntry {
   if (e.op !== 'upsert') return e;
@@ -236,7 +252,11 @@ function* lines(file: string): Generator<Buffer> {
 }
 
 /** Checks the whole file before anything is written. */
-export function validateStage(file: string): { target: SyncCursor; epoch: number; rows: number } {
+export function validateStage(file: string): {
+  target: SyncCursor;
+  epoch: number;
+  rows: number;
+} {
   const hash = createHash('sha256');
   let last: Buffer | null = null;
   let count = 0;
@@ -247,24 +267,31 @@ export function validateStage(file: string): { target: SyncCursor; epoch: number
     }
     last = line;
   }
-  if (!last || last[last.length - 1] !== 10) throw new SyncStageInvalid('truncated');
+  if (!last || last[last.length - 1] !== 10)
+    throw new SyncStageInvalid('truncated');
   let trailer: Trailer;
   try {
     trailer = JSON.parse(last.toString('utf8')) as Trailer;
   } catch {
     throw new SyncStageInvalid('no trailer');
   }
-  if (!trailer || trailer.trailer !== true) throw new SyncStageInvalid('no trailer');
+  if (!trailer || trailer.trailer !== true)
+    throw new SyncStageInvalid('no trailer');
   hash.update(JSON.stringify(trailer.target));
   hash.update(`epoch:${trailer.epoch}`);
-  if (hash.digest('hex') !== trailer.sha256) throw new SyncStageInvalid('checksum');
+  if (hash.digest('hex') !== trailer.sha256)
+    throw new SyncStageInvalid('checksum');
   if (count !== trailer.rows) throw new SyncStageInvalid('row count');
-  if (!Number.isSafeInteger(trailer.epoch) || trailer.epoch < 0) throw new SyncStageInvalid('epoch');
+  if (!Number.isSafeInteger(trailer.epoch) || trailer.epoch < 0)
+    throw new SyncStageInvalid('epoch');
   return { target: trailer.target, epoch: trailer.epoch, rows: count };
 }
 
 /** Yields a validated stage's entries one at a time. */
-export function* stageEntries(file: string, rows: number): Generator<StageEntry> {
+export function* stageEntries(
+  file: string,
+  rows: number,
+): Generator<StageEntry> {
   let i = 0;
   for (const line of lines(file)) {
     if (i === rows) return;

@@ -575,7 +575,11 @@ export function createWriteTx(
       ftsUpsert(existing.id, input.title, input.markdown, languages);
       return seq;
     }
-    const id = hashedId<'document'>('document', [accountId, input.externalId, input.type]);
+    const id = hashedId<'document'>('document', [
+      accountId,
+      input.externalId,
+      input.type,
+    ]);
     const seq = appendChange('document', id);
     conn
       .prepare(
@@ -772,7 +776,7 @@ export function createWriteTx(
         const plain = find.get(e.source, e.identifier) as
           | { id: string; status: string }
           | undefined;
-        let identifier = e.identifier;
+        let { identifier } = e;
         if (!owned && !e.stable) {
           // Always suffixed, not only on a collision: a display name can
           // match another workspace by chance, and the suffixed name is the
@@ -1383,7 +1387,11 @@ export function createWriteTx(
         type: string;
       }>;
       // An owner's pass tells the leader which documents went (see the guard).
-      for (const r of rows) archivedRefs?.push({ externalId: r.external_id, type: r.type } as ExternalRef);
+      for (const r of rows)
+        archivedRefs?.push({
+          externalId: r.external_id,
+          type: r.type,
+        } as ExternalRef);
       const upd = conn.prepare(
         `UPDATE documents SET archived_at = ?, seq = ?, updated_at = ? WHERE id = ?`,
       );
@@ -1711,7 +1719,11 @@ export function createWriteTx(
   /** The `user_prefs` keys the last applied delta upserted or deleted. */
   let touchedPrefKeys = new Set<string>();
   const applyDeltaTx = conn.transaction(
-    (entries: Iterable<StageEntry>, target: SyncCursor, epoch: number): void => {
+    (
+      entries: Iterable<StageEntry>,
+      target: SyncCursor,
+      epoch: number,
+    ): void => {
       conn.pragma('defer_foreign_keys = ON');
       // The triggers stay quiet only because a follower doesn't track; applying
       // on a master would corrupt the history its own followers read.
@@ -1771,7 +1783,9 @@ export function createWriteTx(
         let stmt = deleters.get(tbl);
         if (!stmt) {
           stmt = conn.prepare(
-            `DELETE FROM "${tbl}" WHERE ${keyOf(tbl).map((c) => `"${c}" = ?`).join(' AND ')}`,
+            `DELETE FROM "${tbl}" WHERE ${keyOf(tbl)
+              .map((c) => `"${c}" = ?`)
+              .join(' AND ')}`,
           );
           deleters.set(tbl, stmt);
         }
@@ -1833,7 +1847,10 @@ export function createWriteTx(
             | undefined;
           // A document that moves to a higher seq is found by seq. One that
           // keeps it (or arrives without one) is found only by its key.
-          if ((e.row.seq as number) <= 0 || (before && (e.row.seq as number) <= before.seq)) {
+          if (
+            (e.row.seq as number) <= 0 ||
+            (before && (e.row.seq as number) <= before.seq)
+          ) {
             noteKey('documents', [id]);
           }
           upsertRow('documents', e.row);
@@ -1853,29 +1870,37 @@ export function createWriteTx(
           if ((e.row.seq as number) > 0)
             addChange.run(e.row.seq, id, deps.now());
         } else {
-          noteKey(e.tbl, keyOf(e.tbl).map((c) => e.row[c]));
+          noteKey(
+            e.tbl,
+            keyOf(e.tbl).map((c) => e.row[c]),
+          );
           upsertRow(e.tbl, e.row);
         }
       }
       conn
-        .prepare(`UPDATE sync_state SET after_seq = ?, after_cursor = ?, epoch = ?`)
+        .prepare(
+          `UPDATE sync_state SET after_seq = ?, after_cursor = ?, epoch = ?`,
+        )
         .run(target.seq, target.cursor, epoch);
     },
   );
 
-  const importSecretsTx = conn.transaction((entries: ImportSecretEntry[]): { applied: number } => {
-    if (readRoleSync(conn) !== 'follower') {
-      throw new Error('only a follower takes logins from the leader');
-    }
-    const put = conn.prepare(
-      `INSERT INTO vault(account_id, blob, epoch, n) VALUES(?, ?, ?, ?)
+  const importSecretsTx = conn.transaction(
+    (entries: ImportSecretEntry[]): { applied: number } => {
+      if (readRoleSync(conn) !== 'follower') {
+        throw new Error('only a follower takes logins from the leader');
+      }
+      const put = conn.prepare(
+        `INSERT INTO vault(account_id, blob, epoch, n) VALUES(?, ?, ?, ?)
        ON CONFLICT(account_id) DO UPDATE SET blob = excluded.blob, epoch = excluded.epoch, n = excluded.n
         WHERE ${NEWER('excluded', 'vault')}`,
-    );
-    let applied = 0;
-    for (const e of entries) applied += put.run(e.accountId, e.blob, e.epoch, e.n).changes;
-    return { applied };
-  });
+      );
+      let applied = 0;
+      for (const e of entries)
+        applied += put.run(e.accountId, e.blob, e.epoch, e.n).changes;
+      return { applied };
+    },
+  );
 
   const tx: WriteTx = {
     applyDelta: (stagePath) => {
@@ -1974,14 +1999,22 @@ export function createWriteTx(
   // device-owned account it owns, through the verbs the engine's reconcile and
   // status paths use. Everything else, and every other account, is refused.
   const ownerOf = new Map<string, (a: unknown[]) => string | null>([
-    ['commit', (a) => {
-      const b = a[0] as { account?: string; removeAccount?: string };
-      return b.account ?? b.removeAccount ?? null;
-    }],
-    ['accountWrite', (a) => {
-      const w = a[0] as { op: string; id?: string };
-      return w.op === 'create' || w.op === 'getOrCreate' ? null : (w.id ?? null);
-    }],
+    [
+      'commit',
+      (a) => {
+        const b = a[0] as { account?: string; removeAccount?: string };
+        return b.account ?? b.removeAccount ?? null;
+      },
+    ],
+    [
+      'accountWrite',
+      (a) => {
+        const w = a[0] as { op: string; id?: string };
+        return w.op === 'create' || w.op === 'getOrCreate'
+          ? null
+          : (w.id ?? null);
+      },
+    ],
     ['reconcileBegin', (a) => String(a[0])],
     ['reconcileStage', (a) => String(a[0])],
     ['reconcileDiff', (a) => String(a[0])],
@@ -1997,7 +2030,9 @@ export function createWriteTx(
     if (name === 'accountWrite') {
       const w = args[0] as { op: string; source?: string };
       if (w.op === 'create' || w.op === 'getOrCreate')
-        return isDeviceOwned(w.source ?? '') && !!conn.prepare(OWNER_OPEN_SQL).get();
+        return (
+          isDeviceOwned(w.source ?? '') && !!conn.prepare(OWNER_OPEN_SQL).get()
+        );
     }
     const id = pick(args);
     return id !== null && !!ownedByMe.get(...DEVICE_OWNED_SOURCES, id);
@@ -2061,13 +2096,19 @@ export function createWriteTx(
           // Deletions on the owner reach the leader the same way its commits
           // do: the archive and its delivery row are one transaction.
           return conn.transaction(() => {
-            const account = ownedAccountOf({ account: ownerOf.get(name)!(args) } as unknown as CommitBatch);
+            const account = ownedAccountOf({
+              account: ownerOf.get(name)!(args),
+            } as unknown as CommitBatch);
             archivedRefs = [];
             let result: unknown;
             try {
               result = real(...args);
               const refs = archivedRefs as ExternalRef[];
-              if (account && name === 'reconcileArchiveChunk' && refs.length > 0) {
+              if (
+                account &&
+                name === 'reconcileArchiveChunk' &&
+                refs.length > 0
+              ) {
                 queueOwned(account, {
                   account: account.id as AccountId,
                   documents: [],
@@ -2075,7 +2116,11 @@ export function createWriteTx(
                   cursor: undefined,
                 } as unknown as CommitBatch);
               }
-              if (account && name === 'applyFolderScope' && !(result as { stale?: boolean }).stale) {
+              if (
+                account &&
+                name === 'applyFolderScope' &&
+                !(result as { stale?: boolean }).stale
+              ) {
                 insertQueued.run(
                   'core.folderScope',
                   Buffer.from(

@@ -6,7 +6,11 @@ import type { SyncRoleWire } from '@shared/contracts';
 
 import { openDb, type AppDb } from '../../../../db/app-db';
 import { migrate } from '../../../store/schema';
-import { createSharedFolders, type SharedFoldersDeps, type SharedFolders } from '../../service';
+import {
+  createSharedFolders,
+  type SharedFoldersDeps,
+  type SharedFolders,
+} from '../../service';
 
 export type FakeMode = 'leader' | 'copy' | 'fenced';
 
@@ -16,7 +20,10 @@ export function fakeSync(mode: FakeMode, peerInitially = true) {
   // Whether another computer is in this device's account (a lone leader has none).
   let peer = peerInitially;
   const roleListeners: ((r: SyncRoleWire) => void)[] = [];
-  const appliedListeners: ((tables: string[], meta: { prefKeys: string[] }) => void)[] = [];
+  const appliedListeners: ((
+    tables: string[],
+    meta: { prefKeys: string[] },
+  ) => void)[] = [];
   const role = (): SyncRoleWire => ({
     leader: current === 'leader',
     follower: current === 'copy',
@@ -29,7 +36,8 @@ export function fakeSync(mode: FakeMode, peerInitially = true) {
     readOnly: () => current !== 'leader',
     role,
     onRole: (cb: (r: SyncRoleWire) => void) => void roleListeners.push(cb),
-    onApplied: (cb: (tables: string[], meta: { prefKeys: string[] }) => void) => void appliedListeners.push(cb),
+    onApplied: (cb: (tables: string[], meta: { prefKeys: string[] }) => void) =>
+      void appliedListeners.push(cb),
     /** Another computer joins (true) or leaves (false) this device's account. */
     setPeer(next: boolean, notify = true) {
       peer = next;
@@ -125,7 +133,9 @@ export async function closeDevices(): Promise<void> {
 }
 
 /** Makes `<dir>/incoming` and `<dir>/sorted` and points the service at them. */
-export async function withRoots(d: Device): Promise<{ incoming: string; sorted: string }> {
+export async function withRoots(
+  d: Device,
+): Promise<{ incoming: string; sorted: string }> {
   const incoming = path.join(d.dir, 'incoming');
   const sorted = path.join(d.dir, 'sorted');
   fs.mkdirSync(incoming, { recursive: true });

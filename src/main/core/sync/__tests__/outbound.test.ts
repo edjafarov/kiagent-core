@@ -258,7 +258,9 @@ describe('the delivery queue', () => {
       commit: jest.fn(),
     });
     const inFlight = d.svc.drainOutbound();
-    const promoted = d.svc.lead({ epoch: 2 }).then(() => d.svc.open('head-acked'));
+    const promoted = d.svc
+      .lead({ epoch: 2 })
+      .then(() => d.svc.open('head-acked'));
     await settle();
     g.release();
     await Promise.all([inFlight, promoted]);

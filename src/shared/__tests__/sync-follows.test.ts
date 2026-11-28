@@ -12,7 +12,16 @@ it('every USER_PREF_KEYS entry has a label', () => {
 
 it('lists the extension set, every meetings field and the documents description once, each row labelled', () => {
   expect(keys).toContain('core.extensions');
-  for (const f of ['enabled', 'summaryInstructions', 'language', 'accuracyRetry', 'joinRecord', 'joinRead', 'silencedApps', 'audioRetentionDays'])
+  for (const f of [
+    'enabled',
+    'summaryInstructions',
+    'language',
+    'accuracyRetry',
+    'joinRecord',
+    'joinRead',
+    'silencedApps',
+    'audioRetentionDays',
+  ])
     expect(keys).toContain(`kiagent.meetings.${f}`);
   expect(keys).toContain('kiagent.documents.description');
   expect(new Set(keys).size).toBe(keys.length);

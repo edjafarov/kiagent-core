@@ -7,7 +7,7 @@ import {
   wrapForwardedChannels,
 } from '../forward-core';
 
-it('every FORWARDED_CHANNELS entry has a handler in main\'s table and every writing channel in the allowlist is forwarded', () => {
+it("every FORWARDED_CHANNELS entry has a handler in main's table and every writing channel in the allowlist is forwarded", () => {
   // The handler half is a compile-time check in forward-core.ts (`ForwardedHaveHandlers`).
   expect([...FORWARDED_CHANNELS]).toEqual([
     'attention:act',
@@ -27,35 +27,77 @@ it('every FORWARDED_CHANNELS entry has a handler in main\'s table and every writ
     'extension:uninstall',
   ]);
   for (const c of FORWARDED_CHANNELS) expect(isForwardedChannel(c)).toBe(true);
-  for (const c of ['attention:list', 'outbox:list', 'calendar-out:list', 'accounts:list'])
+  for (const c of [
+    'attention:list',
+    'outbox:list',
+    'calendar-out:list',
+    'accounts:list',
+  ])
     expect(isForwardedChannel(c)).toBe(false);
 });
 
 it('no leader rejects with the exact copy and a code; a refusal carries the leader message', async () => {
-  const none = { forward: async () => ({ ok: false as const, code: 'no-master' as const, message: 'x' }) };
-  const err = (await forwardCore(none, "attention:act", {}).catch((e: unknown) => e)) as SyncNoMaster;
+  const none = {
+    forward: async () => ({
+      ok: false as const,
+      code: 'no-master' as const,
+      message: 'x',
+    }),
+  };
+  const err = (await forwardCore(none, 'attention:act', {}).catch(
+    (e: unknown) => e,
+  )) as SyncNoMaster;
   expect(err).toBeInstanceOf(SyncNoMaster);
   expect(err.message).toBe(NO_MASTER_MESSAGE);
-  expect(NO_MASTER_MESSAGE).toBe("Can't save this yet. No other device is reachable; try again in a minute.");
+  expect(NO_MASTER_MESSAGE).toBe(
+    "Can't save this yet. No other device is reachable; try again in a minute.",
+  );
   expect(err.code).toBe('EXT_SYNC_NO_MASTER');
-  const refused = { forward: async () => ({ ok: false as const, code: 'handler' as const, message: 'already sent' }) };
-  await expect(forwardCore(refused, 'outbox:send', {})).rejects.toThrow('already sent');
+  const refused = {
+    forward: async () => ({
+      ok: false as const,
+      code: 'handler' as const,
+      message: 'already sent',
+    }),
+  };
+  await expect(forwardCore(refused, 'outbox:send', {})).rejects.toThrow(
+    'already sent',
+  );
 });
 
 it('a missing leader is also told to the UI once, through onNoMaster; a refusal is not', async () => {
   const seen: string[] = [];
-  const none = { forward: async () => ({ ok: false as const, code: 'no-master' as const, message: 'x' }) };
-  await forwardCore(none, 'outbox:send', {}, (m) => seen.push(m)).catch(() => undefined);
+  const none = {
+    forward: async () => ({
+      ok: false as const,
+      code: 'no-master' as const,
+      message: 'x',
+    }),
+  };
+  await forwardCore(none, 'outbox:send', {}, (m) => seen.push(m)).catch(
+    () => undefined,
+  );
   expect(seen).toEqual([NO_MASTER_MESSAGE]);
-  const refused = { forward: async () => ({ ok: false as const, code: 'handler' as const, message: 'already sent' }) };
-  await forwardCore(refused, 'outbox:send', {}, (m) => seen.push(m)).catch(() => undefined);
+  const refused = {
+    forward: async () => ({
+      ok: false as const,
+      code: 'handler' as const,
+      message: 'already sent',
+    }),
+  };
+  await forwardCore(refused, 'outbox:send', {}, (m) => seen.push(m)).catch(
+    () => undefined,
+  );
   expect(seen).toEqual([NO_MASTER_MESSAGE]);
 });
 
 it('prefs:patch is a forwarded verb the leader can run, but a follower does not forward it whole', async () => {
   const handler = jest.fn(async () => 'ran');
   const send = jest.fn(async () => 'x');
-  const table: Record<string, (r: unknown) => unknown> = { 'prefs:patch': handler, 'outbox:send': send };
+  const table: Record<string, (r: unknown) => unknown> = {
+    'prefs:patch': handler,
+    'outbox:send': send,
+  };
   const forward = jest.fn(async () => ({ ok: true as const, value: 'leader' }));
   const local = wrapForwardedChannels(table, { forward, readOnly: () => true });
   expect(local.get('prefs:patch')).toBe(handler);
@@ -65,34 +107,75 @@ it('prefs:patch is a forwarded verb the leader can run, but a follower does not 
 });
 
 describe('an offline handler for a setting channel', () => {
-  const noLeader = { ok: false as const, code: 'no-master' as const, message: 'x' };
+  const noLeader = {
+    ok: false as const,
+    code: 'no-master' as const,
+    message: 'x',
+  };
   it('a follower with no leader hands the request to it, without the refusal sentence', async () => {
     const seen: string[] = [];
     const local = jest.fn(async (r: unknown) => ({ ok: true, r }));
-    const table: Record<string, (r: unknown) => unknown> = { 'extension:set-enabled': local, 'outbox:send': jest.fn() };
-    const offline = jest.fn(async (req: unknown, runLocal: () => unknown) => ({ queued: req, ran: await runLocal() }));
-    wrapForwardedChannels(table, { forward: async () => noLeader, readOnly: () => true }, (m) => seen.push(m), {
-      'extension:set-enabled': offline,
-    });
-    await expect(table['extension:set-enabled']({ id: 'a', enabled: true })).resolves.toEqual({
+    const table: Record<string, (r: unknown) => unknown> = {
+      'extension:set-enabled': local,
+      'outbox:send': jest.fn(),
+    };
+    const offline = jest.fn(async (req: unknown, runLocal: () => unknown) => ({
+      queued: req,
+      ran: await runLocal(),
+    }));
+    wrapForwardedChannels(
+      table,
+      { forward: async () => noLeader, readOnly: () => true },
+      (m) => seen.push(m),
+      {
+        'extension:set-enabled': offline,
+      },
+    );
+    await expect(
+      table['extension:set-enabled']({ id: 'a', enabled: true }),
+    ).resolves.toEqual({
       queued: { id: 'a', enabled: true },
       ran: { ok: true, r: { id: 'a', enabled: true } },
     });
     expect(seen).toEqual([]);
-    await expect(Promise.resolve(table['outbox:send']({}))).rejects.toBeInstanceOf(SyncNoMaster);
+    await expect(
+      Promise.resolve(table['outbox:send']({})),
+    ).rejects.toBeInstanceOf(SyncNoMaster);
     expect(seen).toEqual([NO_MASTER_MESSAGE]);
   });
 
   it('a reachable leader gets the request; a refusal rethrows; the leader runs it here', async () => {
-    const offline = jest.fn(async (_req: unknown, _run: () => unknown, forwardIt: () => Promise<unknown>) => forwardIt());
+    const offline = jest.fn(
+      async (
+        _req: unknown,
+        _run: () => unknown,
+        forwardIt: () => Promise<unknown>,
+      ) => forwardIt(),
+    );
     const local = jest.fn(async () => 'local');
-    const table: Record<string, (r: unknown) => unknown> = { 'extension:set-enabled': local };
-    const forward = jest.fn(async () => ({ ok: true as const, value: 'leader' }));
+    const table: Record<string, (r: unknown) => unknown> = {
+      'extension:set-enabled': local,
+    };
+    const forward = jest.fn(async () => ({
+      ok: true as const,
+      value: 'leader',
+    }));
     let readOnly = true;
-    wrapForwardedChannels(table, { forward, readOnly: () => readOnly }, undefined, { 'extension:set-enabled': offline });
+    wrapForwardedChannels(
+      table,
+      { forward, readOnly: () => readOnly },
+      undefined,
+      { 'extension:set-enabled': offline },
+    );
     await expect(table['extension:set-enabled']({})).resolves.toBe('leader');
-    forward.mockResolvedValueOnce({ ok: false, code: 'handler', message: 'refused' } as never);
-    await expect(Promise.resolve(table['extension:set-enabled']({}))).rejects.toThrow('refused');
+    forward.mockResolvedValueOnce({
+      ok: false,
+      code: 'handler',
+      message: 'refused',
+    } as never);
+    await expect(
+      Promise.resolve(table['extension:set-enabled']({})),
+    ).rejects.toThrow('refused');
     readOnly = false;
     await expect(table['extension:set-enabled']({})).resolves.toBe('local');
     expect(offline).toHaveBeenCalledTimes(2);

@@ -15,7 +15,12 @@ const scan = async (d: Device) => {
   await d.svc.settled();
 };
 const captureOf = async (d: Device, root: string, rel: string) => {
-  const row = (await d.db.all(`SELECT capture_id FROM shared_mirror WHERE root = ? AND rel_path = ?`, [root, rel]))[0];
+  const row = (
+    await d.db.all(
+      `SELECT capture_id FROM shared_mirror WHERE root = ? AND rel_path = ?`,
+      [root, rel],
+    )
+  )[0];
   return row ? row.capture_id : 'NO ENTRY';
 };
 async function leader() {
@@ -34,7 +39,9 @@ describe('registerCapture and noteCapture', () => {
     const { d } = await leader();
     await d.svc.registerCapture('c', 'h1');
     await d.svc.registerCapture('c', 'h2');
-    expect(await d.db.all(`SELECT capture_id, sha256 FROM shared_capture_files`)).toEqual([{ capture_id: 'c', sha256: 'h2' }]);
+    expect(
+      await d.db.all(`SELECT capture_id, sha256 FROM shared_capture_files`),
+    ).toEqual([{ capture_id: 'c', sha256: 'h2' }]);
   });
 
   it('noteCapture sets the note when the entry has that hash; false otherwise', async () => {
@@ -47,8 +54,20 @@ describe('registerCapture and noteCapture', () => {
     expect(await captureOf(d, 'incoming', 'scan.pdf')).toBeNull();
     expect(await d.svc.noteCapture('c1', abs, sha('bytes'))).toBe(true);
     expect(await captureOf(d, 'incoming', 'scan.pdf')).toBe('c1');
-    expect(await d.svc.noteCapture('c1', path.join(d.dir, 'elsewhere.pdf'), sha('bytes'))).toBe(false);
-    expect(await d.svc.noteCapture('c1', path.join(incoming, '.kia-sync', 'x'), sha('bytes'))).toBe(false);
+    expect(
+      await d.svc.noteCapture(
+        'c1',
+        path.join(d.dir, 'elsewhere.pdf'),
+        sha('bytes'),
+      ),
+    ).toBe(false);
+    expect(
+      await d.svc.noteCapture(
+        'c1',
+        path.join(incoming, '.kia-sync', 'x'),
+        sha('bytes'),
+      ),
+    ).toBe(false);
   });
 });
 
@@ -57,10 +76,20 @@ describe('moved', () => {
     const { d, incoming, sorted } = await leader();
     write(path.join(incoming, 'scan.pdf'), 'bytes');
     await scan(d);
-    await d.svc.noteCapture('c1', path.join(incoming, 'scan.pdf'), sha('bytes'));
+    await d.svc.noteCapture(
+      'c1',
+      path.join(incoming, 'scan.pdf'),
+      sha('bytes'),
+    );
     fs.mkdirSync(path.join(sorted, 'Tax'), { recursive: true });
-    fs.renameSync(path.join(incoming, 'scan.pdf'), path.join(sorted, 'Tax', 'scan.pdf'));
-    await d.svc.moved(path.join(incoming, 'scan.pdf'), path.join(sorted, 'Tax', 'scan.pdf'));
+    fs.renameSync(
+      path.join(incoming, 'scan.pdf'),
+      path.join(sorted, 'Tax', 'scan.pdf'),
+    );
+    await d.svc.moved(
+      path.join(incoming, 'scan.pdf'),
+      path.join(sorted, 'Tax', 'scan.pdf'),
+    );
     await d.svc.settled();
     expect(await captureOf(d, 'sorted', 'Tax/scan.pdf')).toBe('c1');
     expect(await captureOf(d, 'incoming', 'scan.pdf')).toBe('NO ENTRY');
@@ -73,7 +102,9 @@ describe('moved', () => {
     fs.renameSync(path.join(incoming, 'a.pdf'), path.join(sorted, 'a.pdf'));
     await d.svc.moved(path.join(incoming, 'a.pdf'), path.join(sorted, 'a.pdf'));
     await d.svc.settled();
-    expect(await d.db.all(`SELECT root, deleted FROM shared_files ORDER BY root`)).toEqual([
+    expect(
+      await d.db.all(`SELECT root, deleted FROM shared_files ORDER BY root`),
+    ).toEqual([
       { root: 'incoming', deleted: 1 },
       { root: 'sorted', deleted: 0 },
     ]);
@@ -125,12 +156,20 @@ describe('fileOfCapture', () => {
     await scan(d);
     await d.svc.registerCapture('c1', sha('bytes'));
     expect(await d.svc.fileOfCapture('c1')).toEqual({
-      ref: { accountId: 'acct-shared', externalId: 'incoming/a.pdf', root: 'incoming', relPath: 'a.pdf' },
+      ref: {
+        accountId: 'acct-shared',
+        externalId: 'incoming/a.pdf',
+        root: 'incoming',
+        relPath: 'a.pdf',
+      },
       absPath: path.join(incoming, 'a.pdf'),
       missingHere: false,
     });
     fs.mkdirSync(path.join(sorted, 'Tax'));
-    fs.renameSync(path.join(incoming, 'a.pdf'), path.join(sorted, 'Tax', 'a.pdf'));
+    fs.renameSync(
+      path.join(incoming, 'a.pdf'),
+      path.join(sorted, 'Tax', 'a.pdf'),
+    );
     await scan(d);
     expect(await d.svc.fileOfCapture('c1')).toMatchObject({
       ref: { externalId: 'sorted/Tax/a.pdf' },
@@ -182,7 +221,10 @@ describe('fileOfCapture', () => {
     await scan(d);
     await d.svc.registerCapture('c1', sha('bytes'));
     await d.svc.setRoots({ incoming: null, sorted: null });
-    expect(await d.svc.fileOfCapture('c1')).toMatchObject({ absPath: null, missingHere: false });
+    expect(await d.svc.fileOfCapture('c1')).toMatchObject({
+      absPath: null,
+      missingHere: false,
+    });
   });
 });
 

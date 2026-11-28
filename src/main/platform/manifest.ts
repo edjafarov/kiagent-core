@@ -65,7 +65,11 @@ export const CAPS = [
 export type ManifestTier = 'external' | 'bundled';
 
 /** Caps only extensions shipped inside the app bundle may declare. */
-const PRIVILEGED_CAPS: readonly Cap[] = ['unsafe.mainProcess', 'sync', 'secrets'];
+const PRIVILEGED_CAPS: readonly Cap[] = [
+  'unsafe.mainProcess',
+  'sync',
+  'secrets',
+];
 
 // OAUTH_PROVIDER_IDS (contracts.ts) is the single shared list — this
 // zod.enum reads it directly rather than keeping a local copy, so the

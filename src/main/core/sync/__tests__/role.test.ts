@@ -10,13 +10,20 @@ import { resumeHeld } from '../../boot';
 import { migrate } from '../../store/schema';
 import { createWriteTx } from '../../store/write-tx';
 import { accountKey, createAccountOps } from '../account-ops';
-import { followerLookup, gateEngine, LeadsNow, readRoleSync, SyncReadOnly } from '../role';
+import {
+  followerLookup,
+  gateEngine,
+  LeadsNow,
+  readRoleSync,
+  SyncReadOnly,
+} from '../role';
 
 let dir: string;
 let db: Database.Database;
 const tx = () =>
   createWriteTx(db, { detectLanguages: () => ['eng'], now: () => 'n' });
-const follower = () => db.prepare(`UPDATE sync_state SET role='follower'`).run();
+const follower = () =>
+  db.prepare(`UPDATE sync_state SET role='follower'`).run();
 const joining = () => db.prepare(`UPDATE sync_state SET joining=1`).run();
 
 beforeEach(() => {
@@ -46,18 +53,27 @@ const idle = (over: Record<string, unknown> = {}) => ({
 
 describe('engine gate', () => {
   const pull = (e: ReturnType<typeof idle>) =>
-    (e.run as unknown as (a: unknown) => { status: string; stats(): Promise<{ pending: number }> })({});
+    (
+      e.run as unknown as (a: unknown) => {
+        status: string;
+        stats(): Promise<{ pending: number }>;
+      }
+    )({});
 
   it('a follower runs no source pull and attaches no worker', async () => {
     const real = idle();
-    const run = real.run;
+    const { run } = real;
     const e = { ...real };
     gateEngine(e as never, () => true);
     const h = pull(e);
     expect(h.status).toBe('paused');
     expect((await h.stats()).pending).toBe(0);
     (e.attach as unknown as (w: unknown) => unknown)({});
-    expect(await (e.rerunDeferred as unknown as (w: unknown) => Promise<unknown>)({})).toBeUndefined();
+    expect(
+      await (e.rerunDeferred as unknown as (w: unknown) => Promise<unknown>)(
+        {},
+      ),
+    ).toBeUndefined();
     expect(run).not.toHaveBeenCalled();
     expect(real.attach).not.toHaveBeenCalled();
   });
@@ -80,11 +96,21 @@ describe('engine gate', () => {
     let ro = true;
     const e = idle();
     const real = e.attach;
-    const inner = { status: 'running', stats: async () => ({ pending: 3 }), stop: jest.fn(async () => undefined) };
+    const inner = {
+      status: 'running',
+      stats: async () => ({ pending: 3 }),
+      stop: jest.fn(async () => undefined),
+    };
     real.mockReturnValue(inner as never);
     const { attachHeld } = gateEngine(e as never, () => ro);
     const w1 = { id: 'w1' };
-    const early = (e.attach as unknown as (w: unknown) => { status: string; stats(): Promise<{ pending: number }>; stop(): Promise<void> })(w1);
+    const early = (
+      e.attach as unknown as (w: unknown) => {
+        status: string;
+        stats(): Promise<{ pending: number }>;
+        stop(): Promise<void>;
+      }
+    )(w1);
     expect(early.status).toBe('paused');
     expect(real).not.toHaveBeenCalled();
     ro = false;
@@ -103,26 +129,38 @@ describe('engine gate', () => {
     const e = idle();
     const real = e.attach;
     const { attachHeld } = gateEngine(e as never, () => ro);
-    const h = (e.attach as unknown as (w: unknown) => { stop(): Promise<void> })({});
+    const h = (
+      e.attach as unknown as (w: unknown) => { stop(): Promise<void> }
+    )({});
     await h.stop();
     ro = false;
     await attachHeld();
     expect(real).not.toHaveBeenCalled();
   });
 
-  it.each(['connect', 'reconnect', 'applyScope', 'remove', 'pause', 'resume', 'updateConfig', 'setOption'])(
-    '%s rejects on a follower and runs after promotion',
-    async (m) => {
-      let ro = true;
-      const real = idle();
-      const spy = real[m as 'connect'];
-      gateEngine(real as never, () => ro);
-      await expect((real as never as Record<string, () => Promise<unknown>>)[m]()).rejects.toBeInstanceOf(SyncReadOnly);
-      expect(spy).not.toHaveBeenCalled();
-      ro = false;
-      await expect((real as never as Record<string, () => Promise<unknown>>)[m]()).resolves.toBe('real');
-    },
-  );
+  it.each([
+    'connect',
+    'reconnect',
+    'applyScope',
+    'remove',
+    'pause',
+    'resume',
+    'updateConfig',
+    'setOption',
+  ])('%s rejects on a follower and runs after promotion', async (m) => {
+    let ro = true;
+    const real = idle();
+    const spy = real[m as 'connect'];
+    gateEngine(real as never, () => ro);
+    await expect(
+      (real as never as Record<string, () => Promise<unknown>>)[m](),
+    ).rejects.toBeInstanceOf(SyncReadOnly);
+    expect(spy).not.toHaveBeenCalled();
+    ro = false;
+    await expect(
+      (real as never as Record<string, () => Promise<unknown>>)[m](),
+    ).resolves.toBe('real');
+  });
 });
 
 describe('closeWriter', () => {
@@ -131,9 +169,7 @@ describe('closeWriter', () => {
     const mkInner = () => ({
       status: 'running',
       stats: async () => ({ pending: 0 }),
-      stop: jest.fn(
-        () => new Promise<void>((res) => stops.push(res)),
-      ),
+      stop: jest.fn(() => new Promise<void>((res) => stops.push(res))),
     });
     const inners: ReturnType<typeof mkInner>[] = [];
     const next = () => {
@@ -144,7 +180,10 @@ describe('closeWriter', () => {
     const e = idle({ run: jest.fn(next), attach: jest.fn(next) });
     return { e, inners, stops };
   };
-  type Eng = { run(a: unknown): { stop(): Promise<void> }; attach(a: unknown): { stop(): Promise<void>; status: string } };
+  type Eng = {
+    run(a: unknown): { stop(): Promise<void> };
+    attach(a: unknown): { stop(): Promise<void>; status: string };
+  };
   const eng = (e: unknown) => e as Eng;
 
   it('closeWriter stops every live handle before awaiting any, holds unstopped attaches and drops runs', async () => {
@@ -196,7 +235,15 @@ describe('closeWriter', () => {
       store: {
         read: {
           accounts: async () => [
-            { id: 'acc', source: 'gmail', identifier: 'x', status: 'live', cursor: { c: 1 }, config: {}, ownerDeviceId: null },
+            {
+              id: 'acc',
+              source: 'gmail',
+              identifier: 'x',
+              status: 'live',
+              cursor: { c: 1 },
+              config: {},
+              ownerDeviceId: null,
+            },
           ],
         },
       },
@@ -208,7 +255,9 @@ describe('closeWriter', () => {
     };
     await resumeHeld(platform as never, g);
     expect(real.run).toHaveBeenCalledTimes(1);
-    expect(real.run).toHaveBeenCalledWith(expect.objectContaining({ id: 'acc' }));
+    expect(real.run).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'acc' }),
+    );
     expect(real.attach).toHaveBeenCalledTimes(1);
   });
 
@@ -342,25 +391,35 @@ describe('write guard', () => {
   it('every write-tx path throws SyncReadOnly on a follower', () => {
     follower();
     const t = tx();
-    const paths: (keyof typeof t)[] = (Object.keys(t) as (keyof typeof t)[]).filter((k) => k !== 'applyDelta' && k !== 'importSecrets');
+    const paths: (keyof typeof t)[] = (
+      Object.keys(t) as (keyof typeof t)[]
+    ).filter((k) => k !== 'applyDelta' && k !== 'importSecrets');
     expect(paths.length).toBeGreaterThan(5);
     for (const p of paths) {
-      expect(() => (t[p] as (...a: unknown[]) => unknown)({})).toThrow(SyncReadOnly);
+      expect(() => (t[p] as (...a: unknown[]) => unknown)({})).toThrow(
+        SyncReadOnly,
+      );
     }
   });
 
   it('every write-tx path throws SyncReadOnly while joining', () => {
     joining();
     const t = tx();
-    const paths: (keyof typeof t)[] = (Object.keys(t) as (keyof typeof t)[]).filter((k) => k !== 'applyDelta' && k !== 'importSecrets');
+    const paths: (keyof typeof t)[] = (
+      Object.keys(t) as (keyof typeof t)[]
+    ).filter((k) => k !== 'applyDelta' && k !== 'importSecrets');
     for (const p of paths) {
-      expect(() => (t[p] as (...a: unknown[]) => unknown)({})).toThrow(SyncReadOnly);
+      expect(() => (t[p] as (...a: unknown[]) => unknown)({})).toThrow(
+        SyncReadOnly,
+      );
     }
   });
 
   it('applyDelta is not refused while joining (pins the skip list)', () => {
     joining();
-    expect(() => tx().applyDelta(path.join(dir, 'missing'))).not.toThrow(SyncReadOnly);
+    expect(() => tx().applyDelta(path.join(dir, 'missing'))).not.toThrow(
+      SyncReadOnly,
+    );
   });
 
   it('importSecrets is not refused on a follower, and is not for anyone else', () => {
@@ -372,7 +431,9 @@ describe('write guard', () => {
 
   it('applyDelta is not refused on a follower', () => {
     follower();
-    expect(() => tx().applyDelta(path.join(dir, 'missing'))).not.toThrow(SyncReadOnly);
+    expect(() => tx().applyDelta(path.join(dir, 'missing'))).not.toThrow(
+      SyncReadOnly,
+    );
   });
 
   it('normal role behaves as today', () => {
@@ -403,7 +464,12 @@ describe('write guard', () => {
     const root = path.resolve(__dirname, '..', '..', '..');
     const out = execFileSync(
       'grep',
-      ['-rnE', '(UPDATE|INTO|DELETE FROM) +(documents|accounts)\\b', root, '--include=*.ts'],
+      [
+        '-rnE',
+        '(UPDATE|INTO|DELETE FROM) +(documents|accounts)\\b',
+        root,
+        '--include=*.ts',
+      ],
       { encoding: 'utf8' },
     );
     const strays = out
@@ -442,26 +508,43 @@ describe('a device-owned sender (step 4)', () => {
   const real = {
     get: (id: string) =>
       id === 'whatsapp' || id === 'gmail'
-        ? { send: async (i: { accountId: string }) => (sent.push(`${id}:${i.accountId}`), { externalMessageId: 'm' }) }
+        ? {
+            send: async (i: { accountId: string }) => (
+              sent.push(`${id}:${i.accountId}`), { externalMessageId: 'm' }
+            ),
+          }
         : undefined,
     ids: () => ['whatsapp', 'gmail'],
   };
   const owner = (over: Record<string, unknown> = {}) => ({
     ownsAccount: (id: string) => id === 'mine',
-    ownerOf: async (id: string) => (id === 'mine' || id === 'led' ? 'dev-me' : id === 'free' ? null : 'dev-other-1234'),
+    ownerOf: async (id: string) =>
+      id === 'mine' || id === 'led'
+        ? 'dev-me'
+        : id === 'free'
+          ? null
+          : 'dev-other-1234',
     deviceId: () => 'dev-me',
-    deviceName: (d: string) => (d === 'dev-other-1234' ? 'Anna\'s MacBook' : d),
+    deviceName: (d: string) => (d === 'dev-other-1234' ? "Anna's MacBook" : d),
     ...over,
   });
-  const send = (l: { get(id: string): unknown }, source: string, accountId: string) =>
-    (l.get(source) as { send(i: unknown): Promise<unknown> } | undefined)?.send({ accountId, secret: SECRET });
+  const send = (
+    l: { get(id: string): unknown },
+    source: string,
+    accountId: string,
+  ) =>
+    (l.get(source) as { send(i: unknown): Promise<unknown> } | undefined)?.send(
+      { accountId, secret: SECRET },
+    );
   beforeEach(() => {
     sent.length = 0;
   });
 
   it('owner sends as a follower; the sender is found although the device is read-only', async () => {
     const l = followerLookup(real, () => true, owner());
-    await expect(send(l, 'whatsapp', 'mine')).resolves.toEqual({ externalMessageId: 'm' });
+    await expect(send(l, 'whatsapp', 'mine')).resolves.toEqual({
+      externalMessageId: 'm',
+    });
     expect(sent).toEqual(['whatsapp:mine']);
   });
 
@@ -472,15 +555,19 @@ describe('a device-owned sender (step 4)', () => {
     expect(sent).toEqual(['whatsapp:led', 'whatsapp:free']);
   });
 
-  it('the master never sends for another device\'s whatsapp', async () => {
+  it("the master never sends for another device's whatsapp", async () => {
     const l = followerLookup(real, () => false, owner());
-    await expect(send(l, 'whatsapp', 'theirs')).rejects.toThrow("Send from Anna's MacBook");
+    await expect(send(l, 'whatsapp', 'theirs')).rejects.toThrow(
+      "Send from Anna's MacBook",
+    );
     expect(sent).toEqual([]);
   });
 
   it('send off the owner is refused with the device name, as a pre-delivery failure', async () => {
     const l = followerLookup(real, () => true, owner());
-    await expect(send(l, 'whatsapp', 'theirs')).rejects.toThrow(/^not sent: Send from Anna's MacBook$/);
+    await expect(send(l, 'whatsapp', 'theirs')).rejects.toThrow(
+      /^not sent: Send from Anna's MacBook$/,
+    );
     expect(sent).toEqual([]);
   });
 
@@ -492,14 +579,30 @@ describe('a device-owned sender (step 4)', () => {
   });
 
   it('a row whose owner is gone runs nowhere: the refusal is all it gets', async () => {
-    const l = followerLookup(real, () => false, owner({ ownerOf: async () => 'gone-device-0001' }));
-    await expect(send(l, 'whatsapp', 'orphan')).rejects.toThrow('Send from gone-dev'.slice(0, 14));
+    const l = followerLookup(
+      real,
+      () => false,
+      owner({ ownerOf: async () => 'gone-device-0001' }),
+    );
+    await expect(send(l, 'whatsapp', 'orphan')).rejects.toThrow(
+      'Send from gone-dev'.slice(0, 14),
+    );
     expect(sent).toEqual([]);
   });
 
   it('moveable accounts keep the role gate', async () => {
-    expect(send(followerLookup(real, () => true, owner()), 'gmail', 'x')).toBeUndefined();
-    await send(followerLookup(real, () => false, owner()), 'gmail', 'x');
+    expect(
+      send(
+        followerLookup(real, () => true, owner()),
+        'gmail',
+        'x',
+      ),
+    ).toBeUndefined();
+    await send(
+      followerLookup(real, () => false, owner()),
+      'gmail',
+      'x',
+    );
     expect(sent).toEqual(['gmail:x']);
   });
 
@@ -510,10 +613,13 @@ describe('a device-owned sender (step 4)', () => {
     expect(String((err as Error).stack)).not.toContain(SECRET);
   });
 
-  it('whatsapp runs on its owner as a follower, and the master never starts another device\'s', () => {
+  it("whatsapp runs on its owner as a follower, and the master never starts another device's", () => {
     const run = jest.fn(() => ({ status: 'running' }));
     const e = { run, attach: jest.fn(), rerunDeferred: jest.fn() };
-    gateEngine(e, () => true, { ownsAccount: (id) => id === 'mine', ownsSource: () => true });
+    gateEngine(e, () => true, {
+      ownsAccount: (id) => id === 'mine',
+      ownsSource: () => true,
+    });
     (e.run as unknown as (a: { id: string }) => unknown)({ id: 'mine' });
     (e.run as unknown as (a: { id: string }) => unknown)({ id: 'theirs' });
     expect(run).toHaveBeenCalledTimes(1);
@@ -539,14 +645,34 @@ describe('gateEngine with device-owned accounts (step 3)', () => {
     const e = idle();
     gateEngine(e as never, () => true, owned);
     const call = (name: string, ...a: unknown[]) =>
-      (e as unknown as Record<string, (...x: unknown[]) => Promise<unknown>>)[name](...a);
-    for (const verb of ['pause', 'resume', 'remove', 'updateConfig', 'setOption', 'applyScope'])
+      (e as unknown as Record<string, (...x: unknown[]) => Promise<unknown>>)[
+        name
+      ](...a);
+    for (const verb of [
+      'pause',
+      'resume',
+      'remove',
+      'updateConfig',
+      'setOption',
+      'applyScope',
+    ])
       await expect(call(verb, 'mine')).resolves.toBe('real');
-    for (const verb of ['pause', 'resume', 'remove', 'updateConfig', 'setOption', 'applyScope'])
+    for (const verb of [
+      'pause',
+      'resume',
+      'remove',
+      'updateConfig',
+      'setOption',
+      'applyScope',
+    ])
       await expect(call(verb, 'theirs')).rejects.toThrow(SyncReadOnly);
     // connect names a source, not an account.
-    await expect(call('connect', { descriptor: { id: 'local-folder' } })).resolves.toBe('real');
-    await expect(call('connect', { descriptor: { id: 'gmail' } })).rejects.toThrow(SyncReadOnly);
+    await expect(
+      call('connect', { descriptor: { id: 'local-folder' } }),
+    ).resolves.toBe('real');
+    await expect(
+      call('connect', { descriptor: { id: 'gmail' } }),
+    ).rejects.toThrow(SyncReadOnly);
   });
 
   it('workers stay held on a follower, owned accounts or not', () => {
@@ -567,9 +693,15 @@ describe('a read-only copy relays account changes', () => {
   const setup = (ro = true, withRelay = true) => {
     const real = {
       ...idle(),
-      connectAuth: jest.fn(async () => ({ sourceId: 'gmail', identifier: 'me' })),
+      connectAuth: jest.fn(async () => ({
+        sourceId: 'gmail',
+        identifier: 'me',
+      })),
       adopt: jest.fn(async () => 'real-adopt'),
-      reauth: jest.fn(async () => ({ accountId: 'acc', credentials: { accessToken: 't' } })),
+      reauth: jest.fn(async () => ({
+        accountId: 'acc',
+        credentials: { accessToken: 't' },
+      })),
       commitReauth: jest.fn(async () => 'real-commit'),
     };
     const relay = {
@@ -579,16 +711,27 @@ describe('a read-only copy relays account changes', () => {
       credentials: jest.fn(async () => null),
     };
     const e = { ...real } as unknown as Record<string, Fn>;
-    gateEngine(e as never, () => ro, owned, undefined, () => (withRelay ? (relay as never) : null));
+    gateEngine(
+      e as never,
+      () => ro,
+      owned,
+      undefined,
+      () => (withRelay ? (relay as never) : null),
+    );
     return { real, relay, e };
   };
   const gmail = { descriptor: { id: 'gmail' } };
 
   it('connect signs in here and the leader adopts the result', async () => {
     const { real, relay, e } = setup();
-    await expect(e.connect(gmail, 'auth')).resolves.toEqual({ id: 'from-leader' });
+    await expect(e.connect(gmail, 'auth')).resolves.toEqual({
+      id: 'from-leader',
+    });
     expect(real.connectAuth).toHaveBeenCalledWith(gmail, 'auth');
-    expect(relay.adopt).toHaveBeenCalledWith({ sourceId: 'gmail', identifier: 'me' }, expect.anything());
+    expect(relay.adopt).toHaveBeenCalledWith(
+      { sourceId: 'gmail', identifier: 'me' },
+      expect.anything(),
+    );
     expect(real.connect).not.toHaveBeenCalled();
     expect(real.adopt).not.toHaveBeenCalled();
   });
@@ -607,7 +750,9 @@ describe('a read-only copy relays account changes', () => {
 
   it('a folder-scope change goes to the leader', async () => {
     const { real, relay, e } = setup();
-    await expect(e.applyScope('acc', { config: {} }, '{}')).resolves.toEqual({ archived: 3 });
+    await expect(e.applyScope('acc', { config: {} }, '{}')).resolves.toEqual({
+      archived: 3,
+    });
     expect(relay.applyScope).toHaveBeenCalledWith('acc', { config: {} }, '{}');
     expect(real.applyScope).not.toHaveBeenCalled();
   });
@@ -622,8 +767,12 @@ describe('a read-only copy relays account changes', () => {
 
   it('the commit halves and the plain verbs called directly stay refused', async () => {
     const { real, e } = setup();
-    await expect(e.adopt({ sourceId: 'gmail' })).rejects.toBeInstanceOf(SyncReadOnly);
-    await expect(e.commitReauth({ accountId: 'acc' })).rejects.toBeInstanceOf(SyncReadOnly);
+    await expect(e.adopt({ sourceId: 'gmail' })).rejects.toBeInstanceOf(
+      SyncReadOnly,
+    );
+    await expect(e.commitReauth({ accountId: 'acc' })).rejects.toBeInstanceOf(
+      SyncReadOnly,
+    );
     for (const m of ['remove', 'pause', 'resume', 'updateConfig', 'setOption'])
       await expect(e[m]('acc')).rejects.toBeInstanceOf(SyncReadOnly);
     expect(real.adopt).not.toHaveBeenCalled();
@@ -633,21 +782,37 @@ describe('a read-only copy relays account changes', () => {
   it('with no relay the three verbs refuse as before', async () => {
     const { real, e } = setup(true, false);
     await expect(e.connect(gmail, 'auth')).rejects.toBeInstanceOf(SyncReadOnly);
-    await expect(e.reconnect('acc', 'auth')).rejects.toBeInstanceOf(SyncReadOnly);
-    await expect(e.applyScope('acc', {}, '{}')).rejects.toBeInstanceOf(SyncReadOnly);
+    await expect(e.reconnect('acc', 'auth')).rejects.toBeInstanceOf(
+      SyncReadOnly,
+    );
+    await expect(e.applyScope('acc', {}, '{}')).rejects.toBeInstanceOf(
+      SyncReadOnly,
+    );
     expect(real.connectAuth).not.toHaveBeenCalled();
     expect(real.reauth).not.toHaveBeenCalled();
   });
 
   it('a device-owned source and account stay here', async () => {
     const { real, relay, e } = setup();
-    real.connectAuth.mockResolvedValueOnce({ sourceId: 'local-folder', identifier: 'me' });
-    real.reauth.mockResolvedValueOnce({ accountId: 'mine', credentials: { accessToken: 't' } });
+    real.connectAuth.mockResolvedValueOnce({
+      sourceId: 'local-folder',
+      identifier: 'me',
+    });
+    real.reauth.mockResolvedValueOnce({
+      accountId: 'mine',
+      credentials: { accessToken: 't' },
+    });
     await e.connect({ descriptor: { id: 'local-folder' } }, 'auth');
     await e.reconnect('mine', 'auth');
     await e.applyScope('mine', {}, '{}');
-    expect(real.adopt).toHaveBeenCalledWith({ sourceId: 'local-folder', identifier: 'me' });
-    expect(real.commitReauth).toHaveBeenCalledWith({ accountId: 'mine', credentials: { accessToken: 't' } });
+    expect(real.adopt).toHaveBeenCalledWith({
+      sourceId: 'local-folder',
+      identifier: 'me',
+    });
+    expect(real.commitReauth).toHaveBeenCalledWith({
+      accountId: 'mine',
+      credentials: { accessToken: 't' },
+    });
     expect(real.applyScope).toHaveBeenCalled();
     expect(relay.adopt).not.toHaveBeenCalled();
     expect(relay.commitReauth).not.toHaveBeenCalled();
@@ -659,7 +824,10 @@ describe('a read-only copy relays account changes', () => {
     await expect(e.connect(gmail, 'auth')).resolves.toBe('real-adopt');
     await expect(e.reconnect('acc', 'auth')).resolves.toBe('real-commit');
     expect(real.connectAuth).toHaveBeenCalled();
-    expect(real.adopt).toHaveBeenCalledWith({ sourceId: 'gmail', identifier: 'me' });
+    expect(real.adopt).toHaveBeenCalledWith({
+      sourceId: 'gmail',
+      identifier: 'me',
+    });
     expect(real.commitReauth).toHaveBeenCalled();
     expect(relay.adopt).not.toHaveBeenCalled();
   });
@@ -675,15 +843,27 @@ describe('a read-only copy relays account changes', () => {
       adopt: jest.fn(async () => 'adopted-here'),
     };
     const relay = { adopt: jest.fn(async () => ({ id: 'from-leader' })) };
-    const e = { ...real } as unknown as Record<string, (...a: unknown[]) => Promise<unknown>>;
-    gateEngine(e as never, () => ro, owned, undefined, () => relay as never);
+    const e = { ...real } as unknown as Record<
+      string,
+      (...a: unknown[]) => Promise<unknown>
+    >;
+    gateEngine(
+      e as never,
+      () => ro,
+      owned,
+      undefined,
+      () => relay as never,
+    );
     await expect(e.connect(gmail, {})).resolves.toEqual({ id: 'from-leader' });
     expect(real.adopt).not.toHaveBeenCalled();
   });
 
   it('an engine without the two halves connects whole, as before', async () => {
     const real = idle();
-    const e = { ...real } as unknown as Record<string, (...a: unknown[]) => Promise<unknown>>;
+    const e = { ...real } as unknown as Record<
+      string,
+      (...a: unknown[]) => Promise<unknown>
+    >;
     gateEngine(e as never, () => false, owned);
     await expect(e.connect(gmail, 'auth')).resolves.toBe('real');
     expect(real.connect).toHaveBeenCalled();
@@ -691,10 +871,21 @@ describe('a read-only copy relays account changes', () => {
 
   it('a session asks, on every call, whether the leader holds the login', async () => {
     const real = { ...idle(), session: jest.fn((...a: unknown[]) => a) };
-    const relay = { credentials: jest.fn(async () => ({ accessToken: 'fresh' })) };
+    const relay = {
+      credentials: jest.fn(async () => ({ accessToken: 'fresh' })),
+    };
     let ro = true;
-    const e = { ...real } as unknown as Record<string, (...a: unknown[]) => unknown>;
-    gateEngine(e as never, () => ro, owned, undefined, () => relay as never);
+    const e = { ...real } as unknown as Record<
+      string,
+      (...a: unknown[]) => unknown
+    >;
+    gateEngine(
+      e as never,
+      () => ro,
+      owned,
+      undefined,
+      () => relay as never,
+    );
     const made = e.session({ id: 'acc' }, 'sig', 'scope') as unknown[];
     expect(made.slice(0, 3)).toEqual([{ id: 'acc' }, 'sig', 'scope']);
     const ask = made[3] as () => Promise<unknown> | undefined;
@@ -704,11 +895,15 @@ describe('a read-only copy relays account changes', () => {
     ro = false;
     expect(ask()).toBeUndefined();
     // And one opened while leading asks the leader once the device is a copy.
-    const later = (e.session({ id: 'acc' }, 'sig', 'scope') as unknown[])[3] as () => unknown;
+    const later = (
+      e.session({ id: 'acc' }, 'sig', 'scope') as unknown[]
+    )[3] as () => unknown;
     expect(later()).toBeUndefined();
     ro = true;
     await expect(later()).resolves.toEqual({ accessToken: 'fresh' });
-    const own = (e.session({ id: 'mine' }, 'sig', 'scope') as unknown[])[3] as () => unknown;
+    const own = (
+      e.session({ id: 'mine' }, 'sig', 'scope') as unknown[]
+    )[3] as () => unknown;
     expect(own()).toBeUndefined();
   });
 
@@ -723,18 +918,33 @@ describe('a read-only copy relays account changes', () => {
       commitReauth: jest.fn(async () => 'committed-here'),
     };
     const relay = { commitReauth: jest.fn(), adopt: jest.fn() };
-    const e = { ...real } as unknown as Record<string, (...a: unknown[]) => Promise<unknown>>;
-    gateEngine(e as never, () => ro, owned, undefined, () => relay as never);
+    const e = { ...real } as unknown as Record<
+      string,
+      (...a: unknown[]) => Promise<unknown>
+    >;
+    gateEngine(
+      e as never,
+      () => ro,
+      owned,
+      undefined,
+      () => relay as never,
+    );
     await expect(e.reconnect('acc', 'auth')).resolves.toBe('committed-here');
     expect(relay.commitReauth).not.toHaveBeenCalled();
-    expect(real.commitReauth).toHaveBeenCalledWith({ accountId: 'acc', credentials: { accessToken: 't' } });
+    expect(real.commitReauth).toHaveBeenCalledWith({
+      accountId: 'acc',
+      credentials: { accessToken: 't' },
+    });
   });
 
   it('a device that starts leading while the result waits for the leader commits it itself', async () => {
     let ro = true;
     const real = {
       ...idle(),
-      connectAuth: jest.fn(async () => ({ sourceId: 'gmail', identifier: 'me' })),
+      connectAuth: jest.fn(async () => ({
+        sourceId: 'gmail',
+        identifier: 'me',
+      })),
       adopt: jest.fn(async () => 'adopted-here'),
     };
     const relay = {
@@ -745,21 +955,47 @@ describe('a read-only copy relays account changes', () => {
         throw new LeadsNow();
       }),
     };
-    const e = { ...real } as unknown as Record<string, (...a: unknown[]) => Promise<unknown>>;
-    gateEngine(e as never, () => ro, owned, undefined, () => relay as never);
-    await expect(e.connect({ descriptor: { id: 'gmail' } }, {})).resolves.toBe('adopted-here');
-    expect(real.adopt).toHaveBeenCalledWith({ sourceId: 'gmail', identifier: 'me' });
+    const e = { ...real } as unknown as Record<
+      string,
+      (...a: unknown[]) => Promise<unknown>
+    >;
+    gateEngine(
+      e as never,
+      () => ro,
+      owned,
+      undefined,
+      () => relay as never,
+    );
+    await expect(e.connect({ descriptor: { id: 'gmail' } }, {})).resolves.toBe(
+      'adopted-here',
+    );
+    expect(real.adopt).toHaveBeenCalledWith({
+      sourceId: 'gmail',
+      identifier: 'me',
+    });
   });
 
   it('a commit whose turn comes after this device stopped leading saves nothing', async () => {
     let ro = false;
     const real = { ...idle(), commitReauth: jest.fn(async () => 'saved') };
-    const e = { ...real } as unknown as Record<string, (...a: unknown[]) => Promise<unknown>>;
-    gateEngine(e as never, () => ro, owned, undefined, undefined, async (_ref, fn) => {
-      ro = true; // demoted while it waited in the queue
-      return fn();
-    });
-    await expect(e.commitReauth({ accountId: 'acc' })).rejects.toBeInstanceOf(SyncReadOnly);
+    const e = { ...real } as unknown as Record<
+      string,
+      (...a: unknown[]) => Promise<unknown>
+    >;
+    gateEngine(
+      e as never,
+      () => ro,
+      owned,
+      undefined,
+      undefined,
+      async (_ref, fn) => {
+        ro = true; // demoted while it waited in the queue
+        return fn();
+      },
+    );
+    await expect(e.commitReauth({ accountId: 'acc' })).rejects.toBeInstanceOf(
+      SyncReadOnly,
+    );
     expect(real.commitReauth).not.toHaveBeenCalled();
   });
 
@@ -770,12 +1006,24 @@ describe('a read-only copy relays account changes', () => {
       commitReauth: jest.fn(async () => 'committed'),
     };
     const refs: unknown[] = [];
-    const e = { ...real } as unknown as Record<string, (...a: unknown[]) => Promise<unknown>>;
-    gateEngine(e as never, () => false, owned, undefined, undefined, async (ref, fn) => {
-      refs.push(ref);
-      return fn();
-    });
-    await expect(e.adopt({ sourceId: 'gmail', identifier: 'me' })).resolves.toBe('adopted');
+    const e = { ...real } as unknown as Record<
+      string,
+      (...a: unknown[]) => Promise<unknown>
+    >;
+    gateEngine(
+      e as never,
+      () => false,
+      owned,
+      undefined,
+      undefined,
+      async (ref, fn) => {
+        refs.push(ref);
+        return fn();
+      },
+    );
+    await expect(
+      e.adopt({ sourceId: 'gmail', identifier: 'me' }),
+    ).resolves.toBe('adopted');
     await e.commitReauth({ accountId: 'acc' });
     await e.applyScope('acc', {}, '{}');
     await e.pause('acc');
@@ -801,9 +1049,23 @@ describe('a read-only copy relays account changes', () => {
       }),
     };
     const ops = createAccountOps({ now: () => 0 });
-    const e = { ...real } as unknown as Record<string, (...a: unknown[]) => Promise<unknown>>;
-    gateEngine(e as never, () => false, owned, undefined, undefined, (ref, fn) =>
-      ops.serial('source' in ref ? accountKey(ref.source, ref.identifier) : ref.accountId, fn),
+    const e = { ...real } as unknown as Record<
+      string,
+      (...a: unknown[]) => Promise<unknown>
+    >;
+    gateEngine(
+      e as never,
+      () => false,
+      owned,
+      undefined,
+      undefined,
+      (ref, fn) =>
+        ops.serial(
+          'source' in ref
+            ? accountKey(ref.source, ref.identifier)
+            : ref.accountId,
+          fn,
+        ),
     );
     const a = e.adopt({ sourceId: 'gmail', identifier: 'me', n: 'A' });
     const b = e.adopt({ sourceId: 'gmail', identifier: 'me', n: 'B' });

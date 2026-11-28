@@ -7,11 +7,13 @@ import path from 'path';
 import { isParked, isResting } from '../../engine/resting';
 
 it('classifies the three resting statuses', () => {
-  for (const s of ['paused', 'needsReauth', 'needs-connector'] as const) expect(isResting(s)).toBe(true);
+  for (const s of ['paused', 'needsReauth', 'needs-connector'] as const)
+    expect(isResting(s)).toBe(true);
   expect(isParked('needsReauth')).toBe(false);
   expect(isParked('needs-connector')).toBe(true);
   expect(isParked('paused')).toBe(true);
-  for (const s of ['connecting', 'backfilling', 'live', 'error'] as const) expect(isResting(s)).toBe(false);
+  for (const s of ['connecting', 'backfilling', 'live', 'error'] as const)
+    expect(isResting(s)).toBe(false);
 });
 
 it('no other core file compares against paused or needsReauth to decide a start', () => {
@@ -20,7 +22,12 @@ it('no other core file compares against paused or needsReauth to decide a start'
     try {
       return execFileSync(
         'grep',
-        ['-rnE', "status\\s*(!==|===)\\s*'(paused|needsReauth)'", path.join(root, 'core'), '--include=*.ts'],
+        [
+          '-rnE',
+          "status\\s*(!==|===)\\s*'(paused|needsReauth)'",
+          path.join(root, 'core'),
+          '--include=*.ts',
+        ],
         { encoding: 'utf8' },
       );
     } catch {
@@ -30,7 +37,11 @@ it('no other core file compares against paused or needsReauth to decide a start'
   const strays = out
     .split('\n')
     .filter(Boolean)
-    .filter((l) => !/__tests__|engine\/resting\.ts/.test(l) && !/^\S+:\d+:\s*(\/\/|\*)/.test(l));
+    .filter(
+      (l) =>
+        !/__tests__|engine\/resting\.ts/.test(l) &&
+        !/^\S+:\d+:\s*(\/\/|\*)/.test(l),
+    );
   // Two survivors in engine.ts, neither a "may this start" question: the
   // loop-entry recheck that a pause landed, and the fetchBytes re-auth message.
   const allowed = [

@@ -144,7 +144,10 @@ describe('parseGmailMessage HTML-only body', () => {
   });
 
   it('drops the invisible preview padding newsletters put before the text', () => {
-    const pad = '\u034f\u200c\u00a0\ufeff\u00ad\u200b\u200d\u200e\u200f\u2007 '.repeat(40);
+    const pad =
+      '\u034f\u200c\u00a0\ufeff\u00ad\u200b\u200d\u200e\u200f\u2007 '.repeat(
+        40,
+      );
     const parsed = parseGmailMessage(
       htmlOnly(
         `<div style="display:none">${pad}</div><p>Dein Paket ist unterwegs</p>` +

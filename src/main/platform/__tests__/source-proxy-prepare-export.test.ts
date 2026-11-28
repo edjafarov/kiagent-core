@@ -1,5 +1,10 @@
 /** @jest-environment node */
-import type { Account, Cap, Credentials, ExportContext } from '@shared/contracts';
+import type {
+  Account,
+  Cap,
+  Credentials,
+  ExportContext,
+} from '@shared/contracts';
 import type { Contributions } from '@shared/extension-rpc';
 
 import { runExtensionHost } from '../extension-host-entry';
@@ -39,7 +44,9 @@ const base = (id: string) => ({
 async function setup(prepare: (ctx: ExportContext) => Promise<void>) {
   const mod = {
     async activate() {
-      return { sources: [{ ...base('hosted'), prepareExport: prepare }, base('plain')] };
+      return {
+        sources: [{ ...base('hosted'), prepareExport: prepare }, base('plain')],
+      };
     },
   };
   const { main, child } = createInMemoryHostPair();
@@ -57,10 +64,17 @@ async function setup(prepare: (ctx: ExportContext) => Promise<void>) {
   runExtensionHost(child, { requireModule: () => mod, exit: jest.fn() });
   mainEp.post(BOOT);
   const contributions = await activated;
-  return { proxySet, entry: (id: string) => contributions.sources.find((s) => s.descriptor.id === id)! };
+  return {
+    proxySet,
+    entry: (id: string) =>
+      contributions.sources.find((s) => s.descriptor.id === id)!,
+  };
 }
 
-const ctxFor = (vault: { value: Credentials | null }, logs: string[]): ExportContext => ({
+const ctxFor = (
+  vault: { value: Credentials | null },
+  logs: string[],
+): ExportContext => ({
   account,
   credentials: async () => vault.value,
   save: async (c) => {
@@ -86,7 +100,9 @@ it('runs the hosted hook with the account, and its save reaches the main-side va
   });
   const vault = { value: { token: 't0' } as never as Credentials | null };
   const logs: string[] = [];
-  await proxySet.makeSource(entry('hosted')).prepareExport!(ctxFor(vault, logs));
+  await proxySet.makeSource(entry('hosted')).prepareExport!(
+    ctxFor(vault, logs),
+  );
   expect(seen).toEqual(['acc1', { token: 't0' }]);
   expect(vault.value).toEqual({ session: 'migrated' });
   expect(logs).toEqual(['info:moved the session file']);
@@ -97,7 +113,9 @@ it('a hook that throws rejects on the main side', async () => {
     throw new Error('disk full');
   });
   await expect(
-    proxySet.makeSource(entry('hosted')).prepareExport!(ctxFor({ value: null }, [])),
+    proxySet.makeSource(entry('hosted')).prepareExport!(
+      ctxFor({ value: null }, []),
+    ),
   ).rejects.toThrow();
 });
 
@@ -109,7 +127,9 @@ it('a resumed export waits for a hosted connector to register, then its hook run
   });
   const registry = createSourceRegistry();
   registry.setPrepareExportAdvertiser!((id) => id === 'hosted');
-  const vault = new Map<string, Credentials>([['acc1', { session: 'old' } as never]]);
+  const vault = new Map<string, Credentials>([
+    ['acc1', { session: 'old' } as never],
+  ]);
   const store = {
     read: { accounts: async () => [{ ...account, config: {} }] },
     vault: {
@@ -118,9 +138,15 @@ it('a resumed export waits for a hosted connector to register, then its hook run
     },
   };
   let done = false;
-  const out = exportSources(store as never, 'device-aaaa', undefined, registry as never, {
-    waitMs: 5_000,
-  }).then((o) => {
+  const out = exportSources(
+    store as never,
+    'device-aaaa',
+    undefined,
+    registry as never,
+    {
+      waitMs: 5_000,
+    },
+  ).then((o) => {
     done = true;
     return o;
   });
@@ -128,5 +154,8 @@ it('a resumed export waits for a hosted connector to register, then its hook run
   expect(done).toBe(false);
   registry.register(proxySet.makeSource(entry('hosted')));
   const [offered] = await out;
-  expect(offered).toMatchObject({ source: 'hosted', credentials: { session: 'from-the-host' } });
+  expect(offered).toMatchObject({
+    source: 'hosted',
+    credentials: { session: 'from-the-host' },
+  });
 });

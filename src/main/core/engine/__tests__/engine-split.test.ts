@@ -279,7 +279,7 @@ describe('connect and reconnect in two halves', () => {
       expect(JSON.stringify(lines)).not.toContain(SENTINEL);
     });
 
-    it("a session that goes through the leader never refreshes or saves here", async () => {
+    it('a session that goes through the leader never refreshes or saves here', async () => {
       const refresh = jest.fn(async () => ({ accessToken: 'local-refresh' }));
       const engine = makeWith(refresh, () => {});
       const account = await engine.adopt({
@@ -321,7 +321,10 @@ describe('connect and reconnect in two halves', () => {
         'test',
         () => undefined,
       );
-      await store.vault.save(account.id, { accessToken: 'old', expiresAt: soon() });
+      await store.vault.save(account.id, {
+        accessToken: 'old',
+        expiresAt: soon(),
+      });
       await expect(own.credentials()).resolves.toEqual({
         accessToken: 'local-refresh',
       });

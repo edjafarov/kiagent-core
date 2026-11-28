@@ -21,10 +21,13 @@ const trackKey = (tbl: string, row: 'OLD' | 'NEW', pk: string[]): string => {
       INSERT INTO sync_rows(tbl, pk) VALUES(${lit(tbl)}, ${key});`;
 };
 
-const NAMES = (tbl: string): string[] => ['i', 'u', 'd'].map((k) => q(`sync_${k}_${tbl}`));
+const NAMES = (tbl: string): string[] =>
+  ['i', 'u', 'd'].map((k) => q(`sync_${k}_${tbl}`));
 /** Drops then creates: an install made by an older build gets the current body. */
 const recreate = (tbl: string, body: string): string =>
-  NAMES(tbl).map((n) => `DROP TRIGGER IF EXISTS ${n};`).join('\n') +
+  NAMES(tbl)
+    .map((n) => `DROP TRIGGER IF EXISTS ${n};`)
+    .join('\n') +
   body.replaceAll('CREATE TRIGGER IF NOT EXISTS', 'CREATE TRIGGER');
 
 /** Documents feed from `documents.seq`, so inserts and normal updates cost
@@ -40,12 +43,17 @@ const DOCUMENT_TRIGGERS = `
 /** Insert, update and delete triggers for one copied table, built from its
  *  primary key (step 2). An update that moves the key tracks both keys, so
  *  the old one travels as a delete. */
-export function syncTriggers(conn: BetterSqlite3.Database, tbl: string): string {
+export function syncTriggers(
+  conn: BetterSqlite3.Database,
+  tbl: string,
+): string {
   if (tbl === 'documents') return recreate('documents', DOCUMENT_TRIGGERS);
   const pk = primaryKeyColumns(conn, tbl);
   if (pk.length === 0) throw new Error(`sync: ${tbl} has no primary key`);
   const moved = pk.map((c) => `OLD.${q(c)} IS NOT NEW.${q(c)}`).join(' OR ');
-  return recreate(tbl, `
+  return recreate(
+    tbl,
+    `
   CREATE TRIGGER IF NOT EXISTS ${q(`sync_i_${tbl}`)} AFTER INSERT ON ${q(tbl)}
     WHEN ${ON} BEGIN ${trackKey(tbl, 'NEW', pk)} END;
   CREATE TRIGGER IF NOT EXISTS ${q(`sync_u_${tbl}`)} AFTER UPDATE ON ${q(tbl)}
@@ -60,7 +68,8 @@ export function syncTriggers(conn: BetterSqlite3.Database, tbl: string): string 
     END;
   CREATE TRIGGER IF NOT EXISTS ${q(`sync_d_${tbl}`)} AFTER DELETE ON ${q(tbl)}
     WHEN ${ON} BEGIN ${trackKey(tbl, 'OLD', pk)} END;
-`);
+`,
+  );
 }
 
 /** Creates the triggers for every copied table that doesn't have them yet. */
@@ -73,10 +82,14 @@ export function createSyncTriggers(conn: BetterSqlite3.Database): void {
  *  schema (the registry is also used on bare files). */
 export function ensureSyncTriggers(conn: BetterSqlite3.Database): void {
   const state = conn
-    .prepare(`SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'sync_state'`)
+    .prepare(
+      `SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'sync_state'`,
+    )
     .get();
   if (!state) return;
-  const on = conn.prepare(`SELECT tracking FROM sync_state`).get() as { tracking: number } | undefined;
+  const on = conn.prepare(`SELECT tracking FROM sync_state`).get() as
+    | { tracking: number }
+    | undefined;
   if (on?.tracking !== 1) return;
   conn.transaction(() => createSyncTriggers(conn))();
 }
@@ -101,13 +114,19 @@ export function enableTracking(conn: BetterSqlite3.Database): void {
  *  They get `(epoch, 1..k)` above whatever this epoch already holds, in the
  *  same transaction as the switch, so they travel on the first pull. */
 function stampUnversionedLogins(conn: BetterSqlite3.Database): void {
-  const { epoch } = conn.prepare(`SELECT epoch FROM sync_state`).get() as { epoch: number };
+  const { epoch } = conn.prepare(`SELECT epoch FROM sync_state`).get() as {
+    epoch: number;
+  };
   const rows = conn
-    .prepare(`SELECT rowid AS r FROM vault WHERE epoch = 0 AND n = 0 ORDER BY rowid`)
+    .prepare(
+      `SELECT rowid AS r FROM vault WHERE epoch = 0 AND n = 0 ORDER BY rowid`,
+    )
     .all() as { r: number }[];
   if (rows.length === 0) return;
   let n = (
-    conn.prepare(`SELECT coalesce(max(n), 0) AS m FROM vault WHERE epoch = ?`).get(epoch) as { m: number }
+    conn
+      .prepare(`SELECT coalesce(max(n), 0) AS m FROM vault WHERE epoch = ?`)
+      .get(epoch) as { m: number }
   ).m;
   const set = conn.prepare(`UPDATE vault SET epoch = ?, n = ? WHERE rowid = ?`);
   for (const { r } of rows) set.run(epoch, (n += 1), r);

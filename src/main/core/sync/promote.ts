@@ -31,7 +31,9 @@ function raiseCounters(conn: BetterSqlite3.Database, epoch: number): void {
   // sqlite_sequence has no unique key, so INSERT OR REPLACE would add a second
   // row beside the existing one, and SQLite reads the first. Update what is
   // there; a table that never had an insert has no row, so only then insert.
-  const raise = conn.prepare(`UPDATE sqlite_sequence SET seq = max(seq, ?) WHERE name = ?`);
+  const raise = conn.prepare(
+    `UPDATE sqlite_sequence SET seq = max(seq, ?) WHERE name = ?`,
+  );
   const create = conn.prepare(
     `INSERT INTO sqlite_sequence(name, seq)
      SELECT ?, ? WHERE NOT EXISTS (SELECT 1 FROM sqlite_sequence WHERE name = ?)`,
@@ -49,7 +51,11 @@ export function promote(
 ): void {
   const relayImported = opts.relayImported !== false;
   conn.transaction(() => {
-    const s = conn.prepare(`SELECT role, epoch, after_seq, after_cursor, pre_demote_epoch FROM sync_state`).get() as {
+    const s = conn
+      .prepare(
+        `SELECT role, epoch, after_seq, after_cursor, pre_demote_epoch FROM sync_state`,
+      )
+      .get() as {
       role: string;
       epoch: number;
       pre_demote_epoch: number | null;
@@ -78,18 +84,26 @@ export function promote(
     // rows numbered below that leader's range, above its grant: the interim
     // leader never saw them, and a pull after the new head would skip them.
     if (s.role === 'follower' && s.epoch < epoch) {
-      renumberUnseen(conn, s.pre_demote_epoch ?? s.epoch, s.pre_demote_epoch !== null);
+      renumberUnseen(
+        conn,
+        s.pre_demote_epoch ?? s.epoch,
+        s.pre_demote_epoch !== null,
+      );
     }
     // What this device only applied from an interim leader is not in its
     // sync_rows: publish it now, numbered in the new epoch, so a device that
     // skipped that leader still gets it. Same delete-then-insert as trackKey.
     const imported = relayImported
-      ? (conn.prepare(`SELECT tbl, pk FROM sync_imported ORDER BY id`).all() as {
+      ? (conn
+          .prepare(`SELECT tbl, pk FROM sync_imported ORDER BY id`)
+          .all() as {
           tbl: string;
           pk: string;
         }[])
       : [];
-    const forget = conn.prepare(`DELETE FROM sync_rows WHERE tbl = ? AND pk = ?`);
+    const forget = conn.prepare(
+      `DELETE FROM sync_rows WHERE tbl = ? AND pk = ?`,
+    );
     const publish = conn.prepare(`INSERT INTO sync_rows(tbl, pk) VALUES(?, ?)`);
     for (const k of imported) {
       forget.run(k.tbl, k.pk);
@@ -124,10 +138,18 @@ export function lead(
     if (epoch <= s.epoch) return 'noop';
     conn.transaction(() => {
       raiseCounters(conn, epoch);
-      const seq = (conn.prepare(`SELECT seq FROM sqlite_sequence WHERE name = 'changes'`).get() as { seq: number }).seq;
-      const cursor = (conn.prepare(`SELECT seq FROM sqlite_sequence WHERE name = 'sync_rows'`).get() as { seq: number }).seq;
+      const { seq } = conn
+        .prepare(`SELECT seq FROM sqlite_sequence WHERE name = 'changes'`)
+        .get() as { seq: number };
+      const cursor = (
+        conn
+          .prepare(`SELECT seq FROM sqlite_sequence WHERE name = 'sync_rows'`)
+          .get() as { seq: number }
+      ).seq;
       conn
-        .prepare(`INSERT OR IGNORE INTO sync_epochs(epoch, grant_seq, grant_cursor) VALUES (?, ?, ?)`)
+        .prepare(
+          `INSERT OR IGNORE INTO sync_epochs(epoch, grant_seq, grant_cursor) VALUES (?, ?, ?)`,
+        )
         .run(epoch, seq, cursor);
       conn.prepare(`UPDATE sync_state SET epoch = ?`).run(epoch);
     })();
@@ -145,7 +167,10 @@ export function lead(
   return 'seeded';
 }
 
-export function demote(conn: BetterSqlite3.Database, masterDeviceId: string): void {
+export function demote(
+  conn: BetterSqlite3.Database,
+  masterDeviceId: string,
+): void {
   conn.transaction(() => {
     const head = conn
       .prepare(
@@ -171,25 +196,35 @@ export function demote(conn: BetterSqlite3.Database, masterDeviceId: string): vo
  *  already merged here, so what is sent is the current value. A follower that
  *  was not led past has no such rows. `above` is false for a device that never
  *  led: it uses the grant of the epoch it applied from, as before. */
-function renumberUnseen(conn: BetterSqlite3.Database, fromEpoch: number, above: boolean): void {
+function renumberUnseen(
+  conn: BetterSqlite3.Database,
+  fromEpoch: number,
+  above: boolean,
+): void {
   const row = above
     ? (conn
         .prepare(
           `SELECT epoch, grant_seq AS seq, grant_cursor AS cursor FROM sync_epochs
            WHERE epoch > ? ORDER BY epoch LIMIT 1`,
         )
-        .get(fromEpoch) as { epoch: number; seq: number; cursor: number } | undefined)
+        .get(fromEpoch) as
+        | { epoch: number; seq: number; cursor: number }
+        | undefined)
     : (conn
         .prepare(
           `SELECT epoch, grant_seq AS seq, grant_cursor AS cursor FROM sync_epochs WHERE epoch = ?`,
         )
-        .get(fromEpoch) as { epoch: number; seq: number; cursor: number } | undefined);
+        .get(fromEpoch) as
+        | { epoch: number; seq: number; cursor: number }
+        | undefined);
   if (!row) return;
   const grant = row;
   const below = row.epoch * EPOCH_GAP;
   // Same as tracking.trackKey: delete then insert, so the key gets a new cursor.
   const keys = conn
-    .prepare(`SELECT tbl, pk FROM sync_rows WHERE cursor > ? AND cursor < ? ORDER BY cursor`)
+    .prepare(
+      `SELECT tbl, pk FROM sync_rows WHERE cursor > ? AND cursor < ? ORDER BY cursor`,
+    )
     .all(grant.cursor, below) as { tbl: string; pk: string }[];
   const drop = conn.prepare(`DELETE FROM sync_rows WHERE tbl = ? AND pk = ?`);
   const add = conn.prepare(`INSERT INTO sync_rows(tbl, pk) VALUES(?, ?)`);
@@ -202,7 +237,9 @@ function renumberUnseen(conn: BetterSqlite3.Database, fromEpoch: number, above: 
   const docs = conn
     .prepare(`SELECT id FROM documents WHERE seq > ? AND seq < ? ORDER BY seq`)
     .all(grant.seq, below) as { id: string }[];
-  const change = conn.prepare(`INSERT INTO changes(kind, ref_id, at) VALUES('document', ?, ?)`);
+  const change = conn.prepare(
+    `INSERT INTO changes(kind, ref_id, at) VALUES('document', ?, ?)`,
+  );
   const set = conn.prepare(`UPDATE documents SET seq = ? WHERE id = ?`);
   const at = new Date().toISOString();
   for (const d of docs) set.run(change.run(d.id, at).lastInsertRowid, d.id);

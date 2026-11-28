@@ -57,7 +57,9 @@ interface Registered {
 const ownerCaptureOf = (json: string): string[] => {
   try {
     const list = (JSON.parse(json) as { ownerCapture?: unknown }).ownerCapture;
-    return Array.isArray(list) ? list.filter((n): n is string => typeof n === 'string') : [];
+    return Array.isArray(list)
+      ? list.filter((n): n is string => typeof n === 'string')
+      : [];
   } catch {
     return [];
   }
@@ -65,9 +67,14 @@ const ownerCaptureOf = (json: string): string[] => {
 
 /** The plugins whose descriptors name synced tables, from the registry tables
  *  that live in the same file. `schema` is `main`, or an attached file. */
-function registeredSynced(conn: BetterSqlite3.Database, schema: string): Registered[] {
+function registeredSynced(
+  conn: BetterSqlite3.Database,
+  schema: string,
+): Registered[] {
   const have = conn
-    .prepare(`SELECT 1 FROM ${schema}.sqlite_master WHERE type = 'table' AND name = 'plugin_storage'`)
+    .prepare(
+      `SELECT 1 FROM ${schema}.sqlite_master WHERE type = 'table' AND name = 'plugin_storage'`,
+    )
     .get();
   if (!have) return [];
   const rows = conn
@@ -75,7 +82,11 @@ function registeredSynced(conn: BetterSqlite3.Database, schema: string): Registe
       `SELECT plugin_id, descriptor_digest, descriptor_json FROM ${schema}.plugin_storage
         WHERE state = 'active' ORDER BY plugin_id`,
     )
-    .all() as { plugin_id: string; descriptor_digest: string; descriptor_json: string }[];
+    .all() as {
+    plugin_id: string;
+    descriptor_digest: string;
+    descriptor_json: string;
+  }[];
   const out: Registered[] = [];
   for (const r of rows) {
     let synced: unknown;
@@ -97,7 +108,10 @@ function registeredSynced(conn: BetterSqlite3.Database, schema: string): Registe
 
 /** The core list plus the physical names of every synced table of a registered
  *  plugin that exists in this file (Task 3, Decision 3). */
-export function copiedTables(conn: BetterSqlite3.Database, schema = 'main'): string[] {
+export function copiedTables(
+  conn: BetterSqlite3.Database,
+  schema = 'main',
+): string[] {
   const exists = conn.prepare(
     `SELECT 1 FROM ${schema}.sqlite_master WHERE type = 'table' AND name = ?`,
   );
@@ -114,7 +128,10 @@ export function copiedTables(conn: BetterSqlite3.Database, schema = 'main'): str
 /** The physical names of the owner-capture tables the registered plugins of
  *  `schema` list (step 3): the capturing device keeps writing these on a
  *  follower, and a join keeps its own rows of them. */
-export function ownerCaptureTables(conn: BetterSqlite3.Database, schema = 'main'): string[] {
+export function ownerCaptureTables(
+  conn: BetterSqlite3.Database,
+  schema = 'main',
+): string[] {
   const exists = conn.prepare(
     `SELECT 1 FROM ${schema}.sqlite_master WHERE type = 'table' AND name = ?`,
   );
@@ -136,7 +153,9 @@ export function ownerCaptureTables(conn: BetterSqlite3.Database, schema = 'main'
 export function copiedSetDigest(conn: BetterSqlite3.Database): string {
   const hash = createHash('sha256');
   const core = new Set(COPIED_CORE_TABLES);
-  for (const t of copiedTables(conn).filter((n) => !core.has(n)).sort()) {
+  for (const t of copiedTables(conn)
+    .filter((n) => !core.has(n))
+    .sort()) {
     hash.update(`table:${t}\n`);
   }
   for (const p of registeredSynced(conn, 'main')) {
@@ -154,7 +173,9 @@ export function primaryKeyColumns(
 ): string[] {
   return (
     conn
-      .prepare(`SELECT name FROM pragma_table_info(?, ?) WHERE pk > 0 ORDER BY pk`)
+      .prepare(
+        `SELECT name FROM pragma_table_info(?, ?) WHERE pk > 0 ORDER BY pk`,
+      )
       .all(table, schema) as { name: string }[]
   ).map((c) => c.name);
 }

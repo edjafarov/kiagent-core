@@ -98,10 +98,7 @@ async function setup() {
   return { source, proxySet, mainEp };
 }
 
-function makeSession(
-  signal?: AbortSignal,
-  saved?: unknown[],
-): Session {
+function makeSession(signal?: AbortSignal, saved?: unknown[]): Session {
   return {
     account,
     signal: signal ?? new AbortController().signal,

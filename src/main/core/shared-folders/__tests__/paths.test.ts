@@ -23,7 +23,9 @@ it('toRel is null outside the root, for the root itself and inside the staging d
   expect(toRel(root, root)).toBeNull();
   expect(toRel(root, path.join(root, STAGING_DIR, 'tmp'))).toBeNull();
   expect(toRel(root, path.join(root, STAGING_DIR))).toBeNull();
-  expect(toRel(root, path.join(root, `${STAGING_DIR}x`, 'f'))).toBe(`${STAGING_DIR}x/f`);
+  expect(toRel(root, path.join(root, `${STAGING_DIR}x`, 'f'))).toBe(
+    `${STAGING_DIR}x/f`,
+  );
 });
 
 it('toAbs rejects escapes, absolute paths and empty segments', () => {
