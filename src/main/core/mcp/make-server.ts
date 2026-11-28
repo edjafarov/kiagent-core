@@ -15,13 +15,27 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { KIA_INSTRUCTIONS } from './instructions';
 import { KIA_SERVER_ICON_DATA_URI } from './server-icon';
 
+/**
+ * Substituted by webpack's DefinePlugin with release/app/package.json's
+ * version — the file app.getVersion() reads, and the one a product build
+ * stamps before it bundles. Both transports' bundles get it, including the
+ * stdio sibling, which has no Electron `app` to ask. Undefined under jest and
+ * in a build that defines nothing.
+ */
+declare const __KIA_APP_VERSION__: string | undefined;
+
+const SERVER_VERSION =
+  typeof __KIA_APP_VERSION__ === 'string' && __KIA_APP_VERSION__
+    ? __KIA_APP_VERSION__
+    : '0.0.0-dev';
+
 export function makeMcpServer(): McpServer {
   return new McpServer(
     {
       // `name` is the protocol-level machine id; `title` is the display name
       // clients show. Hardcoded brand pending the brand-asset pass (TODO.md).
       name: 'kiagent',
-      version: '0.1.0',
+      version: SERVER_VERSION,
       title: 'KIAgent',
       icons: [
         {

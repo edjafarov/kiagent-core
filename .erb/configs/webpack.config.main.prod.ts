@@ -9,6 +9,7 @@ import TerserPlugin from 'terser-webpack-plugin';
 import { BundleAnalyzerPlugin } from 'webpack-bundle-analyzer';
 import baseConfig from './webpack.config.base';
 import copySharedCssPlugin from './copy-shared-css';
+import appVersionDefine from './app-version';
 import oauthEnvDefines from './oauth-env';
 import webpackPaths from './webpack.paths';
 import checkNodeEnv from '../scripts/check-node-env';
@@ -100,6 +101,7 @@ const configuration: webpack.Configuration = {
       // Compiled test-hooks gate: true only for KIA_SMOKE_HOOKS=1 builds.
       __KIA_TEST_HOOKS__: JSON.stringify(process.env.KIA_SMOKE_HOOKS === '1'),
       ...oauthEnvDefines(),
+      ...appVersionDefine(),
     }),
 
     // Stage @shared/web-ui's CSS next to the compiled bundle — see
